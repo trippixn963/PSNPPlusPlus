@@ -162,13 +162,41 @@
     await GM.setValue(ENDPOINT_KEY, endpoint);
     await GM.setValue(SECRET_KEY, key);
   }
+  function isAllowedEndpoint(endpoint) {
+    let parsed;
+    try {
+      parsed = new URL(String(endpoint));
+    } catch {
+      return false;
+    }
+    if (parsed.protocol === "https:") return true;
+    if (parsed.protocol !== "http:") return false;
+    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+  }
   async function promptForConfig() {
     const current = await loadConfig();
-    const endpoint = window.prompt("PSNP++ \u2014 sync endpoint:", current.endpoint);
-    if (endpoint == null) return null;
-    const key = window.prompt("PSNP++ \u2014 sync key:", current.key);
-    if (key == null) return null;
-    const config = { endpoint: endpoint.trim(), key: key.trim() };
+    const rawEndpoint = window.prompt("PSNP++ \u2014 sync endpoint:", current.endpoint);
+    if (rawEndpoint == null) return null;
+    const endpoint = rawEndpoint.trim();
+    if (!isAllowedEndpoint(endpoint)) {
+      window.alert(
+        `PSNP++ \u2014 that endpoint was not saved:
+
+${endpoint}
+
+The sync key is sent as a request header, so the endpoint must be https:// (http:// is allowed only for localhost / 127.0.0.1).`
+      );
+      return null;
+    }
+    const rawKey = window.prompt(
+      `PSNP++ \u2014 sync key (${current.key ? "one is already stored: \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : "none stored yet"}).
+
+Type a new key, or leave this blank to keep the stored one.`,
+      ""
+    );
+    if (rawKey == null) return null;
+    const typedKey = rawKey.trim();
+    const config = { endpoint, key: typedKey === "" ? current.key : typedKey };
     await saveConfig(config);
     return config;
   }

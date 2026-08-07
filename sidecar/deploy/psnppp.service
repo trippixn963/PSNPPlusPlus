@@ -11,7 +11,27 @@ EnvironmentFile=/opt/psnppp/.env
 ExecStart=/opt/psnppp/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8091
 Restart=always
 RestartSec=5
+
+# Sandboxing. This process is reachable (via nginx) from the public internet
+# and holds one secret, so the blast radius of a bug in it is worth shrinking.
+#
+# ProtectSystem=strict mounts the ENTIRE filesystem read-only, which is why
+# ReadWritePaths has to name the one directory the service legitimately writes:
+# SQLite needs to create and update state.db there, plus the state.db-wal and
+# state.db-shm sidecars WAL mode brings with it. That is the same directory the
+# .env's PSNP_SYNC_DB points at and the same one app.py falls back to, so both
+# configurations stay covered.
+#
+# PrivateTmp gives the unit its own /tmp, so nothing it writes there can be read
+# by, or collide with, the other services sharing this host.
+#
+# NOT changed here: User=root. Dropping privileges is a separate decision with
+# its own migration (file ownership of state.db, the venv, and the .env) and has
+# not been asked for.
 NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=/opt/psnppp
 
 [Install]
 WantedBy=multi-user.target
