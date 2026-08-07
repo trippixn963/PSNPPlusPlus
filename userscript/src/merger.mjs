@@ -12,12 +12,31 @@ export const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 const clone = value => JSON.parse(JSON.stringify(value));
 
-/** Structural equality, ignoring the internal updatedAt field. */
+/**
+ * Serialize an object to JSON with keys sorted recursively.
+ * Arrays retain their order (order-bearing), only object keys are sorted.
+ * This ensures structural equality is independent of key insertion order.
+ */
+function stableStringify(obj) {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(stableStringify).join(',') + ']';
+  }
+  const sorted = Object.keys(obj).sort().map(k => `"${k}":${stableStringify(obj[k])}`);
+  return '{' + sorted.join(',') + '}';
+}
+
+/** Structural equality, ignoring the internal updatedAt field.
+ * Comparison is key-order independent: two objects with identical content
+ * but different key insertion order are treated as equal.
+ */
 function sameRecord(a, b) {
   if (a == null || b == null) return false;
   const { updatedAt: _a, ...left } = a;
   const { updatedAt: _b, ...right } = b;
-  return JSON.stringify(left) === JSON.stringify(right);
+  return stableStringify(left) === stableStringify(right);
 }
 
 function sameOrder(a, b) {
@@ -54,8 +73,14 @@ export function stampChanges(base, local, now) {
         : now;
     }
 
-    // Carry forward tombstones we already know about, then add newly missing games.
-    node.deletedGames = { ...(baseList?.deletedGames ?? {}) };
+    // Carry forward tombstones we already know about (excluding games that reappeared),
+    // then add newly missing games.
+    node.deletedGames = {};
+    for (const [gameId, timestamp] of Object.entries(baseList?.deletedGames ?? {})) {
+      if (localList.games[gameId] == null) {
+        node.deletedGames[gameId] = timestamp;
+      }
+    }
     for (const gameId of Object.keys(baseList?.games ?? {})) {
       if (localList.games[gameId] == null && node.deletedGames[gameId] == null) {
         node.deletedGames[gameId] = now;

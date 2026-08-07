@@ -77,7 +77,34 @@ test('a list never seen locally is not resurrected as a tombstone', () => {
 test('stampChanges does not mutate its inputs', () => {
   const base = stampChanges(emptyDoc(), toDoc([list({ games: [game('g1')] })]), 500);
   const local = toDoc([list({ games: [game('g1'), game('g2')] })]);
-  const snapshot = JSON.stringify(local);
+  const baseSnapshot = JSON.stringify(base);
+  const localSnapshot = JSON.stringify(local);
   stampChanges(base, local, NOW);
-  assert.equal(JSON.stringify(local), snapshot);
+  assert.equal(JSON.stringify(base), baseSnapshot);
+  assert.equal(JSON.stringify(local), localSnapshot);
+});
+
+test('a re-added game is not tombstoned', () => {
+  const base = stampChanges(emptyDoc(), toDoc([list({ games: [game('g1')] })]), 500);
+  const once = stampChanges(base, toDoc([list({ games: [] })]), 700);
+  assert.equal(once.lists.L1.deletedGames.g1, 700);
+  const twice = stampChanges(once, toDoc([list({ games: [game('g1')] })]), NOW);
+  assert.notEqual(twice.lists.L1.games.g1, undefined);
+  assert.equal(twice.lists.L1.deletedGames.g1, undefined);
+});
+
+test('two records with different key orders are treated as unchanged', () => {
+  const base = stampChanges(emptyDoc(), toDoc([list({ games: [game('g1')] })]), 500);
+  const reorderedGame = { id: 'g1', title: 'Game g1', tags: [], platforms: { ps5: true } };
+  const local = toDoc([list({ games: [reorderedGame] })]);
+  const out = stampChanges(base, local, NOW);
+  assert.equal(out.lists.L1.games.g1.updatedAt, 500);
+});
+
+test('a list tombstone keeps its original deletedAt on second stampChanges', () => {
+  const base = stampChanges(emptyDoc(), toDoc([list({ id: 'A' }), list({ id: 'B' })]), 500);
+  const once = stampChanges(base, toDoc([list({ id: 'A' })]), 700);
+  assert.equal(once.lists.B.deletedAt, 700);
+  const twice = stampChanges(once, toDoc([list({ id: 'A' })]), NOW);
+  assert.equal(twice.lists.B.deletedAt, 700);
 });
