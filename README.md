@@ -18,6 +18,7 @@ architecture, merge rules, and failure handling.
 | `userscript/banner.txt` | The `==UserScript==` metadata block, prepended at build time |
 | `userscript/build.mjs` | esbuild bundler (`npm run build`) |
 | `dist/psnppp.user.js` | **The built userscript — this is the file you install** |
+| `dist/psnppp.meta.js` | The metadata block alone, served at `@updateURL` for update checks |
 | `sidecar/app.py` | FastAPI sync service (SQLite, one document, revision guard) |
 | `sidecar/tests/` | pytest suite for the sidecar |
 | `sidecar/deploy/` | systemd unit, nginx location block, and the [deployment runbook](sidecar/deploy/README.md) |
@@ -39,8 +40,8 @@ portfolio. Keep the secret from step 1; each browser needs it.
 
 ```bash
 npm install
-npm test          # 148 tests
-npm run build     # writes dist/psnppp.user.js
+npm test          # 156 tests
+npm run build     # writes dist/psnppp.user.js and dist/psnppp.meta.js
 ```
 
 Install `dist/psnppp.user.js` in Tampermonkey — open the Tampermonkey dashboard, choose
@@ -73,6 +74,32 @@ you typed yourself is left exactly as it is.
 The migration is idempotent, so a second run does nothing, and it is a clean no-op on a fresh
 install. `localStorage['psnpp-lists']` is **not** touched by any of this — that key belongs to
 PSNP+, not to PSNP++, and it holds the only copy of your actual game lists.
+
+## Releasing an update
+
+Installed copies update themselves. The script declares:
+
+```
+@downloadURL  https://trippixn.com/psnppp.user.js
+@updateURL    https://trippixn.com/psnppp.meta.js
+```
+
+Tampermonkey polls `@updateURL` on its own schedule, reads `@version` out of it, and offers the
+download only when that version is **higher** than the installed one. So the release is:
+
+1. Bump `version` in `package.json`. **This is the whole release switch** — `@version` is derived
+   from it at build time, never written in `banner.txt`. A hardcoded version would build a
+   perfectly working script that can never update itself, showing "up to date" forever.
+2. `npm test && npm run build`.
+3. Publish both `dist/psnppp.user.js` and `dist/psnppp.meta.js` at the two URLs above.
+
+`psnppp.meta.js` is the metadata block on its own, written from the same resolved text prepended
+to the bundle, so the two can never disagree about the version. It exists so an update check
+transfers a few hundred bytes rather than the whole ~28 KB script.
+
+`npm test` pins all of this against the committed `dist/`: it fails if the version drifts from
+`package.json`, if the placeholder leaks through, if the two files' metadata blocks diverge, or if
+any `@grant`/`@connect`/`@run-at` goes missing.
 
 ## Vendored PSNP+
 
