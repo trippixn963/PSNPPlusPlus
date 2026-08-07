@@ -1,0 +1,17 @@
+# systemd unit for the PSNP sync sidecar (John's VPS, your-server.example).
+[Unit]
+Description=PSNP list sync sidecar
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/psnppp
+EnvironmentFile=/opt/psnppp/.env
+ExecStart=/opt/psnppp/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8091
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
