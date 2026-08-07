@@ -16,14 +16,32 @@ import { emptyDoc } from './doc.mjs';
 const BASE_KEY = 'psnpsync.base';
 const CHANGE_DEBOUNCE_MS = 3000;
 
-const loadBase = async () => {
+/**
+ * The document as of this device's last successful sync.
+ *
+ * A base that parses but has no `lists` object is as unusable as one that does
+ * not parse at all: every consumer (stampChanges, dropLists, the absent-key
+ * guard in sync-cycle.mjs) iterates `base.lists`, so `{}` or `{version:1}`
+ * throws a raw TypeError out of every cycle, forever, surfacing to the user as
+ * an "Offline" chip with a stack-trace message and no way out. Falling back to
+ * emptyDoc() makes it recoverable instead: the next cycle re-derives the base
+ * from a normal merge. The cost is one cycle that cannot tell local deletions
+ * from a fresh device — the same, accepted cost a genuinely new device pays.
+ */
+export const loadBase = async () => {
   const raw = await GM.getValue(BASE_KEY, null);
   if (raw == null) return emptyDoc();
+  let parsed;
   try {
-    return JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch {
     return emptyDoc();
   }
+  if (parsed == null || typeof parsed.lists !== 'object' || parsed.lists === null
+      || Array.isArray(parsed.lists)) {
+    return emptyDoc();
+  }
+  return parsed;
 };
 const saveBase = async doc => GM.setValue(BASE_KEY, JSON.stringify(doc));
 

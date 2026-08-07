@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { saveBackup, listBackups } from '../src/backup.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
-import { openSettings } from '../src/main.mjs';
+import { openSettings, loadBase } from '../src/main.mjs';
+import { emptyDoc, toDoc } from '../src/doc.mjs';
+import { stampChanges } from '../src/merger.mjs';
 
 /**
  * main.mjs is the browser entry point and is otherwise verified in a real
@@ -115,6 +117,40 @@ test('declining the restore confirmation leaves storage untouched', async () => 
 
     assert.equal(storage.getItem(LISTS_KEY), before);
     assert.equal(fake.wasReloaded(), false);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+// --- loadBase must never hand a shapeless document to the cycle -------------
+//
+// Every consumer of the base iterates `base.lists`. A base that parses but has
+// no lists object ({} or {version:1}) therefore throws a raw TypeError out of
+// stampChanges on every cycle, forever, and the user sees it as an "Offline"
+// chip with a stack-trace message and no way to recover.
+
+test('a base with no lists object is treated as an empty document, not a permanent TypeError', async () => {
+  const store = installFakeGM();
+  try {
+    for (const raw of ['{}', '{"version":1}', 'null', '[]', '"nope"', '{"lists":null}']) {
+      store.set('psnpsync.base', raw);
+      const base = await loadBase();
+      assert.deepEqual(base, emptyDoc(), `${raw} must fall back to emptyDoc()`);
+      // The fallback is only worth anything if it survives the thing that used
+      // to throw: stampChanges reading "in base, missing from local".
+      assert.doesNotThrow(() => stampChanges(base, emptyDoc(), 1000));
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a well-shaped base is returned untouched', async () => {
+  const store = installFakeGM();
+  try {
+    const doc = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist')]), 500);
+    store.set('psnpsync.base', JSON.stringify(doc));
+    assert.deepEqual(await loadBase(), doc);
   } finally {
     uninstallFakeGM();
   }
