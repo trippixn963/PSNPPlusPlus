@@ -10,6 +10,14 @@
  * each side, and neither list may already be present on the other side by ID.
  */
 
+const clone = value => JSON.parse(JSON.stringify(value));
+
+/**
+ * Normalize a list name for comparison: trim whitespace and lowercase.
+ * Empty or whitespace-only names collapse to the empty string.
+ * PSNP+ enforces non-empty list names in its UI ("This field cannot be empty."),
+ * so we rely on that and do not validate empty names here.
+ */
 const normalize = name => String(name ?? '').trim().toLowerCase();
 
 function indexByName(doc) {
@@ -44,12 +52,34 @@ export function planAdoptions(localDoc, remoteDoc) {
   return adoptions;
 }
 
+/**
+ * Rewrite local list IDs to remote IDs according to adoptions.
+ *
+ * CRITICAL: adoptions must be the unmodified return value of planAdoptions(localDoc, remoteDoc)
+ * called against this same localDoc. Passing a stale, modified, or hand-built adoption array
+ * can silently drop lists (e.g. if a remoteId collides with an existing local ID that is not
+ * being renamed). This function guards against the most obvious collision but cannot prevent
+ * every misuse — the caller must respect the plan→apply pairing invariant.
+ *
+ * Returns the input doc unchanged if adoptions is empty (identity, not a rebuild).
+ */
 export function applyAdoptions(localDoc, adoptions) {
   if (adoptions.length === 0) return localDoc;
+
   const rename = new Map(adoptions.map(a => [a.localId, a.remoteId]));
+
+  // Guard against collisions: a remoteId that already exists locally and is not
+  // being renamed away is a sign of a stale adoption or a violation of the plan→apply contract.
+  for (const { remoteId } of adoptions) {
+    if (localDoc.lists[remoteId] != null && !rename.has(remoteId)) {
+      throw new Error(`Collision: remoteId "${remoteId}" already exists in local and is not being renamed`);
+    }
+  }
+
   const out = { version: localDoc.version, lists: {} };
   for (const [listId, node] of Object.entries(localDoc.lists)) {
-    out.lists[rename.get(listId) ?? listId] = node;
+    const newId = rename.get(listId) ?? listId;
+    out.lists[newId] = clone(node);
   }
   return out;
 }

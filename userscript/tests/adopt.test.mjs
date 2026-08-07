@@ -57,3 +57,37 @@ test('applyAdoptions with no adoptions is a no-op', () => {
   const local = toDoc([list('local-1', 'Wishlist')]);
   assert.deepEqual(applyAdoptions(local, []), local);
 });
+
+test('applyAdoptions output nodes are NOT the same references as input nodes', () => {
+  const local = toDoc([list('local-1', 'Wishlist', [{ id: 'g1', title: 'G', platforms: {}, tags: [] }])]);
+  const out = applyAdoptions(local, [{ localId: 'local-1', remoteId: 'remote-1', name: 'Wishlist' }]);
+  // Mutate the output node
+  out.lists['remote-1'].meta.name = 'Modified';
+  // Verify the input is unchanged
+  assert.equal(local.lists['local-1'].meta.name, 'Wishlist');
+});
+
+test('applyAdoptions throws if a remoteId collides with an existing local id that is not being renamed', () => {
+  const local = toDoc([list('remote-1', 'Backlog'), list('local-1', 'Wishlist')]);
+  const adoptions = [{ localId: 'local-1', remoteId: 'remote-1', name: 'Wishlist' }];
+  assert.throws(
+    () => applyAdoptions(local, adoptions),
+    /Collision: remoteId "remote-1" already exists in local/
+  );
+});
+
+test('deleted lists are not adoption candidates', () => {
+  const localLists = [list('local-1', 'Wishlist')];
+  const remoteLists = [list('remote-1', 'Wishlist')];
+  const local = toDoc(localLists);
+  const remote = toDoc(remoteLists);
+  // Mark the remote list as deleted
+  remote.lists['remote-1'].deletedAt = 100;
+  assert.deepEqual(planAdoptions(local, remote), []);
+});
+
+test('applyAdoptions preserves the document version field', () => {
+  const local = toDoc([list('local-1', 'Wishlist')]);
+  const out = applyAdoptions(local, [{ localId: 'local-1', remoteId: 'remote-1', name: 'Wishlist' }]);
+  assert.equal(out.version, local.version);
+});
