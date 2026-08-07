@@ -41,6 +41,48 @@ function fingerprint(lists) {
   return JSON.stringify([...lists].sort((a, b) => String(a.id).localeCompare(String(b.id))));
 }
 
+/**
+ * JSON with object keys in a fixed order, so two content-equal documents always
+ * serialize identically.
+ *
+ * A deliberate local copy of the same function in merger.mjs, which does not
+ * export it. Importing it would mean widening the surface of the module that
+ * owns every merge rule in the project purely for a caller's convenience, and
+ * this file is not worth that: it is 20 lines with no dependencies.
+ *
+ * Plain JSON.stringify cannot do this job. It emits keys in insertion order,
+ * and the server hands back whatever order it stored — so a comparison built on
+ * it would report "different" on documents that are character-for-character the
+ * same content, on every cycle, forever. The skip would then never fire and the
+ * change would look harmless while doing precisely nothing.
+ *
+ * `undefined` is rendered the way JSON.stringify renders it (an object key with
+ * an undefined value is dropped, an undefined array element becomes null), for
+ * the same reason merger.mjs does it: doc.mjs writes all 8 META_FIELDS whether
+ * or not the list had them, so `meta.removeGames === undefined` is an ordinary
+ * shape here, while the JSON that came back from the server never has the key
+ * at all. Rendering those two differently would make every such document look
+ * permanently unequal to itself.
+ */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(v => (v === undefined ? 'null' : stableStringify(v))).join(',') + ']';
+  }
+  const entries = Object.keys(value)
+    .filter(key => value[key] !== undefined)
+    .sort()
+    .map(key => `"${key}":${stableStringify(value[key])}`);
+  return '{' + entries.join(',') + '}';
+}
+
+/** Do these two sync documents carry the same content, key order aside? */
+function sameDoc(left, right) {
+  return stableStringify(left) === stableStringify(right);
+}
+
 const ZERO_DELTA = {
   listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0
 };
@@ -280,72 +322,110 @@ export async function runSyncCycle({
     // just says so without the pass.
     const delta = changed ? summarizeDelta(currentLists, mergedLists, renames) : zeroDelta();
 
-    // Push before writing anything to storage. Writing first (and only
-    // advancing `base` on success) meant a rejected attempt still left its
-    // merge result sitting in storage; the next attempt re-read that as
-    // "local", re-stamped it against the untouched `base`, and every
-    // remote-origin record picked up a fresh `now` timestamp — newer than any
-    // real remote edit, so local (i.e. the previous attempt's already-stale
-    // merge) always won the next merge. Only touching storage after the
-    // server accepts keeps every retry's stamp pass honest.
-    const result = await client.putState(remote.revision, merged);
-    if (result.ok) {
-      // `mergedLists` and `merged` describe the world as of `snapshot`, and
-      // writeSyncable re-reads storage itself to decide which 📡 rows to keep —
-      // an agreement that only holds while storage still matches the snapshot.
-      // If another tab wrote during the push, abandon this cycle's local write
-      // AND leave `base` where it is: writing a stale merge would delete a list
-      // that just stopped being 📡, and advancing `base` past a write that
-      // never happened would tombstone it server-wide on the next cycle. Doing
-      // nothing is always safe — the server already has the merge, and the
-      // write that invalidated us also re-triggers a cycle.
-      //
-      // Known, ACCEPTED cosmetic cost — not a limitation: if this attempt had
-      // adopted, the adopted ids are now on the server while localStorage still
-      // has the old ones, so the next cycle proposes the same adoption and the
-      // user sees the "Link them?" confirm a second time. This is suppressible
-      // (e.g. a session-scoped memo of already-answered {localId -> remoteId}
-      // pairs in main.mjs); it is left in deliberately because one extra dialog
-      // that converges on the next cycle does not justify another change to
-      // this path.
-      if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-        return { status: 'synced', revision: result.revision, changed: false, delta: zeroDelta() };
+    // Say nothing when there is nothing to say.
+    //
+    // The server stores the document and bumps the revision for every PUT it
+    // accepts, whatever the body — so a cycle whose merge IS the document the
+    // server already holds spends a round trip and a revision to tell it
+    // something it told us. Measured before this check: 624 revisions for 600
+    // operations, most of them cycles where nobody had changed anything.
+    //
+    // "Nothing to PUSH" is emphatically NOT "nothing to DO", and everything
+    // below this block depends on that. A device that merely RECEIVES — a new
+    // device pulling the world down, or any device picking up a game added
+    // elsewhere — merges to exactly the server's own document, so its push is
+    // skippable and its local write is mandatory. Both were verified by
+    // execution before this was written. That is why the local write, the
+    // backup, the CAS and `saveBase` all live outside this block: leaving them
+    // in the push's success branch would silently stop every device from ever
+    // receiving anything, while still reporting a cheerful "Synced".
+    //
+    // `settledRevision` is what the server is at once this attempt is done —
+    // the new revision if we pushed, the one we pulled if we did not. Truthful
+    // either way, because in the skip case the server's document is unchanged.
+    let settledRevision = remote.revision;
+    if (!sameDoc(merged, remote.doc)) {
+      // Push before writing anything to storage. Writing first (and only
+      // advancing `base` on success) meant a rejected attempt still left its
+      // merge result sitting in storage; the next attempt re-read that as
+      // "local", re-stamped it against the untouched `base`, and every
+      // remote-origin record picked up a fresh `now` timestamp — newer than any
+      // real remote edit, so local (i.e. the previous attempt's already-stale
+      // merge) always won the next merge. Only touching storage after the
+      // server accepts keeps every retry's stamp pass honest.
+      const result = await client.putState(remote.revision, merged);
+      if (!result.ok) {
+        // Someone wrote between our pull and our push. Re-merge against their
+        // copy on the next attempt, from a fresh snapshot taken at the top of
+        // the loop.
+        remote = { revision: result.revision, doc: result.doc };
+        continue;
       }
-      if (changed) {
-        // Snapshot the untouched lists before the merge result overwrites them.
-        await saveBackup(currentLists);
-        // saveBackup is an await too, so re-check before the one and only write.
-        // A write landing inside that window still costs one of the 5 backup
-        // slots for a write that never happens. That residual cost is
-        // irreducible without breaking something worse: the backup has to
-        // precede the write, and the write has to be the last thing after the
-        // last await. It is also mild — the slot holds a genuine snapshot of
-        // genuine data, so at most it displaces an older snapshot.
-        if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-          return { status: 'synced', revision: result.revision, changed: false, delta: zeroDelta() };
-        }
-        writeSyncable(storage, mergedLists);
-      }
-      // Frozen (📡) lists are deliberately kept OUT of base. `merged` carries
-      // the server's own node for them (the merge had nothing local to weigh it
-      // against), and recording that as "what this device last settled" is a
-      // lie: this device is not syncing the list at all, and PSNP+ repopulates
-      // a 📡 row from its feed URL, so local and server content diverge freely.
-      // On unfreeze, stampChanges would then read the server's extra games as
-      // "in base, missing from local" and delete them on every device.
-      //
-      // TRADEOFF, accepted deliberately — do not "fix" this back: with the
-      // list absent from base, a deletion made elsewhere while it was frozen
-      // can never be propagated server-wide by this device. That is consistent
-      // with what frozen means (excluded from sync entirely); silently
-      // destroying diverged content is not.
-      await saveBase(dropLists(merged, frozenIds));
-      return { status: 'synced', revision: result.revision, changed, delta };
+      settledRevision = result.revision;
     }
 
-    // Someone wrote between our pull and our push. Re-merge against their copy
-    // on the next attempt, from a fresh snapshot taken at the top of the loop.
-    remote = { revision: result.revision, doc: result.doc };
+    // `mergedLists` and `merged` describe the world as of `snapshot`, and
+    // writeSyncable re-reads storage itself to decide which 📡 rows to keep —
+    // an agreement that only holds while storage still matches the snapshot.
+    // If another tab wrote during the push, abandon this cycle's local write
+    // AND leave `base` where it is: writing a stale merge would delete a list
+    // that just stopped being 📡, and advancing `base` past a write that
+    // never happened would tombstone it server-wide on the next cycle. Doing
+    // nothing is always safe — the server already has the merge, and the
+    // write that invalidated us also re-triggers a cycle.
+    //
+    // Still checked when the push was skipped. Nothing awaited between the
+    // snapshot and here on that path, so it cannot fire yet — but it is the
+    // guard for an invariant ("this write matches the bytes it was computed
+    // from"), not for one particular await, and the next await is one line
+    // below it.
+    //
+    // Known, ACCEPTED cosmetic cost — not a limitation: if this attempt had
+    // adopted, the adopted ids are now on the server while localStorage still
+    // has the old ones, so the next cycle proposes the same adoption and the
+    // user sees the "Link them?" confirm a second time. This is suppressible
+    // (e.g. a session-scoped memo of already-answered {localId -> remoteId}
+    // pairs in main.mjs); it is left in deliberately because one extra dialog
+    // that converges on the next cycle does not justify another change to
+    // this path.
+    if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+      return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
+    }
+    if (changed) {
+      // Snapshot the untouched lists before the merge result overwrites them.
+      await saveBackup(currentLists);
+      // saveBackup is an await too, so re-check before the one and only write.
+      // A write landing inside that window still costs one of the 5 backup
+      // slots for a write that never happens. That residual cost is
+      // irreducible without breaking something worse: the backup has to
+      // precede the write, and the write has to be the last thing after the
+      // last await. It is also mild — the slot holds a genuine snapshot of
+      // genuine data, so at most it displaces an older snapshot.
+      if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+        return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
+      }
+      writeSyncable(storage, mergedLists);
+    }
+    // Frozen (📡) lists are deliberately kept OUT of base. `merged` carries
+    // the server's own node for them (the merge had nothing local to weigh it
+    // against), and recording that as "what this device last settled" is a
+    // lie: this device is not syncing the list at all, and PSNP+ repopulates
+    // a 📡 row from its feed URL, so local and server content diverge freely.
+    // On unfreeze, stampChanges would then read the server's extra games as
+    // "in base, missing from local" and delete them on every device.
+    //
+    // TRADEOFF, accepted deliberately — do not "fix" this back: with the
+    // list absent from base, a deletion made elsewhere while it was frozen
+    // can never be propagated server-wide by this device. That is consistent
+    // with what frozen means (excluded from sync entirely); silently
+    // destroying diverged content is not.
+    //
+    // Advanced on the skip path too, and it has to be: `merged` is what the
+    // server holds, so this device HAS settled on it. Leaving `base` behind
+    // because no bytes went over the wire would make the next cycle read the
+    // difference as a local deletion.
+    await saveBase(dropLists(merged, frozenIds));
+    return { status: 'synced', revision: settledRevision, changed, delta };
   }
 
   // Every attempt was rejected: nothing was ever written to storage, so there

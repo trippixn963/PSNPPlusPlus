@@ -211,7 +211,14 @@ test('a 409 retry re-merges against the fresh remote copy, not a stale re-stamp 
   const storage = fakeStorage();
   const baseLocal = [list('A', 'Wishlist', [gameTitled('g1', 'Old')])];
   const base = stampChanges(emptyDoc(), toDoc(baseLocal), 100);
-  writeLists(storage, baseLocal); // local is unchanged from base
+  // Local carries a genuine edit of its own (g2), which is what gives this
+  // cycle something to push and so makes the 409 reachable at all. It was
+  // previously unchanged from base — but a cycle with nothing to send now skips
+  // the push entirely, and this fake only injects its conflict from inside
+  // putState, so the retry path was never entered and the test passed vacuously
+  // on a cycle that never conflicted. g2 also does double duty: it must survive
+  // the retry alongside the remote's newer title.
+  writeLists(storage, [list('A', 'Wishlist', [gameTitled('g1', 'Old'), gameTitled('g2', 'Mine')])]);
 
   const r0 = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [gameTitled('g1', 'R0-title')])]), 500);
   const server = fakeServer(r0, 1);
@@ -232,11 +239,47 @@ test('a 409 retry re-merges against the fresh remote copy, not a stale re-stamp 
 
   const result = await runSyncCycle(h.args);
   assert.equal(result.status, 'synced');
-  // A clean single-pass merge of unchanged-local against R1 picks R1's title —
-  // not the R0 value the first (rejected) attempt would have re-stamped with
-  // a fresh `now` and made look newer than R1's real 700.
+  // A clean single-pass merge of local against R1 picks R1's title — not the R0
+  // value the first (rejected) attempt would have re-stamped with a fresh `now`
+  // and made look newer than R1's real 700.
+  const titleOf = games => games.find(g => g.id === 'g1').title;
   assert.equal(server.doc.lists.A.games.g1.title, 'R1-title');
-  assert.equal(readLists(storage)[0].games[0].title, 'R1-title');
+  assert.equal(titleOf(readLists(storage)[0].games), 'R1-title');
+  // ...and the local edit that made the push necessary must not be lost to the retry.
+  assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g2']);
+  assert.deepEqual(Object.keys(server.doc.lists.A.games).sort(), ['g1', 'g2']);
+});
+
+test('a concurrent write we had nothing to push against arrives on the next cycle', async () => {
+  // The unconditional PUT used to double as an accidental liveness probe: even
+  // with nothing to say, it would 409 against a write that landed after our GET
+  // and pull it in. Skipping the push gives that up — deliberately, and at no
+  // risk to data. Verified by execution: the edit is DELAYED by one cycle, not
+  // lost, which is the same thing that happens when the other device writes one
+  // millisecond after a successful push. Syncs fire on load, focus and edit, so
+  // the wait is bounded.
+  const storage = fakeStorage();
+  const settled = [list('A', 'Wishlist', [gameTitled('g1', 'Old')])];
+  writeLists(storage, settled);
+  const base = stampChanges(emptyDoc(), toDoc(settled), 100);
+  const server = countingServer(
+    stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [gameTitled('g1', 'R0-title')])]), 500), 1
+  );
+  const h = harness(storage, server, base);
+
+  await runSyncCycle({ ...h.args, now: 1000 });
+  assert.equal(server.pushes, 0, 'nothing to say on the first cycle');
+  assert.equal(readLists(storage)[0].games[0].title, 'R0-title');
+
+  // Another device writes AFTER our GET — the window the old 409 used to catch.
+  server.doc = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [gameTitled('g1', 'R1-title')])]), 700);
+  server.revision = 7;
+
+  const second = await runSyncCycle({ ...h.args, now: 2000 });
+  assert.equal(second.changed, true);
+  assert.equal(readLists(storage)[0].games[0].title, 'R1-title', 'the edit must arrive, not vanish');
+  assert.equal(server.pushes, 0, 'and still without a pointless push');
+  assert.equal(server.doc.lists.A.games.g1.title, 'R1-title', "the server's copy is untouched");
 });
 
 test('exhausted retries leave storage byte-identical and take no backups', async () => {
@@ -865,6 +908,275 @@ test('a cycle aborted by the CAS reports a zero delta — the write never happen
   const result = await runSyncCycle(h.args);
   assert.equal(result.changed, false);
   assert.deepEqual(result.delta, ZERO, 'a delta must never describe a write that was abandoned');
+});
+
+// --- The push is skipped when the server already holds the merge ------------
+//
+// Every cycle used to PUT unconditionally and the server bumped the revision
+// regardless: 624 revisions for 600 operations, including cycles that had
+// nothing whatsoever to say. If the merged document is what the server already
+// holds, there is no message to send.
+//
+// The trap this has to avoid is that "nothing to PUSH" is NOT "nothing to DO".
+// A device receiving a list from elsewhere merges to exactly the server's own
+// document — so the push is skippable and the LOCAL write is mandatory. Getting
+// that backwards silently stops every device from ever receiving anything.
+
+/** A server that counts pushes, so a skipped push is observable. */
+const countingServer = (doc = emptyDoc(), revision = 0) => {
+  const server = fakeServer(doc, revision);
+  server.pushes = 0;
+  const realPut = server.putState.bind(server);
+  server.putState = async (baseRevision, next) => {
+    server.pushes += 1;
+    return realPut(baseRevision, next);
+  };
+  return server;
+};
+
+test('a settled cycle with nothing to tell the server does not push', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = countingServer();
+  const h = harness(storage, server);
+
+  await runSyncCycle(h.args);                       // first sync: a real push
+  assert.equal(server.pushes, 1);
+  const revisionAfterFirst = server.revision;
+
+  const second = await runSyncCycle({ ...h.args, loadBase: async () => h.base });
+  assert.equal(second.status, 'synced');
+  assert.equal(second.changed, false);
+  assert.equal(server.pushes, 1, 'the second cycle had nothing to send');
+  assert.equal(server.revision, revisionAfterFirst, 'and must not have bumped the revision');
+  assert.equal(second.revision, revisionAfterFirst, 'the reported revision is the real one');
+});
+
+test('repeated quiet cycles never bump the revision', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = countingServer();
+  const h = harness(storage, server);
+
+  await runSyncCycle(h.args);
+  const settledRevision = server.revision;
+  for (let i = 0; i < 10; i += 1) {
+    await runSyncCycle({ ...h.args, loadBase: async () => h.base, now: 2000 + i });
+  }
+  assert.equal(server.pushes, 1, '10 idle cycles must cost 0 pushes');
+  assert.equal(server.revision, settledRevision);
+});
+
+test('a cycle that only RECEIVES skips the push but still writes locally', async () => {
+  // The merge of "nothing new here" against "the server has a game we lack" IS
+  // the server's own document — so there is nothing to push, and everything to
+  // write. This is the case that breaks if the local write is left sitting
+  // inside the push's success branch.
+  const storage = fakeStorage();
+  const before = [list('A', 'Wishlist', [game('g1')])];
+  writeLists(storage, before);
+  const base = stampChanges(emptyDoc(), toDoc(before), 500);
+  const server = countingServer(
+    stampChanges(base, toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 700), 4
+  );
+  const h = harness(storage, server, base);
+
+  const result = await runSyncCycle({ ...h.args, now: 1000 });
+  assert.equal(server.pushes, 0, 'the server already holds this exact document');
+  assert.equal(result.status, 'synced');
+  assert.equal(result.changed, true, 'but the cycle DID write');
+  assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g2'],
+    'the received game must reach localStorage even though nothing was pushed');
+  assert.equal(h.backups.length, 1, 'and the pre-merge backup must still be taken');
+  assert.deepEqual(h.backups[0][0].games.map(g => g.id), ['g1'], 'of the pre-merge lists');
+  assert.deepEqual(Object.keys(h.base.lists), ['A'], 'and base must still advance');
+  assert.deepEqual(result.delta, { ...ZERO, gamesAdded: 1 });
+});
+
+test('a brand-new device still pulls the whole server down without pushing', async () => {
+  const storage = fakeStorage();
+  const server = countingServer(
+    stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1')])]), 500), 1
+  );
+  const h = harness(storage, server);
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(server.pushes, 0);
+  assert.equal(result.changed, true);
+  assert.deepEqual(readLists(storage).map(l => l.id), ['A']);
+  assert.deepEqual(Object.keys(h.base.lists), ['A'], 'base must advance on the skip path too');
+});
+
+test('a genuine local change is still pushed', async () => {
+  const storage = fakeStorage();
+  const settled = [list('A', 'Wishlist', [game('g1')])];
+  writeLists(storage, settled);
+  const base = stampChanges(emptyDoc(), toDoc(settled), 500);
+  const server = countingServer(base, 3);
+  const h = harness(storage, server, base);
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1'), game('g2')])]);
+  const result = await runSyncCycle({ ...h.args, now: 1000 });
+  assert.equal(server.pushes, 1, 'a local edit is exactly what a push is for');
+  assert.equal(result.status, 'synced');
+  assert.deepEqual(Object.keys(server.doc.lists.A.games).sort(), ['g1', 'g2']);
+  assert.equal(server.revision, 4);
+});
+
+test('a local deletion is still pushed', async () => {
+  const storage = fakeStorage();
+  const settled = [list('A', 'Wishlist', [game('g1')]), list('B', 'Backlog')];
+  writeLists(storage, settled);
+  const base = stampChanges(emptyDoc(), toDoc(settled), 500);
+  const server = countingServer(base, 3);
+  const h = harness(storage, server, base);
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  await runSyncCycle({ ...h.args, now: 6000 });
+  assert.equal(server.pushes, 1);
+  assert.equal(server.doc.lists.B.deletedAt, 6000, 'the tombstone must reach the server');
+});
+
+test('key order in the server document does not force a pointless push', async () => {
+  // JSON.stringify is key-order sensitive and the server hands back whatever
+  // key order it stored. A comparison that noticed the ordering would push on
+  // every single cycle forever — i.e. it would silently do nothing at all.
+  const reorderKeys = value => {
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(reorderKeys);
+    const out = {};
+    for (const key of Object.keys(value).reverse()) out[key] = reorderKeys(value[key]);
+    return out;
+  };
+
+  const storage = fakeStorage();
+  const settled = [list('A', 'Wishlist', [game('g1')])];
+  writeLists(storage, settled);
+  const base = stampChanges(emptyDoc(), toDoc(settled), 500);
+  const server = countingServer(reorderKeys(base), 3);
+  const h = harness(storage, server, base);
+
+  // Sanity: the two really do serialize differently under plain JSON.stringify.
+  assert.notEqual(JSON.stringify(server.doc), JSON.stringify(base));
+
+  const result = await runSyncCycle({ ...h.args, now: 1000 });
+  assert.equal(result.status, 'synced');
+  assert.equal(server.pushes, 0, 'same content, different key order — nothing to say');
+  assert.equal(server.revision, 3);
+});
+
+test('the CAS still guards the write when the push is skipped', async () => {
+  // On the skip path saveBackup is the only await between the snapshot and the
+  // write, so it is the whole window another tab can land in — and the write
+  // must still be abandoned, with base left where it is.
+  const storage = fakeStorage();
+  const before = [list('A', 'Wishlist', [game('g1')])];
+  writeLists(storage, before);
+  const base = stampChanges(emptyDoc(), toDoc(before), 500);
+  const server = countingServer(
+    stampChanges(base, toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 700), 4
+  );
+  const h = harness(storage, server, base);
+  h.args.saveBackup = async () => {
+    // A second tab writes while the backup is being taken.
+    writeLists(storage, [list('A', 'Wishlist', [game('g1'), game('g9')])]);
+  };
+
+  const result = await runSyncCycle({ ...h.args, now: 1000 });
+  assert.equal(server.pushes, 0);
+  assert.equal(result.changed, false, 'the write was abandoned');
+  assert.deepEqual(result.delta, ZERO);
+  assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g9'],
+    "the other tab's write must survive");
+  assert.deepEqual(Object.keys(h.base.lists), ['A']);
+  assert.deepEqual(h.base.lists.A.games.g2, undefined,
+    'base must NOT advance past a write that never happened');
+});
+
+test('a corrupt local state still refuses to push, and never reaches the skip check', async () => {
+  const { storage, server: plain, h } = corruptionHarness();
+  storage.setItem(LISTS_KEY, '{ this is not json');
+  let pushes = 0;
+  plain.putState = async () => { pushes += 1; throw new Error('must not push'); };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assert.equal(pushes, 0);
+});
+
+test('changed stays truthful across the skip path', async () => {
+  // The same invariant the pre-existing `changed` test pins, re-run over the
+  // scenarios the skip introduces: skip-and-write, skip-and-do-nothing, push.
+  const scenarios = [
+    // Receives from the server: skips the push, writes locally.
+    () => {
+      const storage = fakeStorage();
+      const before = [list('A', 'Wishlist', [game('g1')])];
+      writeLists(storage, before);
+      const base = stampChanges(emptyDoc(), toDoc(before), 500);
+      const server = fakeServer(stampChanges(base, toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 700), 4);
+      return { storage, args: { ...harness(storage, server, base).args, now: 1000 } };
+    },
+    // Fully settled: skips the push, writes nothing.
+    () => {
+      const storage = fakeStorage();
+      const settled = [list('A', 'Wishlist', [game('g1')])];
+      writeLists(storage, settled);
+      const base = stampChanges(emptyDoc(), toDoc(settled), 500);
+      return { storage, args: { ...harness(storage, fakeServer(base, 3), base).args, now: 1000 } };
+    },
+    // Local edit: pushes, writes nothing locally.
+    () => {
+      const storage = fakeStorage();
+      const settled = [list('A', 'Wishlist', [game('g1')])];
+      const base = stampChanges(emptyDoc(), toDoc(settled), 500);
+      writeLists(storage, [list('A', 'Wishlist', [game('g1'), game('g2')])]);
+      return { storage, args: { ...harness(storage, fakeServer(base, 3), base).args, now: 1000 } };
+    }
+  ];
+
+  for (const build of scenarios) {
+    const { storage, args } = build();
+    const before = storage.getItem(LISTS_KEY);
+    const result = await runSyncCycle(args);
+    const after = storage.getItem(LISTS_KEY);
+    assert.equal(result.changed, before !== after,
+      `changed=${result.changed} but storage ${before === after ? 'did not' : 'did'} change`);
+  }
+});
+
+test('two devices still converge when neither pushes more than it must', async () => {
+  // End-to-end: the skip must not stop a change from propagating, only stop
+  // the cycles that had nothing to propagate.
+  const server = fakeServer();
+  let pushes = 0;
+  const realPut = server.putState.bind(server);
+  server.putState = async (rev, doc) => { pushes += 1; return realPut(rev, doc); };
+
+  const sA = fakeStorage();
+  const sB = fakeStorage();
+  writeLists(sA, [list('A', 'Wishlist', [game('g1')])]);
+  const A = device(sA, server);
+  const B = device(sB, server);
+
+  await A.sync(1000);
+  await B.sync(1100);
+  assert.deepEqual(readLists(sB).map(l => l.id), ['A'], 'B receives the list');
+
+  // Quiet period: nothing changed on either device.
+  const quietBaseline = pushes;
+  for (let i = 0; i < 6; i += 1) {
+    await A.sync(2000 + i);
+    await B.sync(2100 + i);
+  }
+  assert.equal(pushes, quietBaseline, '12 idle cycles across 2 devices must cost 0 pushes');
+
+  // A real edit on B still reaches A.
+  writeLists(sB, [list('A', 'Wishlist', [game('g1'), game('g2')])]);
+  await B.sync(3000);
+  await A.sync(3100);
+  assert.deepEqual(readLists(sA)[0].games.map(g => g.id).sort(), ['g1', 'g2']);
+  assert.equal(server.revision, pushes, 'the revision counts pushes and nothing else');
 });
 
 // --- Pinned behavior (already correct; guard against regression) -----------

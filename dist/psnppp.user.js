@@ -596,6 +596,19 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   function fingerprint(lists) {
     return JSON.stringify([...lists].sort((a, b) => String(a.id).localeCompare(String(b.id))));
   }
+  function stableStringify2(value) {
+    if (value === null || typeof value !== "object") {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return "[" + value.map((v) => v === void 0 ? "null" : stableStringify2(v)).join(",") + "]";
+    }
+    const entries = Object.keys(value).filter((key) => value[key] !== void 0).sort().map((key) => `"${key}":${stableStringify2(value[key])}`);
+    return "{" + entries.join(",") + "}";
+  }
+  function sameDoc(left, right) {
+    return stableStringify2(left) === stableStringify2(right);
+  }
   var ZERO_DELTA = {
     listsAdded: 0,
     listsRemoved: 0,
@@ -686,22 +699,27 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       const currentLists = snapshot.syncable;
       const changed = fingerprint(fromDoc(toDoc(currentLists))) !== fingerprint(mergedLists);
       const delta = changed ? summarizeDelta(currentLists, mergedLists, renames) : zeroDelta();
-      const result = await client.putState(remote.revision, merged);
-      if (result.ok) {
-        if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-          return { status: "synced", revision: result.revision, changed: false, delta: zeroDelta() };
+      let settledRevision = remote.revision;
+      if (!sameDoc(merged, remote.doc)) {
+        const result = await client.putState(remote.revision, merged);
+        if (!result.ok) {
+          remote = { revision: result.revision, doc: result.doc };
+          continue;
         }
-        if (changed) {
-          await saveBackup2(currentLists);
-          if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-            return { status: "synced", revision: result.revision, changed: false, delta: zeroDelta() };
-          }
-          writeSyncable(storage, mergedLists);
-        }
-        await saveBase2(dropLists(merged, frozenIds));
-        return { status: "synced", revision: result.revision, changed, delta };
+        settledRevision = result.revision;
       }
-      remote = { revision: result.revision, doc: result.doc };
+      if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+        return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
+      }
+      if (changed) {
+        await saveBackup2(currentLists);
+        if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+          return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
+        }
+        writeSyncable(storage, mergedLists);
+      }
+      await saveBase2(dropLists(merged, frozenIds));
+      return { status: "synced", revision: settledRevision, changed, delta };
     }
     return { status: "conflict", revision: remote.revision, changed: false, delta: zeroDelta() };
   }
