@@ -1,0 +1,15 @@
+// ==UserScript==
+// @name         PSNPSync
+// @namespace    psnpsync.trippixn
+// @version      1.0.0
+// @description  Two-way cross-device sync for PSNP+ game lists
+// @author       Trippixn
+// @match        https://psnprofiles.com/*
+// @run-at       document-start
+// @noframes
+// @grant        GM_xmlhttpRequest
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @grant        GM.deleteValue
+// @connect      trippixn.com
+// ==/UserScript==
