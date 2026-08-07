@@ -194,6 +194,70 @@ test('leaving the reload state makes a click sync again', () => {
   }
 });
 
+// --- the `update` state opens the install page, not another sync ----------
+//
+// A userscript cannot silently self-install. The offer's click has to open
+// the install page (in a new tab, handled by main.mjs's onUpdate) rather than
+// running a sync or navigating the current psnprofiles.com tab away.
+
+test('a click in the update state calls onUpdate instead of syncing', () => {
+  const fake = installFakeDocument();
+  try {
+    const calls = { sync: 0, reload: 0, settings: 0, update: 0 };
+    const indicator = createIndicator({
+      onSyncNow() { calls.sync += 1; },
+      onSettings() { calls.settings += 1; },
+      onReload() { calls.reload += 1; },
+      onUpdate() { calls.update += 1; }
+    });
+    indicator.setState('update', '1.10.0 is available');
+
+    fake.chip.listeners.get('click')();
+
+    assert.equal(calls.update, 1, 'the click must offer the update');
+    assert.equal(calls.sync, 0);
+    assert.equal(calls.reload, 0);
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('the update state says clicking installs, not that it syncs or reloads', () => {
+  const fake = installFakeDocument();
+  try {
+    const indicator = createIndicator({ ...spies().handlers, onUpdate() {} });
+    indicator.setState('update', '1.10.0 is available');
+
+    assert.match(fake.chip.title, /click to install/i);
+    assert.doesNotMatch(fake.chip.title, /click to sync/i);
+    assert.doesNotMatch(fake.chip.title, /click to reload/i);
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('right-click still opens settings from the update state', () => {
+  const fake = installFakeDocument();
+  try {
+    const calls = { sync: 0, reload: 0, settings: 0, update: 0 };
+    const indicator = createIndicator({
+      onSyncNow() { calls.sync += 1; },
+      onSettings() { calls.settings += 1; },
+      onReload() { calls.reload += 1; },
+      onUpdate() { calls.update += 1; }
+    });
+    indicator.setState('update', '1.10.0 is available');
+
+    let prevented = false;
+    fake.chip.listeners.get('contextmenu')({ preventDefault() { prevented = true; } });
+    assert.equal(calls.settings, 1);
+    assert.equal(calls.update, 0);
+    assert.ok(prevented);
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
 test('right-click still opens settings from the reload state', () => {
   const fake = installFakeDocument();
   try {

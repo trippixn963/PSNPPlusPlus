@@ -19,10 +19,38 @@ import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
+import { checkForUpdate } from './update-check.mjs';
 import { emptyDoc } from './doc.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const CHANGE_DEBOUNCE_MS = 3000;
+
+// The metadata file is the same tiny file @updateURL points at (see
+// banner.txt / build.mjs) — Tampermonkey already polls it, this just reads it
+// sooner. The install URL is the full script; opening it is what makes
+// Tampermonkey show its own install prompt. Same host as the sync endpoint,
+// so no new @connect directive is needed.
+const UPDATE_META_URL = 'https://trippixn.com/psnppp.meta.js';
+const UPDATE_INSTALL_URL = 'https://trippixn.com/psnppp.user.js';
+const UPDATE_STATE_KEY = 'psnppp.updateCheck';
+
+const loadUpdateState = () => GM.getValue(UPDATE_STATE_KEY, null);
+const saveUpdateState = state => GM.setValue(UPDATE_STATE_KEY, state);
+
+/**
+ * The version Tampermonkey/Violentmonkey installed this copy as.
+ *
+ * GM_info is a standard GM API but this file already treats every GM
+ * capability as something that might be missing (see the migrateGmStorage
+ * try/catch below) rather than assumed — `typeof` guards the read so a
+ * manager that does not provide it, or provides a malformed one, returns null
+ * instead of throwing out of start(). With no real current version there is
+ * nothing honest to compare a fetched one against, so the caller skips the
+ * check entirely rather than risk offering an update against a guess.
+ */
+export function currentScriptVersion() {
+  return (typeof GM_info !== 'undefined' && GM_info?.script?.version) || null;
+}
 
 /**
  * The document as of this device's last successful sync.
@@ -243,8 +271,8 @@ export function describeSyncResult(result) {
 }
 
 /**
- * Wraps `indicator.setState` so that `reload` is STICKY until the page is
- * actually reloaded.
+ * Wraps `indicator.setState` so that `reload` and `update` are each STICKY
+ * until something more important than a quiet cycle displaces them.
  *
  * `reload` is an affordance, not a status. Writing to localStorage goes through
  * the setItem patch this script installs, so our own write wakes watchLists,
@@ -254,24 +282,48 @@ export function describeSyncResult(result) {
  * drawn list was still stale. Executed end-to-end: the chip went
  * `reload -> synced` and the click silently reverted from "reload" to "sync".
  *
- * Only 'synced' and 'syncing' are suppressed. Errors must always be visible —
- * and because the flag is not cleared, the reload offer comes back as soon as
- * the error does. Nothing resets it, deliberately: the only thing that should
- * is a page load, which destroys this whole closure anyway.
+ * `update` is the same shape of problem: the update check runs once after the
+ * first sync and every 30 minutes after, but every OTHER sync cycle in
+ * between — on every load, focus and edit — would otherwise paint over the
+ * offer with a plain 'synced' within seconds of it appearing.
  *
- * The suppressed 'syncing' also closes a small misfire window — a chip that
- * flickered to 'syncing' would, for that moment, treat a click as a sync.
+ * PRIORITY, when both are pending: reload wins. `reload` means a merge
+ * already wrote real data to this device that PSNP+'s already-drawn page is
+ * not showing yet — a correctness issue for the data on screen right now.
+ * `update` is a discretionary offer for next time, and clicking it opens the
+ * install page in a NEW tab (a userscript cannot self-install), so it does
+ * nothing to get the stale page to reload. Showing 'update' instead would
+ * make it easy to click "install" and forget the reload entirely, leaving
+ * PSNP+ showing stale lists with no visible reminder. So: `update` is
+ * recorded the instant it arrives (nothing is lost) but stays hidden behind a
+ * pending `reload` until the page actually reloads and this whole closure is
+ * destroyed — at which point the next session's check can offer it again.
+ *
+ * Only 'synced' and 'syncing' are ever suppressed by either sticky flag —
+ * errors ('offline', 'conflict') always show through, exactly as before this
+ * state existed. Neither flag is ever cleared by this function; the only
+ * thing that should clear either is a page load.
  */
 export function createIndicatorPainter(setState) {
   let awaitingReload = false;
   let reloadDetail = '';
+  let updateAvailable = false;
+  let updateDetail = '';
   return (state, detail = '') => {
     if (state === 'reload') {
       awaitingReload = true;
       reloadDetail = detail;
     }
-    if (awaitingReload && (state === 'synced' || state === 'syncing')) {
+    if (state === 'update') {
+      updateAvailable = true;
+      updateDetail = detail;
+    }
+    if (awaitingReload && (state === 'synced' || state === 'syncing' || state === 'update')) {
       setState('reload', reloadDetail);
+      return;
+    }
+    if (updateAvailable && (state === 'synced' || state === 'syncing')) {
+      setState('update', updateDetail);
       return;
     }
     setState(state, detail);
@@ -324,7 +376,12 @@ export async function start() {
     // Only ever reached from the `reload` state, i.e. after a cycle that
     // actually wrote to localStorage behind an already-drawn PSNP+ list view.
     // Never automatic — the user asks for it by clicking the chip that says so.
-    onReload: () => { window.location.reload(); }
+    onReload: () => { window.location.reload(); },
+    // A userscript cannot silently self-install — Tampermonkey requires the
+    // user's own click on its install page. window.open, not
+    // window.location.assign: this never navigates the psnprofiles.com tab
+    // itself away, only opens a new one.
+    onUpdate: () => { window.open(UPDATE_INSTALL_URL, '_blank', 'noopener'); }
   });
   document.body.appendChild(indicator.element);
 
@@ -422,7 +479,35 @@ export async function start() {
     if (document.visibilityState === 'visible') void sync();
   });
 
-  void sync();
+  // checkForUpdate is specified to never throw or reject — every one of its
+  // own failure modes (a dead endpoint, an HTML body, a malformed @version)
+  // resolves to {available:false}. This try/catch is defense in depth only,
+  // so that even a bug in it could never chain into the sync path above: this
+  // runs strictly AFTER the first sync settles, entirely through `paint`
+  // (never indicator.setState), and touches no sync-cycle state.
+  async function checkUpdateAndPaint() {
+    const currentVersion = currentScriptVersion();
+    // No GM_info -> no honest baseline to compare a fetched version against.
+    // Silently skip rather than risk offering an update against a guess.
+    if (!currentVersion) return;
+    try {
+      const { available, latest } = await checkForUpdate({
+        currentVersion, metaUrl: UPDATE_META_URL,
+        loadState: loadUpdateState, saveState: saveUpdateState
+      });
+      if (available) {
+        paint('update', `Version ${latest} is available`);
+      }
+    } catch (error) {
+      console.error('[psnppp] update check failed:', error);
+    }
+  }
+
+  // Only THIS first call chains into the update check — watchLists, the
+  // focus listener and the chip's own click all call sync() directly. The
+  // check is throttled to once per 30 minutes internally anyway, but this
+  // keeps it to at most once per page load instead of racing every trigger.
+  void sync().then(() => { void checkUpdateAndPaint(); });
 }
 
 // Auto-start only in a real browser. Guarded so this module can be imported

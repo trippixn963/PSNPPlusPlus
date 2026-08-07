@@ -4,7 +4,7 @@ import { saveBackup, listBackups } from '../src/backup.mjs';
 import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
 import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta,
-  createIndicatorPainter, decorateDetail } from '../src/main.mjs';
+  createIndicatorPainter, decorateDetail, currentScriptVersion } from '../src/main.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
 
@@ -334,6 +334,112 @@ test('before any reload, every state paints exactly as given', () => {
     ['idle', 'syncing', 'synced', 'offline', 'conflict', 'unconfigured']);
   assert.deepEqual(painted.map(p => p[1]),
     ['d-idle', 'd-syncing', 'd-synced', 'd-offline', 'd-conflict', 'd-unconfigured']);
+});
+
+// --- the update offer is sticky too, and loses to a pending reload ---------
+//
+// The update check runs once after the first sync and can fire while an
+// ordinary quiet cycle (changed: false) is repainting 'synced' every focus
+// and edit — without stickiness the offer would vanish within seconds of
+// appearing, the same problem 'reload' had before createIndicatorPainter
+// existed. DECISION: reload wins when both are pending. Reload means a merge
+// already wrote real data this device's PSNP+ page is not showing yet — a
+// correctness issue for what's on screen right now. Update is a discretionary
+// offer for next time whose click opens an install page in a NEW tab, so
+// showing it instead would not even get the stale page reloaded.
+
+test('an update offer survives a quiet cycle the same way reload does', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('update', '1.10.0 is available');
+  paint('syncing');
+  paint('synced', 'Revision 9');
+
+  assert.deepEqual(painted.map(p => p[0]), ['update', 'update', 'update']);
+  assert.equal(painted[2][1], '1.10.0 is available');
+});
+
+test('a pending reload wins over a pending update', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('reload', 'Revision 3 — +1 game');
+  paint('update', '1.10.0 is available'); // arrives while reload is still pending
+  paint('synced', 'Revision 3');          // a later quiet cycle
+
+  assert.deepEqual(painted.map(p => p[0]), ['reload', 'reload', 'reload']);
+  assert.equal(painted[2][1], 'Revision 3 — +1 game', 'the reload detail must survive, not the update one');
+});
+
+test('an update that arrives BEFORE any reload still yields to one that follows', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('update', '1.10.0 is available');
+  paint('syncing');
+  paint('reload', 'Revision 4 — +2 lists'); // a real write happens later
+
+  assert.deepEqual(painted.map(p => p[0]), ['update', 'update', 'reload']);
+});
+
+test('errors show through an update offer exactly as they do through reload', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('update', '1.10.0 is available');
+  paint('offline', 'Network error');
+  paint('conflict', 'Could not settle');
+  paint('synced', 'Revision 3'); // back to quiet -> the update offer returns
+
+  assert.deepEqual(painted.map(p => p[0]), ['update', 'offline', 'conflict', 'update']);
+});
+
+// --- reading the running version --------------------------------------------
+//
+// GM_info is a standard GM API, but this file already treats every GM
+// capability as something that might be missing rather than assumed
+// (migrateGmStorage's own try/catch). currentScriptVersion must degrade to
+// null, never throw, whether GM_info is absent entirely or present but
+// malformed.
+
+function withGlobal(name, value, fn) {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, name);
+  const previous = globalThis[name];
+  globalThis[name] = value;
+  try {
+    return fn();
+  } finally {
+    if (had) globalThis[name] = previous;
+    else delete globalThis[name];
+  }
+}
+
+test('currentScriptVersion reads GM_info.script.version when present', () => {
+  withGlobal('GM_info', { script: { version: '1.2.0' } }, () => {
+    assert.equal(currentScriptVersion(), '1.2.0');
+  });
+});
+
+test('currentScriptVersion returns null, not a throw, when GM_info is absent', () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'GM_info');
+  const previous = globalThis.GM_info;
+  delete globalThis.GM_info;
+  try {
+    assert.doesNotThrow(() => currentScriptVersion());
+    assert.equal(currentScriptVersion(), null);
+  } finally {
+    if (had) globalThis.GM_info = previous;
+  }
+});
+
+test('currentScriptVersion returns null on a malformed GM_info rather than throwing', () => {
+  for (const bad of [{}, { script: {} }, { script: null }, null, 'nope']) {
+    withGlobal('GM_info', bad, () => {
+      assert.doesNotThrow(() => currentScriptVersion());
+      assert.equal(currentScriptVersion(), null);
+    });
+  }
 });
 
 // --- a grandfathered http endpoint keeps leaking the key --------------------

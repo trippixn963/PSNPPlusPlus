@@ -342,13 +342,19 @@ Type a new key, or leave this blank to keep the stored one.`,
     reload: { label: "Synced \u2014 reload page", color: "#198754", action: "reload" },
     offline: { label: "Offline", color: "#fd7e14", action: "sync" },
     conflict: { label: "Conflict", color: "#dc3545", action: "sync" },
-    unconfigured: { label: "Set up sync", color: "#6f42c1", action: "sync" }
+    unconfigured: { label: "Set up sync", color: "#6f42c1", action: "sync" },
+    // A userscript cannot silently self-install — that would be a security hole
+    // — so this is an offer, not an update. The click opens the install page in
+    // a NEW tab (see onUpdate below); it deliberately does not navigate the
+    // current psnprofiles.com tab away.
+    update: { label: "Update available", color: "#0dcaf0", action: "update" }
   };
   var CLICK_HINT = {
     sync: "click to sync now, right-click for settings.",
-    reload: "click to reload the page, right-click for settings."
+    reload: "click to reload the page, right-click for settings.",
+    update: "click to install the update, right-click for settings."
   };
-  function createIndicator({ onSyncNow, onSettings, onReload }) {
+  function createIndicator({ onSyncNow, onSettings, onReload, onUpdate }) {
     const element = document.createElement("div");
     element.id = "psnppp-indicator";
     element.style.cssText = [
@@ -370,6 +376,7 @@ Type a new key, or leave this blank to keep the stored one.`,
     let action = STATES.idle.action;
     element.addEventListener("click", () => {
       if (action === "reload") onReload();
+      else if (action === "update") onUpdate();
       else onSyncNow();
     });
     element.addEventListener("contextmenu", (event) => {
@@ -791,9 +798,76 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return { keys, blobs, endpointRewritten };
   }
 
+  // userscript/src/update-check.mjs
+  var THROTTLE_MS = 30 * 60 * 1e3;
+  function parseVersion(metaText) {
+    if (typeof metaText !== "string") return null;
+    const match = metaText.match(/@version\s+(\S+)/);
+    if (!match) return null;
+    const version = match[1];
+    return /^\d+(\.\d+)*$/.test(version) ? version : null;
+  }
+  function isNewer(latest, current) {
+    const segments = (value) => String(value ?? "").split(".").map((part) => {
+      const n = Number.parseInt(part, 10);
+      return Number.isFinite(n) ? n : 0;
+    });
+    const a = segments(latest);
+    const b = segments(current);
+    const length = Math.max(a.length, b.length);
+    for (let i = 0; i < length; i += 1) {
+      const av = a[i] ?? 0;
+      const bv = b[i] ?? 0;
+      if (av !== bv) return av > bv;
+    }
+    return false;
+  }
+  async function checkForUpdate({
+    currentVersion,
+    metaUrl,
+    request = gmRequest,
+    now = Date.now(),
+    loadState,
+    saveState
+  }) {
+    let state = null;
+    try {
+      state = await loadState();
+    } catch {
+      state = null;
+    }
+    if (state && typeof state.checkedAt === "number" && now - state.checkedAt < THROTTLE_MS) {
+      return { available: Boolean(state.available), latest: state.latest ?? null };
+    }
+    let result = { available: false, latest: null };
+    try {
+      const response = await request({ method: "GET", url: metaUrl });
+      if (response && response.status === 200) {
+        const latest = parseVersion(response.responseText);
+        if (latest != null) {
+          result = { available: isNewer(latest, currentVersion), latest };
+        }
+      }
+    } catch {
+    }
+    try {
+      await saveState({ checkedAt: now, available: result.available, latest: result.latest });
+    } catch {
+    }
+    return result;
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var CHANGE_DEBOUNCE_MS = 3e3;
+  var UPDATE_META_URL = "https://trippixn.com/psnppp.meta.js";
+  var UPDATE_INSTALL_URL = "https://trippixn.com/psnppp.user.js";
+  var UPDATE_STATE_KEY = "psnppp.updateCheck";
+  var loadUpdateState = () => GM.getValue(UPDATE_STATE_KEY, null);
+  var saveUpdateState = (state) => GM.setValue(UPDATE_STATE_KEY, state);
+  function currentScriptVersion() {
+    return typeof GM_info !== "undefined" && GM_info?.script?.version || null;
+  }
   var loadBase = async () => {
     const raw = await GM.getValue(BASE_KEY, null);
     if (raw == null) return emptyDoc();
@@ -920,13 +994,23 @@ Enter a number:`, "1");
   function createIndicatorPainter(setState) {
     let awaitingReload = false;
     let reloadDetail = "";
+    let updateAvailable = false;
+    let updateDetail = "";
     return (state, detail = "") => {
       if (state === "reload") {
         awaitingReload = true;
         reloadDetail = detail;
       }
-      if (awaitingReload && (state === "synced" || state === "syncing")) {
+      if (state === "update") {
+        updateAvailable = true;
+        updateDetail = detail;
+      }
+      if (awaitingReload && (state === "synced" || state === "syncing" || state === "update")) {
         setState("reload", reloadDetail);
+        return;
+      }
+      if (updateAvailable && (state === "synced" || state === "syncing")) {
+        setState("update", updateDetail);
         return;
       }
       setState(state, detail);
@@ -957,6 +1041,13 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
       // Never automatic — the user asks for it by clicking the chip that says so.
       onReload: () => {
         window.location.reload();
+      },
+      // A userscript cannot silently self-install — Tampermonkey requires the
+      // user's own click on its install page. window.open, not
+      // window.location.assign: this never navigates the psnprofiles.com tab
+      // itself away, only opens a new one.
+      onUpdate: () => {
+        window.open(UPDATE_INSTALL_URL, "_blank", "noopener");
       }
     });
     document.body.appendChild(indicator.element);
@@ -1015,7 +1106,26 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
     window.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") void sync();
     });
-    void sync();
+    async function checkUpdateAndPaint() {
+      const currentVersion = currentScriptVersion();
+      if (!currentVersion) return;
+      try {
+        const { available, latest } = await checkForUpdate({
+          currentVersion,
+          metaUrl: UPDATE_META_URL,
+          loadState: loadUpdateState,
+          saveState: saveUpdateState
+        });
+        if (available) {
+          paint("update", `Version ${latest} is available`);
+        }
+      } catch (error) {
+        console.error("[psnppp] update check failed:", error);
+      }
+    }
+    void sync().then(() => {
+      void checkUpdateAndPaint();
+    });
   }
   if (typeof document !== "undefined") {
     const onStartError = (error) => console.error("[psnppp] start() failed:", error);

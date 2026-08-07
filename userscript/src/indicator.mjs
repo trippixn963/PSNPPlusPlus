@@ -34,15 +34,21 @@ const STATES = {
   reload:       { label: 'Synced — reload page', color: '#198754', action: 'reload' },
   offline:      { label: 'Offline', color: '#fd7e14', action: 'sync' },
   conflict:     { label: 'Conflict', color: '#dc3545', action: 'sync' },
-  unconfigured: { label: 'Set up sync', color: '#6f42c1', action: 'sync' }
+  unconfigured: { label: 'Set up sync', color: '#6f42c1', action: 'sync' },
+  // A userscript cannot silently self-install — that would be a security hole
+  // — so this is an offer, not an update. The click opens the install page in
+  // a NEW tab (see onUpdate below); it deliberately does not navigate the
+  // current psnprofiles.com tab away.
+  update:       { label: 'Update available', color: '#0dcaf0', action: 'update' }
 };
 
 const CLICK_HINT = {
   sync: 'click to sync now, right-click for settings.',
-  reload: 'click to reload the page, right-click for settings.'
+  reload: 'click to reload the page, right-click for settings.',
+  update: 'click to install the update, right-click for settings.'
 };
 
-export function createIndicator({ onSyncNow, onSettings, onReload }) {
+export function createIndicator({ onSyncNow, onSettings, onReload, onUpdate }) {
   const element = document.createElement('div');
   element.id = 'psnppp-indicator';
   element.style.cssText = [
@@ -61,6 +67,7 @@ export function createIndicator({ onSyncNow, onSettings, onReload }) {
 
   element.addEventListener('click', () => {
     if (action === 'reload') onReload();
+    else if (action === 'update') onUpdate();
     else onSyncNow();
   });
   element.addEventListener('contextmenu', event => {
