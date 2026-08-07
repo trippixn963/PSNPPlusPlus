@@ -53,6 +53,14 @@ test('putState reports a 409 as a conflict, not an error', async () => {
   assert.equal(result.revision, 7);
 });
 
+test('putState receiving a 409 with a wrong doc version rejects rather than returning a conflict', async () => {
+  const request = fakeRequest([
+    { status: 409, responseText: JSON.stringify({ revision: 7, updatedAt: 9, doc: { version: 99, lists: {} } }) }
+  ]);
+  const client = createSyncClient({ endpoint: 'https://host/api/psnp-sync', key: 'k', request });
+  await assert.rejects(() => client.putState(3, okDoc), /version/i);
+});
+
 test('a 401 rejects', async () => {
   const request = fakeRequest([{ status: 401, responseText: '{"detail":"Invalid sync key"}' }]);
   const client = createSyncClient({ endpoint: 'https://host/api/psnp-sync', key: 'bad', request });

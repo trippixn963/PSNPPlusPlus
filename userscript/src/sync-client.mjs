@@ -15,7 +15,8 @@ export function gmRequest(options) {
       ...options,
       onload: response => resolve({ status: response.status, responseText: response.responseText }),
       onerror: () => reject(new Error('Network error')),
-      ontimeout: () => reject(new Error('Request timed out'))
+      ontimeout: () => reject(new Error('Request timed out')),
+      onabort: () => reject(new Error('Request aborted'))
     });
   });
 }
@@ -24,7 +25,8 @@ function parseBody(response) {
   try {
     return JSON.parse(response.responseText);
   } catch {
-    throw new Error(`Malformed response body (HTTP ${response.status})`);
+    const snippet = String(response.responseText ?? '').slice(0, 120);
+    throw new Error(`Malformed response body (HTTP ${response.status}): ${snippet}`);
   }
 }
 
