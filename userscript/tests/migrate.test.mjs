@@ -314,14 +314,19 @@ test('an index entry with a foreign id is passed through untouched', async () =>
  * event loop open forever.
  */
 function installFakeBrowser(storage) {
-  const el = () => ({
-    id: '', title: '', textContent: '', style: { cssText: '' },
-    appendChild() {}, addEventListener() {}
-  });
+  const el = () => {
+    const node = {
+      id: '', title: '', textContent: '', style: { cssText: '' },
+      children: [], addEventListener() {}
+    };
+    node.appendChild = child => { node.children.push(child); };
+    return node;
+  };
+  const attached = [];
   globalThis.document = {
     readyState: 'complete',
     visibilityState: 'visible',
-    body: { appendChild() {} },
+    body: { appendChild: node => { attached.push(node); } },
     createElement: el,
     addEventListener() {}
   };
@@ -337,12 +342,14 @@ function installFakeBrowser(storage) {
   const realSetTimeout = globalThis.setTimeout;
   globalThis.setInterval = () => 0;
   globalThis.setTimeout = () => 0;
-  return () => {
+  const restore = () => {
     globalThis.setInterval = realSetInterval;
     globalThis.setTimeout = realSetTimeout;
     delete globalThis.document;
     delete globalThis.window;
   };
+  restore.attached = attached;
+  return restore;
 }
 
 test('start() migrates GM storage before it reads any of it', async () => {
@@ -369,6 +376,23 @@ test('start() migrates GM storage before it reads any of it', async () => {
       ['psnppp.backup.3000', 'psnppp.backup.2000', 'psnppp.backup.1000']
     );
     await assert.doesNotReject(() => restoreBackup('psnppp.backup.1000'));
+
+    // PROTECTED BEHAVIOUR: sync() must never reject. It is called
+    // fire-and-forget from the chip's click handler, the visibilitychange
+    // listener and the end of start(), so a rejection becomes an unhandled
+    // promise rejection and the chip sticks on "Syncing…" forever. Here
+    // GM_xmlhttpRequest does not exist, so the request layer throws a
+    // ReferenceError from inside sync() — and start() above still resolved.
+    // The chip must have landed on a terminal state carrying the failure,
+    // not been left mid-sync.
+    const chip = restore.attached[0];
+    assert.ok(chip, 'the status chip was never attached');
+    const label = chip.children[0].textContent;
+    assert.equal(label, 'Offline', `chip should have settled on Offline, got "${label}"`);
+    // The detail branch of the title only renders when setState was given the
+    // error text, so this pins that the failure reached the chip rather than
+    // escaping as an unhandled rejection.
+    assert.match(chip.title, /^PSNP\+\+ — .+\nClick to sync now/s);
   } finally {
     restore();
     uninstallFakeGM();
