@@ -85,6 +85,13 @@ export function watchLists(storage, onChange, { intervalMs = 2000, target = glob
         console.error('[psnpsync] Sync callback error:', e);
       }
     } finally {
+      // Absorb onChange's own write-back so it is not seen as a fresh external
+      // change on the next check. This prevents spurious re-syncs when onChange
+      // calls writeSyncable, which inevitably writes a different value (due to
+      // doc.mjs's updatedAt stamping). A genuine PSNP+ edit during the callback
+      // would be overwritten anyway by the sync cycle, so absorbing the post-
+      // callback value is acceptable and consistent with the merge semantics.
+      last = storage.getItem(LISTS_KEY);
       inCheck = false;
     }
   };

@@ -137,15 +137,26 @@ test('watchLists fires onChange when the lists key changes via setItem', () => {
 test('watchLists does not fire onChange for unrelated keys', () => {
   const storage = fakeStorage();
   let callCount = 0;
+  let unrelatedSetItemCalled = false;
 
   const target = createFakeTarget();
   const stop = watchLists(storage, () => { callCount += 1; }, { target, intervalMs: 100000 });
+
+  // Wrap the original setItem to track if it was called for unrelated keys
+  const originalSetItem = target.Storage.prototype.setItem;
+  let setItemCalls = [];
+  target.Storage.prototype.setItem = function(key, value) {
+    setItemCalls.push(key);
+    originalSetItem.call(this, key, value);
+  };
 
   // Write to an unrelated key through the patched setItem
   storage.setItem('other-key', 'value');
   target._fireSetItem('other-key', 'value');
 
   assert.equal(callCount, 0);
+  // Verify the original setItem actually received the unrelated write
+  assert(setItemCalls.includes('other-key'), 'original setItem must have been called for unrelated key');
   stop();
 });
 
@@ -242,6 +253,45 @@ test('onChange that writes to storage does not recurse infinitely', () => {
 
   // Should have fired exactly once, not recursed
   assert.equal(callCount, 1);
+
+  stop();
+});
+
+test('non-idempotent onChange write-back does not cause spurious syncs on poll', () => {
+  const storage = fakeStorage();
+  let callCount = 0;
+  let writeCounter = 0;
+
+  const target = createFakeTarget();
+
+  // onChange that writes back with a changing value (simulates Task 10's merge with updatedAt)
+  const stop = watchLists(storage, () => {
+    callCount += 1;
+    writeCounter++;
+    // Write back with an embedded counter — every write is different
+    const merged = JSON.stringify([list('A', { name: `merged-${writeCounter}` })]);
+    storage.setItem(LISTS_KEY, merged);
+    target._fireSetItem(LISTS_KEY, merged);
+  }, { target, intervalMs: 100000 }); // Large interval so it doesn't fire during test
+
+  // One genuine external edit
+  const initialEdit = JSON.stringify([list('A', { name: 'external-edit' })]);
+  storage.setItem(LISTS_KEY, initialEdit);
+  target._fireSetItem(LISTS_KEY, initialEdit);
+
+  assert.equal(callCount, 1, 'one genuine edit should fire once');
+
+  // Simulate poll ticks by firing setItem with the current value (no external change)
+  // This simulates what the interval poll would do - read current storage value
+  const currentValue = storage.getItem(LISTS_KEY);
+
+  // Multiple independent poll-like checks with no external change
+  target._fireSetItem(LISTS_KEY, currentValue);
+  target._fireSetItem(LISTS_KEY, currentValue);
+  target._fireSetItem(LISTS_KEY, currentValue);
+
+  // Should still be exactly 1 call, not spurious syncs
+  assert.equal(callCount, 1, 'poll ticks with no external change should not fire onChange');
 
   stop();
 });
