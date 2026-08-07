@@ -1,6 +1,6 @@
-# systemd unit for the PSNP sync sidecar (John's VPS, your-server.example).
+# systemd unit for the PSNP++ sync sidecar (John's VPS, your-server.example).
 [Unit]
-Description=PSNP list sync sidecar
+Description=PSNP++ list sync sidecar
 After=network.target
 
 [Service]

@@ -13,7 +13,7 @@ import { createIndicator } from './indicator.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
 import { emptyDoc } from './doc.mjs';
 
-const BASE_KEY = 'psnpsync.base';
+const BASE_KEY = 'psnppp.base';
 const CHANGE_DEBOUNCE_MS = 3000;
 
 /**
@@ -48,7 +48,7 @@ const saveBase = async doc => GM.setValue(BASE_KEY, JSON.stringify(doc));
 async function confirmAdoptions(adoptions) {
   const names = adoptions.map(a => `• ${a.name}`).join('\n');
   return window.confirm(
-    'PSNPSync found lists on the server with the same names as lists on this ' +
+    'PSNP++ found lists on the server with the same names as lists on this ' +
     `device:\n\n${names}\n\nLink them so they stay in sync? ` +
     'Choose Cancel to keep them separate.'
   );
@@ -70,7 +70,7 @@ export async function openSettings() {
   try {
     const backups = await listBackups();
     const choice = window.prompt(
-      'PSNPSync\n\n1 — Enter endpoint and sync key\n' +
+      'PSNP++\n\n1 — Enter endpoint and sync key\n' +
       `2 — Restore a pre-merge backup (${backups.length} available)\n\nChoose 1 or 2:`,
       '1'
     );
@@ -81,19 +81,19 @@ export async function openSettings() {
     if (choice !== '2') return;
 
     if (backups.length === 0) {
-      window.alert('PSNPSync — no backups yet.');
+      window.alert('PSNP++ — no backups yet.');
       return;
     }
     const menu = backups
       .map((entry, index) => `${index + 1} — ${new Date(entry.at).toLocaleString()} (${entry.listCount} lists)`)
       .join('\n');
-    const picked = window.prompt(`PSNPSync — restore which backup?\n\n${menu}\n\nEnter a number:`, '1');
+    const picked = window.prompt(`PSNP++ — restore which backup?\n\n${menu}\n\nEnter a number:`, '1');
     const index = Number(picked) - 1;
     if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
 
     const chosen = backups[index];
     const confirmed = window.confirm(
-      `PSNPSync — restore the backup from ${new Date(chosen.at).toLocaleString()} ` +
+      `PSNP++ — restore the backup from ${new Date(chosen.at).toLocaleString()} ` +
       `(${chosen.listCount} lists)? This replaces your current lists.`
     );
     if (!confirmed) return;
@@ -116,10 +116,10 @@ export async function openSettings() {
     await saveBackup(currentLists);
 
     writeSyncable(window.localStorage, restored);
-    window.alert('PSNPSync — backup restored. Reloading.');
+    window.alert('PSNP++ — backup restored. Reloading.');
     window.location.reload();
   } catch (error) {
-    window.alert(`PSNPSync — settings/restore failed: ${String(error?.message ?? error)}`);
+    window.alert(`PSNP++ — settings/restore failed: ${String(error?.message ?? error)}`);
   }
 }
 
@@ -233,7 +233,7 @@ if (typeof document !== 'undefined') {
   // sync(), which cannot), but both call sites are fire-and-forget from an
   // event callback, so a `.catch()` is cheap insurance against an unhandled
   // rejection.
-  const onStartError = error => console.error('[psnpsync] start() failed:', error);
+  const onStartError = error => console.error('[psnppp] start() failed:', error);
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { start().catch(onStartError); });
   } else {

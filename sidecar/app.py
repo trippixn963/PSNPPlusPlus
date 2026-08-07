@@ -1,11 +1,11 @@
-"""PSNP list sync sidecar — a single-document store with a revision guard.
+"""PSNP++ list sync sidecar — a single-document store with a revision guard.
 
 Stores one JSON document (all of one user's PSNP+ game lists) behind a shared
 secret. Concurrency is handled optimistically: a client sends the revision its
 edit was based on, and a mismatch returns 409 with the server's current copy so
 the client can re-merge.
 
-Bound to loopback only; nginx terminates TLS and proxies /api/psnp-sync/.
+Bound to loopback only; nginx terminates TLS and proxies /api/psnppp/.
 No CORS middleware — the only client is a userscript using GM_xmlhttpRequest,
 which is not subject to CORS.
 """
@@ -28,7 +28,7 @@ DOC_VERSION = 1
 DOC_ID = 1
 DB_BUSY_TIMEOUT_SECONDS = 10.0
 
-app = FastAPI(title="psnp-sync", docs_url=None, redoc_url=None)
+app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None)
 
 # Guards one-time cold-start setup per database file (see _ensure_ready).
 # Keyed by path rather than initialized once at import time, so it stays
@@ -148,19 +148,19 @@ class PutState(BaseModel):
     doc: dict[str, Any]
 
 
-@app.get("/api/psnp-sync/health")
+@app.get("/api/psnppp/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/psnp-sync/state")
+@app.get("/api/psnppp/state")
 def get_state(x_sync_key: str | None = Header(default=None)) -> dict[str, Any]:
     _require_key(x_sync_key)
     revision, updated_at, doc = _read_state()
     return {"revision": revision, "updatedAt": updated_at, "doc": doc}
 
 
-@app.put("/api/psnp-sync/state")
+@app.put("/api/psnppp/state")
 def put_state(
     payload: PutState, x_sync_key: str | None = Header(default=None)
 ) -> Any:

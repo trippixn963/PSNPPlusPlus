@@ -17,7 +17,7 @@ const STATES = {
 
 export function createIndicator({ onSyncNow, onSettings }) {
   const element = document.createElement('div');
-  element.id = 'psnpsync-indicator';
+  element.id = 'psnppp-indicator';
   element.style.cssText = [
     'position:fixed', 'right:12px', 'bottom:12px', 'z-index:99999',
     'font:12px/1.4 Arial,sans-serif', 'color:#fff', 'padding:6px 10px',
@@ -39,8 +39,8 @@ export function createIndicator({ onSyncNow, onSettings }) {
     element.style.background = style.color;
     label.textContent = style.label;
     element.title = detail
-      ? `PSNPSync — ${detail}\nClick to sync now, right-click for settings.`
-      : 'PSNPSync — click to sync now, right-click for settings.';
+      ? `PSNP++ — ${detail}\nClick to sync now, right-click for settings.`
+      : 'PSNP++ — click to sync now, right-click for settings.';
   }
 
   setState('idle');

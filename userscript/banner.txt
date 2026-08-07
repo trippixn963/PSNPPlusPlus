@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         PSNPSync
-// @namespace    psnpsync.trippixn
+// @name         PSNP++
+// @namespace    psnppp.trippixn
 // @version      1.0.0
 // @description  Two-way cross-device sync for PSNP+ game lists
 // @author       Trippixn

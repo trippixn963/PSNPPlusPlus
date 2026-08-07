@@ -65,7 +65,7 @@ test('the index is capped at 5 entries and evicted entries are actually deleted'
 test('restoreBackup on an unknown id throws', async () => {
   installFakeGM();
   try {
-    await assert.rejects(() => restoreBackup('psnpsync.backup.nonexistent'));
+    await assert.rejects(() => restoreBackup('psnppp.backup.nonexistent'));
   } finally {
     uninstallFakeGM();
   }

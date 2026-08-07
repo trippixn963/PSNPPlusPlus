@@ -5,10 +5,10 @@
  * itself can be committed and shared without leaking a credential.
  */
 
-const ENDPOINT_KEY = 'psnpsync.endpoint';
-const SECRET_KEY = 'psnpsync.key';
+const ENDPOINT_KEY = 'psnppp.endpoint';
+const SECRET_KEY = 'psnppp.key';
 
-export const DEFAULT_ENDPOINT = 'https://trippixn.com/api/psnp-sync';
+export const DEFAULT_ENDPOINT = 'https://trippixn.com/api/psnppp';
 
 export async function loadConfig() {
   const endpoint = await GM.getValue(ENDPOINT_KEY, DEFAULT_ENDPOINT);
@@ -24,9 +24,9 @@ export async function saveConfig({ endpoint, key }) {
 /** Ask once for the secret. Returns the saved config, or null if declined. */
 export async function promptForConfig() {
   const current = await loadConfig();
-  const endpoint = window.prompt('PSNPSync — sync endpoint:', current.endpoint);
+  const endpoint = window.prompt('PSNP++ — sync endpoint:', current.endpoint);
   if (endpoint == null) return null;
-  const key = window.prompt('PSNPSync — sync key:', current.key);
+  const key = window.prompt('PSNP++ — sync key:', current.key);
   if (key == null) return null;
   const config = { endpoint: endpoint.trim(), key: key.trim() };
   await saveConfig(config);

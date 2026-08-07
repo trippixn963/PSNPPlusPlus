@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         PSNPSync
-// @namespace    psnpsync.trippixn
+// @name         PSNP++
+// @namespace    psnppp.trippixn
 // @version      1.0.0
 // @description  Two-way cross-device sync for PSNP+ game lists
 // @author       Trippixn
@@ -148,9 +148,9 @@
   }
 
   // userscript/src/config.mjs
-  var ENDPOINT_KEY = "psnpsync.endpoint";
-  var SECRET_KEY = "psnpsync.key";
-  var DEFAULT_ENDPOINT = "https://trippixn.com/api/psnp-sync";
+  var ENDPOINT_KEY = "psnppp.endpoint";
+  var SECRET_KEY = "psnppp.key";
+  var DEFAULT_ENDPOINT = "https://trippixn.com/api/psnppp";
   async function loadConfig() {
     const endpoint = await GM.getValue(ENDPOINT_KEY, DEFAULT_ENDPOINT);
     const key = await GM.getValue(SECRET_KEY, "");
@@ -162,9 +162,9 @@
   }
   async function promptForConfig() {
     const current = await loadConfig();
-    const endpoint = window.prompt("PSNPSync \u2014 sync endpoint:", current.endpoint);
+    const endpoint = window.prompt("PSNP++ \u2014 sync endpoint:", current.endpoint);
     if (endpoint == null) return null;
-    const key = window.prompt("PSNPSync \u2014 sync key:", current.key);
+    const key = window.prompt("PSNP++ \u2014 sync key:", current.key);
     if (key == null) return null;
     const config = { endpoint: endpoint.trim(), key: key.trim() };
     await saveConfig(config);
@@ -172,11 +172,11 @@
   }
 
   // userscript/src/backup.mjs
-  var INDEX_KEY = "psnpsync.backups";
+  var INDEX_KEY = "psnppp.backups";
   var MAX_BACKUPS = 5;
   async function saveBackup(lists, now = Date.now()) {
     const index = await GM.getValue(INDEX_KEY, []);
-    const id = `psnpsync.backup.${now}`;
+    const id = `psnppp.backup.${now}`;
     await GM.setValue(id, JSON.stringify(lists));
     const next = [{ id, at: now, listCount: lists.length }, ...index];
     const dropped = next.slice(MAX_BACKUPS);
@@ -217,11 +217,11 @@
     const remoteIds = new Set(remote.map((l) => l.id));
     const cleaned = syncedLists.filter((l) => {
       if (isRemoteList(l)) {
-        console.warn("[psnpsync] writeSyncable: dropping remote list in syncedLists:", l.id);
+        console.warn("[psnppp] writeSyncable: dropping remote list in syncedLists:", l.id);
         return false;
       }
       if (remoteIds.has(l.id)) {
-        console.warn("[psnpsync] writeSyncable: dropping syncedList with remote id collision:", l.id);
+        console.warn("[psnppp] writeSyncable: dropping syncedList with remote id collision:", l.id);
         return false;
       }
       return true;
@@ -241,7 +241,7 @@
         try {
           onChange();
         } catch (e) {
-          console.error("[psnpsync] Sync callback error:", e);
+          console.error("[psnppp] Sync callback error:", e);
         }
       } finally {
         last = storage.getItem(LISTS_KEY);
@@ -258,7 +258,7 @@
           try {
             check();
           } catch (e) {
-            console.error("[psnpsync] Storage patch error:", e);
+            console.error("[psnppp] Storage patch error:", e);
           }
         }
       };
@@ -269,7 +269,7 @@
         try {
           check();
         } catch (e) {
-          console.error("[psnpsync] Storage event error:", e);
+          console.error("[psnppp] Storage event error:", e);
         }
       }
     };
@@ -278,7 +278,7 @@
       try {
         check();
       } catch (e) {
-        console.error("[psnpsync] Poll error:", e);
+        console.error("[psnppp] Poll error:", e);
       }
     }, intervalMs);
     return function stop() {
@@ -301,7 +301,7 @@
   };
   function createIndicator({ onSyncNow, onSettings }) {
     const element = document.createElement("div");
-    element.id = "psnpsync-indicator";
+    element.id = "psnppp-indicator";
     element.style.cssText = [
       "position:fixed",
       "right:12px",
@@ -327,8 +327,8 @@
       const style = STATES[state] ?? STATES.idle;
       element.style.background = style.color;
       label.textContent = style.label;
-      element.title = detail ? `PSNPSync \u2014 ${detail}
-Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync now, right-click for settings.";
+      element.title = detail ? `PSNP++ \u2014 ${detail}
+Click to sync now, right-click for settings.` : "PSNP++ \u2014 click to sync now, right-click for settings.";
     }
     setState("idle");
     return { element, setState };
@@ -618,7 +618,7 @@ Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync n
   }
 
   // userscript/src/main.mjs
-  var BASE_KEY = "psnpsync.base";
+  var BASE_KEY = "psnppp.base";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var loadBase = async () => {
     const raw = await GM.getValue(BASE_KEY, null);
@@ -638,7 +638,7 @@ Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync n
   async function confirmAdoptions(adoptions) {
     const names = adoptions.map((a) => `\u2022 ${a.name}`).join("\n");
     return window.confirm(
-      `PSNPSync found lists on the server with the same names as lists on this device:
+      `PSNP++ found lists on the server with the same names as lists on this device:
 
 ${names}
 
@@ -649,7 +649,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     try {
       const backups = await listBackups();
       const choice = window.prompt(
-        `PSNPSync
+        `PSNP++
 
 1 \u2014 Enter endpoint and sync key
 2 \u2014 Restore a pre-merge backup (${backups.length} available)
@@ -663,11 +663,11 @@ Choose 1 or 2:`,
       }
       if (choice !== "2") return;
       if (backups.length === 0) {
-        window.alert("PSNPSync \u2014 no backups yet.");
+        window.alert("PSNP++ \u2014 no backups yet.");
         return;
       }
       const menu = backups.map((entry, index2) => `${index2 + 1} \u2014 ${new Date(entry.at).toLocaleString()} (${entry.listCount} lists)`).join("\n");
-      const picked = window.prompt(`PSNPSync \u2014 restore which backup?
+      const picked = window.prompt(`PSNP++ \u2014 restore which backup?
 
 ${menu}
 
@@ -676,17 +676,17 @@ Enter a number:`, "1");
       if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
       const chosen = backups[index];
       const confirmed = window.confirm(
-        `PSNPSync \u2014 restore the backup from ${new Date(chosen.at).toLocaleString()} (${chosen.listCount} lists)? This replaces your current lists.`
+        `PSNP++ \u2014 restore the backup from ${new Date(chosen.at).toLocaleString()} (${chosen.listCount} lists)? This replaces your current lists.`
       );
       if (!confirmed) return;
       const restored = await restoreBackup(chosen.id);
       const { syncable: currentLists } = readSyncable(window.localStorage);
       await saveBackup(currentLists);
       writeSyncable(window.localStorage, restored);
-      window.alert("PSNPSync \u2014 backup restored. Reloading.");
+      window.alert("PSNP++ \u2014 backup restored. Reloading.");
       window.location.reload();
     } catch (error) {
-      window.alert(`PSNPSync \u2014 settings/restore failed: ${String(error?.message ?? error)}`);
+      window.alert(`PSNP++ \u2014 settings/restore failed: ${String(error?.message ?? error)}`);
     }
   }
   async function start() {
@@ -758,7 +758,7 @@ Enter a number:`, "1");
     void sync();
   }
   if (typeof document !== "undefined") {
-    const onStartError = (error) => console.error("[psnpsync] start() failed:", error);
+    const onStartError = (error) => console.error("[psnppp] start() failed:", error);
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", () => {
         start().catch(onStartError);

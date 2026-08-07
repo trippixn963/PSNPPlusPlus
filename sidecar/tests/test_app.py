@@ -8,7 +8,7 @@ import app as app_module
 
 KEY = "test-secret-key"
 AUTH = {"X-Sync-Key": KEY}
-BASE = "/api/psnp-sync"
+BASE = "/api/psnppp"
 
 
 @pytest.fixture()

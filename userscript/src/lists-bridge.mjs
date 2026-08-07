@@ -45,11 +45,11 @@ export function writeSyncable(storage, syncedLists) {
   // exception mid-sync.
   const cleaned = syncedLists.filter(l => {
     if (isRemoteList(l)) {
-      console.warn('[psnpsync] writeSyncable: dropping remote list in syncedLists:', l.id);
+      console.warn('[psnppp] writeSyncable: dropping remote list in syncedLists:', l.id);
       return false;
     }
     if (remoteIds.has(l.id)) {
-      console.warn('[psnpsync] writeSyncable: dropping syncedList with remote id collision:', l.id);
+      console.warn('[psnppp] writeSyncable: dropping syncedList with remote id collision:', l.id);
       return false;
     }
     return true;
@@ -82,7 +82,7 @@ export function watchLists(storage, onChange, { intervalMs = 2000, target = glob
         // If onChange throws, swallow it and log — an exception here must never
         // surface into a page we do not own. This callback runs synchronously
         // from the setItem path we patched, and PSNP+ calls setItem frequently.
-        console.error('[psnpsync] Sync callback error:', e);
+        console.error('[psnppp] Sync callback error:', e);
       }
     } finally {
       // Absorb onChange's own write-back so it is not seen as a fresh external
@@ -108,7 +108,7 @@ export function watchLists(storage, onChange, { intervalMs = 2000, target = glob
           check();
         } catch (e) {
           // Storage patch error is rare but must not break the write.
-          console.error('[psnpsync] Storage patch error:', e);
+          console.error('[psnppp] Storage patch error:', e);
         }
       }
     };
@@ -120,7 +120,7 @@ export function watchLists(storage, onChange, { intervalMs = 2000, target = glob
       try {
         check();
       } catch (e) {
-        console.error('[psnpsync] Storage event error:', e);
+        console.error('[psnppp] Storage event error:', e);
       }
     }
   };
@@ -129,7 +129,7 @@ export function watchLists(storage, onChange, { intervalMs = 2000, target = glob
     try {
       check();
     } catch (e) {
-      console.error('[psnpsync] Poll error:', e);
+      console.error('[psnppp] Poll error:', e);
     }
   }, intervalMs);
 

@@ -16,7 +16,7 @@ const banner = readFileSync(resolve(root, 'userscript/banner.txt'), 'utf8');
 // the entire script in production, with no build or test failure to catch it.
 await build({
   entryPoints: [resolve(root, 'userscript/src/main.mjs')],
-  outfile: resolve(root, 'dist/psnp-sync.user.js'),
+  outfile: resolve(root, 'dist/psnppp.user.js'),
   bundle: true,
   format: 'iife',
   target: 'es2022',
@@ -24,4 +24,4 @@ await build({
   legalComments: 'none'
 });
 
-console.log('Built dist/psnp-sync.user.js');
+console.log('Built dist/psnppp.user.js');

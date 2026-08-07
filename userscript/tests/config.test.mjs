@@ -36,9 +36,9 @@ test('loadConfig returns the default endpoint and an empty key when nothing is s
 test('saveConfig round-trips through loadConfig', async () => {
   installFakeGM();
   try {
-    await saveConfig({ endpoint: 'https://example.com/api/psnp-sync', key: 'secret-key' });
+    await saveConfig({ endpoint: 'https://example.com/api/psnppp', key: 'secret-key' });
     const config = await loadConfig();
-    assert.deepEqual(config, { endpoint: 'https://example.com/api/psnp-sync', key: 'secret-key' });
+    assert.deepEqual(config, { endpoint: 'https://example.com/api/psnppp', key: 'secret-key' });
   } finally {
     uninstallFakeGM();
   }

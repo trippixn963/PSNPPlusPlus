@@ -133,7 +133,7 @@ test('a base with no lists object is treated as an empty document, not a permane
   const store = installFakeGM();
   try {
     for (const raw of ['{}', '{"version":1}', 'null', '[]', '"nope"', '{"lists":null}']) {
-      store.set('psnpsync.base', raw);
+      store.set('psnppp.base', raw);
       const base = await loadBase();
       assert.deepEqual(base, emptyDoc(), `${raw} must fall back to emptyDoc()`);
       // The fallback is only worth anything if it survives the thing that used
@@ -149,7 +149,7 @@ test('a well-shaped base is returned untouched', async () => {
   const store = installFakeGM();
   try {
     const doc = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist')]), 500);
-    store.set('psnpsync.base', JSON.stringify(doc));
+    store.set('psnppp.base', JSON.stringify(doc));
     assert.deepEqual(await loadBase(), doc);
   } finally {
     uninstallFakeGM();

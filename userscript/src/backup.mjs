@@ -6,12 +6,12 @@
  * localStorage so a PSNP+ reset cannot take the backups with it.
  */
 
-const INDEX_KEY = 'psnpsync.backups';
+const INDEX_KEY = 'psnppp.backups';
 const MAX_BACKUPS = 5;
 
 export async function saveBackup(lists, now = Date.now()) {
   const index = await GM.getValue(INDEX_KEY, []);
-  const id = `psnpsync.backup.${now}`;
+  const id = `psnppp.backup.${now}`;
   await GM.setValue(id, JSON.stringify(lists));
 
   const next = [{ id, at: now, listCount: lists.length }, ...index];

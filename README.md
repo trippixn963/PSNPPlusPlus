@@ -1,9 +1,9 @@
-# PSNPSync
+# PSNP++
 
 Two-way sync for [PSNP+](https://psnp-plus.huskycode.dev) game lists across devices.
 
 PSNP+ stores its game lists in `localStorage` under `psnpp-lists`, which makes them per-browser —
-a wishlist built on the desktop does not exist on the phone. PSNPSync is a companion userscript
+a wishlist built on the desktop does not exist on the phone. PSNP++ is a companion userscript
 plus a small VPS sidecar that keeps those lists in sync, without modifying PSNP+ itself.
 
 See [the design spec](docs/specs/2026-08-07-psnp-list-sync-design.md) for the full
@@ -17,7 +17,7 @@ architecture, merge rules, and failure handling.
 | `userscript/tests/` | Node test-runner suites (`npm test`) |
 | `userscript/banner.txt` | The `==UserScript==` metadata block, prepended at build time |
 | `userscript/build.mjs` | esbuild bundler (`npm run build`) |
-| `dist/psnp-sync.user.js` | **The built userscript — this is the file you install** |
+| `dist/psnppp.user.js` | **The built userscript — this is the file you install** |
 | `sidecar/app.py` | FastAPI sync service (SQLite, one document, revision guard) |
 | `sidecar/tests/` | pytest suite for the sidecar |
 | `sidecar/deploy/` | systemd unit, nginx location block, and the [deployment runbook](sidecar/deploy/README.md) |
@@ -40,10 +40,10 @@ portfolio. Keep the secret from step 1; each browser needs it.
 ```bash
 npm install
 npm test          # 130 tests
-npm run build     # writes dist/psnp-sync.user.js
+npm run build     # writes dist/psnppp.user.js
 ```
 
-Install `dist/psnp-sync.user.js` in Tampermonkey — open the Tampermonkey dashboard, choose
+Install `dist/psnppp.user.js` in Tampermonkey — open the Tampermonkey dashboard, choose
 **Utilities → File → Import** (or drag the file onto the dashboard), and enable it. `dist/` is
 committed, so it can also be installed straight from the repo without a local build. Rebuild and
 reinstall after any change to `userscript/src/` — the bundle is what actually runs.
@@ -54,7 +54,7 @@ Load any `psnprofiles.com` page. A small status chip appears in the bottom-right
 is configured it reads **Set up sync**.
 
 **Right-click the chip** to open settings, choose `1`, accept the default endpoint
-(`https://trippixn.com/api/psnp-sync`), and paste the secret from step 1. The key is stored in
+(`https://trippixn.com/api/psnppp`), and paste the secret from step 1. The key is stored in
 Tampermonkey's own storage, never in the script file. Left-clicking the chip syncs immediately;
 right-click also offers `2` to restore a pre-merge backup.
 
@@ -69,5 +69,5 @@ one-time prompt to link same-named lists instead of ending up with two copies of
 It is committed as a **read-only reference** so the storage format and list behavior this project
 depends on can be checked against a known version. It is a webpack bundle, not source.
 
-**It is never patched.** PSNPSync runs alongside PSNP+ and interacts with it only through
+**It is never patched.** PSNP++ runs alongside PSNP+ and interacts with it only through
 `localStorage`, so PSNP+ can update freely without breaking the sync.
