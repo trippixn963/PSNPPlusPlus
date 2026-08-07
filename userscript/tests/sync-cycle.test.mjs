@@ -474,6 +474,39 @@ test('unfreezing a 📡 list that diverged from the server does not delete the d
   assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g2']);
 });
 
+test('a list deleted while frozen is deliberately NOT deleted server-wide (accepted tradeoff of keeping frozen lists out of base)', async () => {
+  const storage = fakeStorage();
+  const base = toDoc([list('F', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(stampChanges(emptyDoc(), base, 500), 1);
+  const h = harness(storage, server, base);
+
+  // F is frozen, and a cycle runs while it is frozen — which is what drops it
+  // from base. That drop is what stops an unfreeze from deleting the server's
+  // diverged content (see the previous test); this test pins what it costs.
+  writeLists(storage, [list('F', 'Wishlist', [game('g1')], { url: 'https://x/y.json' })]);
+  await runSyncCycle(h.args);
+  assert.deepEqual(Object.keys(h.base.lists), [], 'frozen lists must not be in base');
+
+  // Now the user deletes the 📡 row outright, while it is still frozen.
+  writeLists(storage, []);
+  const result = await runSyncCycle({ ...h.args, now: 6000 });
+  assert.equal(result.status, 'synced');
+
+  // THIS IS DELIBERATE, NOT A BUG. Frozen means excluded from sync entirely, so
+  // this device has no standing to delete F anywhere else — it was not syncing
+  // it. The alternative (keeping frozen lists in base so the delete
+  // propagates) silently destroys diverged content on unfreeze, which is
+  // unrecoverable; a deletion that does not propagate is not.
+  assert.equal(server.doc.lists.F.deletedAt, null, 'the delete must NOT propagate');
+  assert.deepEqual(Object.keys(server.doc.lists.F.games), ['g1']);
+
+  // Visible consequence: the server still holds F, and this device no longer
+  // has any record saying otherwise, so F comes back as an ordinary synced
+  // list. Deleting it again now — unfrozen — does propagate normally.
+  assert.deepEqual(readLists(storage).map(l => l.id), ['F']);
+  assert.equal(readLists(storage)[0].url, undefined);
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {
