@@ -168,6 +168,7 @@ export async function openSettings({ chip = null } = {}) {
 
       panel = createSettingsPanel({
         anchor: chip?.element ?? null,
+        side: chip?.getSide?.() ?? 'right',
         config,
         backups,
         history,

@@ -98,6 +98,13 @@ export const PANEL_ID = 'psnppp-panel';
 export const PANEL_WIDTH_PX = 300;
 export const EDGE_INSET_PX = 12;
 export const CHIP_FALLBACK_SIZE = { width: 120, height: 26 };
+/**
+ * How long the post-drop snap to an edge takes. Shared with indicator.mjs,
+ * which uses the same number for the timeout that lifts the transition class
+ * back off — a mismatch there would either cut the animation short or leave
+ * the chip laggily tracking the next drag through a stale transition.
+ */
+export const DOCK_SNAP_MS = 220;
 const Z_LAYER = 99999;
 const PLATE_SHADOW = '0 1px 4px rgba(0, 0, 0, .45)';
 
@@ -192,6 +199,16 @@ export const CSS = `
 #${INDICATOR_ID}:focus-visible {
   outline: 2px solid ${t.platinum};
   outline-offset: 2px;
+}
+
+/* The post-drop snap to an edge. Scoped to its own class rather than folded
+   into the base transition list above: a drag has to track the pointer with
+   no lag, and only the deliberate snap that happens AFTER release may ease.
+   The class is added for exactly the snap's duration and lifted after, so an
+   ordinary drag never picks up this transition by accident. */
+#${INDICATOR_ID}.psnppp-dock-snap {
+  transition: left ${DOCK_SNAP_MS}ms cubic-bezier(.22, .61, .36, 1),
+    top ${DOCK_SNAP_MS}ms cubic-bezier(.22, .61, .36, 1);
 }
 
 #${INDICATOR_ID} .psnppp-rail {
@@ -493,6 +510,10 @@ ${litTiers} {
     transition: none;
   }
   #${INDICATOR_ID}.psnppp-pop .psnppp-sheen { animation: none; }
+  /* Same id+class specificity as the rule that turns the snap on, so this
+     wins on being LATER in the sheet rather than needing !important — the
+     same reasoning theme.mjs already documents for every other selector here. */
+  #${INDICATOR_ID}.psnppp-dock-snap { transition: none; }
 }
 
 /* Narrow viewports: the plate keeps its metal and loses its width. */

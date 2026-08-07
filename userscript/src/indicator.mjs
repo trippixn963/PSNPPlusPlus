@@ -12,7 +12,8 @@
  * Server: discord.gg/syria
  */
 
-import { installStyles, INDICATOR_ID, CHIP_FALLBACK_SIZE } from './theme.mjs';
+import { installStyles, INDICATOR_ID, CHIP_FALLBACK_SIZE, EDGE_INSET_PX, DOCK_SNAP_MS }
+  from './theme.mjs';
 
 /**
  * `action` is what a LEFT-CLICK does from that state, and it is the whole
@@ -131,6 +132,45 @@ export function isUsablePosition(position) {
     && Number.isFinite(position.top);
 }
 
+/** Either dock side, or nothing else — used to sanitise anything read back from storage. */
+export function isDockSide(value) {
+  return value === 'left' || value === 'right';
+}
+
+/**
+ * Which side — left or right — a box at `left` (of `width`, in a viewport of
+ * `viewWidth`) is nearer to.
+ *
+ * Distance-based rather than a raw midpoint comparison so it reads the same
+ * way clampAxis does, but the two are equivalent: `left < view - left - width`
+ * reduces to `left + width/2 < view/2` — the box's own centre against the
+ * viewport's. Ties go left, arbitrarily but deterministically.
+ */
+export function sideFor(left, width, viewWidth) {
+  const view = finiteOr(viewWidth, 0);
+  const distLeft = Math.max(0, finiteOr(left, 0));
+  const distRight = view - distLeft - Math.max(0, finiteOr(width, 0));
+  return distRight < distLeft ? 'right' : 'left';
+}
+
+/**
+ * The `left` that docks a box of `width` flush against `side`, `inset` from
+ * the edge.
+ *
+ * Built entirely out of clampAxis — the same "never off-screen, pin to the
+ * reachable corner if the box is too big" guarantee the chip's own drag
+ * clamp already relies on — rather than a second copy of its furthest-edge
+ * arithmetic. `view` and `-view` are values guaranteed to overshoot each
+ * extreme (a viewport cannot be negative), so clampAxis pulls them back to
+ * exactly the far or near edge.
+ */
+export function dockedLeft(side, width, viewWidth, inset = EDGE_INSET_PX) {
+  const view = finiteOr(viewWidth, 0);
+  return side === 'right'
+    ? clampAxis(view, width, view, inset)
+    : clampAxis(-view, width, view, inset);
+}
+
 const readPosition = async () => {
   const stored = await GM.getValue(POSITION_KEY, null);
   if (typeof stored === 'string') {
@@ -191,6 +231,11 @@ export function createIndicator({
   // to change what the chip does.
   let current = STATES.idle;
   let panelOpen = false;
+  // True only for the CSS transition's duration, right after a drop. See
+  // snapToNearestSide — kept in this same composer for the reason documented
+  // on paintClasses itself: a second place that rebuilds className is a second
+  // place that can erase this the moment anything else repaints the chip.
+  let snapping = false;
 
   /**
    * The chip's class list, composed in ONE place.
@@ -204,7 +249,8 @@ export function createIndicator({
     element.className = [
       `psnppp-tier-${current.tier}`,
       pop ? 'psnppp-pop' : '',
-      panelOpen ? 'psnppp-open' : ''
+      panelOpen ? 'psnppp-open' : '',
+      snapping ? 'psnppp-dock-snap' : ''
     ].filter(Boolean).join(' ');
   };
 
@@ -229,6 +275,10 @@ export function createIndicator({
 
   /** null until the chip has been placed by hand; the CSS corner until then. */
   let position = null;
+  // The default corner IS the right edge (see theme.mjs's `right: EDGE_INSET_PX`),
+  // so this starts 'right' rather than null: getSide() has an honest answer for
+  // the panel to open against even before the chip has ever been dragged.
+  let dockSide = 'right';
 
   function apply(next) {
     position = next;
@@ -243,20 +293,43 @@ export function createIndicator({
   const place = (candidate, size = measure()) =>
     apply(clampToViewport(candidate, size, viewport()));
 
+  /**
+   * Pin the chip flush against `side`, `top` pixels down, clamped onto screen.
+   *
+   * The one place `left` is ever computed for a docked chip — restorePosition,
+   * handleResize and the post-drop snap all funnel through this, so "docked
+   * right" means the same `left` everywhere rather than three independent
+   * copies of dockedLeft's call that could drift apart.
+   */
+  function applyDocked(side, top, size = measure()) {
+    dockSide = isDockSide(side) ? side : 'right';
+    const view = viewport();
+    apply({
+      left: dockedLeft(dockSide, finiteOr(size?.width, FALLBACK_SIZE.width), view.width),
+      top: clampAxis(top, finiteOr(size?.height, FALLBACK_SIZE.height), view.height, EDGE_MARGIN)
+    });
+    return position;
+  }
+
   const persist = () => {
     if (position == null) return;
     // The call itself is inside the try: savePosition is injected, so a
     // SYNCHRONOUS throw from it would escape into the pointerup and resize
     // listeners rather than into `.catch`.
     try {
-      Promise.resolve(savePosition({ ...position })).catch(onPositionError);
+      Promise.resolve(savePosition({ ...position, side: dockSide })).catch(onPositionError);
     } catch (error) {
       onPositionError(error);
     }
   };
 
   /**
-   * Restore the saved position, clamped.
+   * Restore the saved position, re-docked.
+   *
+   * A saved `side` is trusted outright; its absence means a position saved by
+   * a build from before docking existed, and the nearest edge to that raw
+   * `left` is derived once so the device migrates onto the new scheme instead
+   * of sitting at a bespoke, no-longer-supported free position forever.
    *
    * Returned rather than awaited internally so a test can wait for it; start()
    * fires it and forgets, because a chip in its default corner is a perfectly
@@ -266,12 +339,18 @@ export function createIndicator({
     try {
       const stored = await loadPosition();
       if (!isUsablePosition(stored)) return null;
-      place(stored);
-      // Written back rather than only applied: if the clamp moved it, the
-      // stored value is a position this device cannot reach, and leaving it
-      // there means every future load pays the same correction.
-      const corrected = position;
-      if (corrected.left !== stored.left || corrected.top !== stored.top) persist();
+      const size = measure();
+      const side = isDockSide(stored.side)
+        ? stored.side
+        : sideFor(stored.left, finiteOr(size.width, FALLBACK_SIZE.width), viewport().width);
+      const corrected = applyDocked(side, stored.top, size);
+      // Written back rather than only applied: if the clamp (or the dock
+      // itself) moved it, the stored value is a position this device cannot
+      // reach as-is, and leaving it there means every future load pays the
+      // same correction.
+      if (corrected.left !== stored.left || corrected.top !== stored.top || side !== stored.side) {
+        persist();
+      }
       return corrected;
     } catch (error) {
       onPositionError(error);
@@ -279,11 +358,19 @@ export function createIndicator({
     }
   }
 
-  /** Re-clamp after the window changes size. Only meaningful once placed. */
+  /**
+   * Re-apply the dock after the window changes size. Only meaningful once
+   * placed — an un-dragged chip is still sitting in the CSS corner, which is
+   * already responsive on its own.
+   *
+   * `dockSide` is reused, never recomputed: the whole point is that a chip
+   * docked right on a wide monitor is STILL docked right on a narrow one, not
+   * whichever edge its old absolute `left` happens to be nearer today.
+   */
   function handleResize() {
     if (position == null) return;
     const before = position;
-    place(before);
+    applyDocked(dockSide, position.top);
     if (position.left !== before.left || position.top !== before.top) persist();
   }
 
@@ -339,6 +426,37 @@ export function createIndicator({
     place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
   });
 
+  // Set by snapToNearestSide, cleared once the transition class has done its
+  // job. Held here rather than inside the function so a second drop before the
+  // first snap finishes cancels the earlier timer instead of two timers racing
+  // to remove a class only one of them still owns.
+  let snapTimer = null;
+
+  /**
+   * Lock the just-dropped chip onto whichever edge is nearer, keeping the
+   * vertical spot it was dropped at.
+   *
+   * Animated via a CSS class (theme.mjs's `.psnppp-dock-snap`), not a JS
+   * tween — the same division of labour the sheen pop already uses: this
+   * function only ever toggles the class, and `prefers-reduced-motion` is the
+   * stylesheet's decision alone, so there is exactly one place that has to
+   * agree with the OS setting instead of a class toggle here and a matching
+   * matchMedia check that could drift from it.
+   */
+  function snapToNearestSide(size) {
+    const side = sideFor(position?.left ?? 0,
+      finiteOr(size?.width, FALLBACK_SIZE.width), viewport().width);
+    snapping = true;
+    paintClasses(element.className.includes('psnppp-pop'));
+    applyDocked(side, position?.top ?? 0, size);
+    persist();
+    clearTimeout(snapTimer);
+    snapTimer = setTimeout(() => {
+      snapping = false;
+      paintClasses(element.className.includes('psnppp-pop'));
+    }, DOCK_SNAP_MS);
+  }
+
   /**
    * End the gesture. State is cleared BEFORE the capture is released, because
    * releasePointerCapture throws NotFoundError for a pointer the browser has
@@ -347,14 +465,14 @@ export function createIndicator({
    */
   const endDrag = (event, { commit = true } = {}) => {
     if (drag == null || (event?.pointerId != null && event.pointerId !== drag.pointerId)) return;
-    const { moved, pointerId } = drag;
+    const { moved, pointerId, size } = drag;
     drag = null;
     try {
       element.releasePointerCapture?.(pointerId);
     } catch { /* already released, or never captured */ }
     if (!commit || !moved) return;
     suppressClick = true;
-    persist();
+    snapToNearestSide(size);
   };
 
   element.addEventListener('pointerup', endDrag);
@@ -457,6 +575,13 @@ export function createIndicator({
     restorePosition,
     handleResize,
     /** Where the chip is, or null while it still sits in its default corner. */
-    getPosition: () => (position == null ? null : { ...position })
+    getPosition: () => (position == null ? null : { ...position }),
+    /**
+     * Which edge the chip is docked to — 'left' or 'right', always. Defaults
+     * to 'right' before the first drag or restore, matching the CSS corner
+     * the chip actually sits in until then, so the panel always has a real
+     * side to open away from instead of a third "unknown" case to handle.
+     */
+    getSide: () => dockSide
   };
 }

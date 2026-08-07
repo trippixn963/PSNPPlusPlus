@@ -360,6 +360,7 @@
   var PANEL_WIDTH_PX = 300;
   var EDGE_INSET_PX = 12;
   var CHIP_FALLBACK_SIZE = { width: 120, height: 26 };
+  var DOCK_SNAP_MS = 220;
   var Z_LAYER = 99999;
   var PLATE_SHADOW = "0 1px 4px rgba(0, 0, 0, .45)";
   var TYPE = {
@@ -429,6 +430,16 @@
 #${INDICATOR_ID}:focus-visible {
   outline: 2px solid ${t.platinum};
   outline-offset: 2px;
+}
+
+/* The post-drop snap to an edge. Scoped to its own class rather than folded
+   into the base transition list above: a drag has to track the pointer with
+   no lag, and only the deliberate snap that happens AFTER release may ease.
+   The class is added for exactly the snap's duration and lifted after, so an
+   ordinary drag never picks up this transition by accident. */
+#${INDICATOR_ID}.psnppp-dock-snap {
+  transition: left ${DOCK_SNAP_MS}ms cubic-bezier(.22, .61, .36, 1),
+    top ${DOCK_SNAP_MS}ms cubic-bezier(.22, .61, .36, 1);
 }
 
 #${INDICATOR_ID} .psnppp-rail {
@@ -730,6 +741,10 @@ ${litTiers} {
     transition: none;
   }
   #${INDICATOR_ID}.psnppp-pop .psnppp-sheen { animation: none; }
+  /* Same id+class specificity as the rule that turns the snap on, so this
+     wins on being LATER in the sheet rather than needing !important \u2014 the
+     same reasoning theme.mjs already documents for every other selector here. */
+  #${INDICATOR_ID}.psnppp-dock-snap { transition: none; }
 }
 
 /* Narrow viewports: the plate keeps its metal and loses its width. */
@@ -803,6 +818,19 @@ ${litTiers} {
   function isUsablePosition(position) {
     return position != null && typeof position === "object" && Number.isFinite(position.left) && Number.isFinite(position.top);
   }
+  function isDockSide(value) {
+    return value === "left" || value === "right";
+  }
+  function sideFor(left, width, viewWidth) {
+    const view = finiteOr(viewWidth, 0);
+    const distLeft = Math.max(0, finiteOr(left, 0));
+    const distRight = view - distLeft - Math.max(0, finiteOr(width, 0));
+    return distRight < distLeft ? "right" : "left";
+  }
+  function dockedLeft(side, width, viewWidth, inset = EDGE_INSET_PX) {
+    const view = finiteOr(viewWidth, 0);
+    return side === "right" ? clampAxis(view, width, view, inset) : clampAxis(-view, width, view, inset);
+  }
   var readPosition = async () => {
     const stored = await GM.getValue(POSITION_KEY, null);
     if (typeof stored === "string") {
@@ -842,11 +870,13 @@ ${litTiers} {
     element.appendChild(sheen);
     let current = STATES.idle;
     let panelOpen = false;
+    let snapping = false;
     const paintClasses = (pop = false) => {
       element.className = [
         `psnppp-tier-${current.tier}`,
         pop ? "psnppp-pop" : "",
-        panelOpen ? "psnppp-open" : ""
+        panelOpen ? "psnppp-open" : "",
+        snapping ? "psnppp-dock-snap" : ""
       ].filter(Boolean).join(" ");
     };
     const viewport = () => ({
@@ -862,6 +892,7 @@ ${litTiers} {
       };
     };
     let position = null;
+    let dockSide = "right";
     function apply(next) {
       position = next;
       element.style.left = `${next.left}px`;
@@ -870,10 +901,19 @@ ${litTiers} {
       element.style.bottom = "auto";
     }
     const place = (candidate, size = measure()) => apply(clampToViewport(candidate, size, viewport()));
+    function applyDocked(side, top, size = measure()) {
+      dockSide = isDockSide(side) ? side : "right";
+      const view = viewport();
+      apply({
+        left: dockedLeft(dockSide, finiteOr(size?.width, FALLBACK_SIZE.width), view.width),
+        top: clampAxis(top, finiteOr(size?.height, FALLBACK_SIZE.height), view.height, EDGE_MARGIN)
+      });
+      return position;
+    }
     const persist = () => {
       if (position == null) return;
       try {
-        Promise.resolve(savePosition({ ...position })).catch(onPositionError);
+        Promise.resolve(savePosition({ ...position, side: dockSide })).catch(onPositionError);
       } catch (error) {
         onPositionError(error);
       }
@@ -882,9 +922,12 @@ ${litTiers} {
       try {
         const stored = await loadPosition();
         if (!isUsablePosition(stored)) return null;
-        place(stored);
-        const corrected = position;
-        if (corrected.left !== stored.left || corrected.top !== stored.top) persist();
+        const size = measure();
+        const side = isDockSide(stored.side) ? stored.side : sideFor(stored.left, finiteOr(size.width, FALLBACK_SIZE.width), viewport().width);
+        const corrected = applyDocked(side, stored.top, size);
+        if (corrected.left !== stored.left || corrected.top !== stored.top || side !== stored.side) {
+          persist();
+        }
         return corrected;
       } catch (error) {
         onPositionError(error);
@@ -894,7 +937,7 @@ ${litTiers} {
     function handleResize() {
       if (position == null) return;
       const before = position;
-      place(before);
+      applyDocked(dockSide, position.top);
       if (position.left !== before.left || position.top !== before.top) persist();
     }
     globalThis.window?.addEventListener?.("resize", handleResize);
@@ -931,9 +974,26 @@ ${litTiers} {
       drag.moved = true;
       place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
     });
+    let snapTimer = null;
+    function snapToNearestSide(size) {
+      const side = sideFor(
+        position?.left ?? 0,
+        finiteOr(size?.width, FALLBACK_SIZE.width),
+        viewport().width
+      );
+      snapping = true;
+      paintClasses(element.className.includes("psnppp-pop"));
+      applyDocked(side, position?.top ?? 0, size);
+      persist();
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(() => {
+        snapping = false;
+        paintClasses(element.className.includes("psnppp-pop"));
+      }, DOCK_SNAP_MS);
+    }
     const endDrag = (event, { commit = true } = {}) => {
       if (drag == null || event?.pointerId != null && event.pointerId !== drag.pointerId) return;
-      const { moved, pointerId } = drag;
+      const { moved, pointerId, size } = drag;
       drag = null;
       try {
         element.releasePointerCapture?.(pointerId);
@@ -941,7 +1001,7 @@ ${litTiers} {
       }
       if (!commit || !moved) return;
       suppressClick = true;
-      persist();
+      snapToNearestSide(size);
     };
     element.addEventListener("pointerup", endDrag);
     element.addEventListener("pointercancel", (event) => endDrag(event, { commit: false }));
@@ -997,7 +1057,14 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       restorePosition,
       handleResize,
       /** Where the chip is, or null while it still sits in its default corner. */
-      getPosition: () => position == null ? null : { ...position }
+      getPosition: () => position == null ? null : { ...position },
+      /**
+       * Which edge the chip is docked to — 'left' or 'right', always. Defaults
+       * to 'right' before the first drag or restore, matching the CSS corner
+       * the chip actually sits in until then, so the panel always has a real
+       * side to open away from instead of a third "unknown" case to handle.
+       */
+      getSide: () => dockSide
     };
   }
 
@@ -1023,6 +1090,11 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   function createSettingsPanel({
     doc = globalThis.document,
     anchor = null,
+    // Which edge the chip is docked to. Defaults 'right' to match the CSS
+    // corner the chip sits in before it has ever been dragged (see
+    // indicator.mjs's getSide) — that is also the one case `anchor` can be
+    // non-null while genuinely undocked, so the default has to agree with it.
+    side = "right",
     config = { endpoint: "", key: "" },
     backups = [],
     history = [],
@@ -1270,7 +1342,9 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
         return;
       }
       const width = Math.min(PANEL_WIDTH_PX, Math.max(0, view.width - EDGE_INSET_PX * 2));
-      element.style.left = `${clampAxis(rect.left, width, view.width, EDGE_INSET_PX)}px`;
+      const isDockedLeft = side === "left";
+      const desiredLeft = isDockedLeft ? rect.right + EDGE_INSET_PX : rect.left - width - EDGE_INSET_PX;
+      element.style.left = `${clampAxis(desiredLeft, width, view.width, EDGE_INSET_PX)}px`;
       element.style.right = "auto";
       const spaceBelow = view.height - rect.bottom;
       if (spaceBelow >= rect.top) {
@@ -1811,6 +1885,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         };
         panel = createSettingsPanel({
           anchor: chip?.element ?? null,
+          side: chip?.getSide?.() ?? "right",
           config,
           backups,
           history,

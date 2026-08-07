@@ -69,6 +69,11 @@ const countOf = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 export function createSettingsPanel({
   doc = globalThis.document,
   anchor = null,
+  // Which edge the chip is docked to. Defaults 'right' to match the CSS
+  // corner the chip sits in before it has ever been dragged (see
+  // indicator.mjs's getSide) — that is also the one case `anchor` can be
+  // non-null while genuinely undocked, so the default has to agree with it.
+  side = 'right',
   config = { endpoint: '', key: '' },
   backups = [],
   history = [],
@@ -385,11 +390,15 @@ export function createSettingsPanel({
   position();
 
   /**
-   * Hang the panel off the chip, on whichever side has room.
+   * Hang the panel off the chip, on the side the chip is NOT flush against.
    *
-   * Measured rather than assumed, because the chip is draggable now: anchoring
-   * it "above and to the left" would put the panel off-screen the moment the
-   * chip is parked in the top-left corner.
+   * A docked chip has room on exactly one horizontal side — the one away from
+   * its edge — so the panel opens there rather than "whichever side has room",
+   * which used to mean the panel could sit flush against the same edge the
+   * chip is docked to with nothing between them and the screen boundary.
+   * Measured rather than assumed even so: the vertical spot is still free
+   * (see indicator.mjs), so "above and to the left" would put the panel
+   * off-screen the moment the chip is parked at the very top or bottom.
    */
   function position() {
     const view = {
@@ -407,10 +416,14 @@ export function createSettingsPanel({
       return;
     }
 
-    // The same clamp the chip uses, not a second copy of the arithmetic: the
-    // rendered width is whichever of the two the stylesheet actually allows.
+    // The same clamp the chip's own drag uses for "never off-screen, pin to
+    // the reachable edge if there truly is no room" — not a second copy of
+    // that arithmetic. The rendered width is whichever of the two the
+    // stylesheet actually allows.
     const width = Math.min(PANEL_WIDTH_PX, Math.max(0, view.width - EDGE_INSET_PX * 2));
-    element.style.left = `${clampAxis(rect.left, width, view.width, EDGE_INSET_PX)}px`;
+    const isDockedLeft = side === 'left';
+    const desiredLeft = isDockedLeft ? rect.right + EDGE_INSET_PX : rect.left - width - EDGE_INSET_PX;
+    element.style.left = `${clampAxis(desiredLeft, width, view.width, EDGE_INSET_PX)}px`;
     element.style.right = 'auto';
 
     // Measured, not assumed: the chip is draggable, so "above and to the left"

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createIndicator, clampToViewport, isUsablePosition, POSITION_KEY, EDGE_MARGIN }
-  from '../src/indicator.mjs';
+import { createIndicator, clampToViewport, isUsablePosition, isDockSide, sideFor, dockedLeft,
+  POSITION_KEY, EDGE_MARGIN } from '../src/indicator.mjs';
+import { EDGE_INSET_PX, DOCK_SNAP_MS } from '../src/theme.mjs';
 import { installFakeDocument, uninstallFakeDocument, installFakeWindow, uninstallFakeWindow,
   installFakeGM, uninstallFakeGM } from './fake-dom.mjs';
 
@@ -397,6 +398,47 @@ test('isUsablePosition accepts only a pair of finite numbers', () => {
   }
 });
 
+// --- which edge, and where it lands there ------------------------------------
+
+test('isDockSide accepts only "left" or "right"', () => {
+  assert.equal(isDockSide('left'), true);
+  assert.equal(isDockSide('right'), true);
+  for (const bad of [null, undefined, '', 'Left', 'top', 0, {}]) {
+    assert.equal(isDockSide(bad), false, JSON.stringify(bad));
+  }
+});
+
+test('sideFor picks the nearer edge, and breaks an exact tie toward the left', () => {
+  const width = 120;
+  const view = 1280;
+  assert.equal(sideFor(0, width, view), 'left', 'flush left');
+  assert.equal(sideFor(view - width, width, view), 'right', 'flush right');
+  assert.equal(sideFor(100, width, view), 'left', 'well left of centre');
+  assert.equal(sideFor(1000, width, view), 'right', 'well right of centre');
+  // Centre: distance to each edge is identical (580 either way).
+  assert.equal(sideFor((view - width) / 2, width, view), 'left', 'exact tie goes left');
+});
+
+test('sideFor never throws on non-finite input and still returns a real side', () => {
+  for (const bad of [NaN, undefined, null, -Infinity, Infinity]) {
+    const side = sideFor(bad, 120, 1280);
+    assert.ok(side === 'left' || side === 'right', `sideFor(${bad}) => ${side}`);
+  }
+});
+
+test('dockedLeft sits the box flush against its side, EDGE_INSET_PX from the edge', () => {
+  assert.equal(dockedLeft('left', 120, 1280), EDGE_INSET_PX);
+  assert.equal(dockedLeft('right', 120, 1280), 1280 - 120 - EDGE_INSET_PX);
+});
+
+test('dockedLeft pins to the reachable corner when the box is wider than the viewport', () => {
+  // The same guarantee clampToViewport already gives the chip during a drag:
+  // a negative "furthest" edge must not push the box off in the OTHER
+  // direction. Mirrors indicator.test.mjs's existing clampToViewport case.
+  assert.equal(dockedLeft('right', 400, 320), EDGE_INSET_PX);
+  assert.equal(dockedLeft('left', 400, 320), EDGE_INSET_PX);
+});
+
 // --- dragging ----------------------------------------------------------------
 
 /** Put the chip somewhere measurable, the way a laid-out browser would. */
@@ -410,14 +452,31 @@ const drag = (element, from, to, pointerId = 1) => {
   element.dispatch('pointerup', { pointerId, clientX: to.x, clientY: to.y });
 };
 
-test('a drag moves the chip and remembers where it was put', async () => {
+test('getSide defaults to right, matching the CSS corner the chip starts in', () => {
+  // theme.mjs parks the un-dragged chip at bottom-RIGHT. The panel needs a
+  // real side to open away from before the user has ever touched the chip,
+  // and it has to agree with where the chip actually is.
   installFakeDocument();
-  const fake = installFakeWindow({ width: 1280, height: 800 });
   try {
-    const { indicator, element, saved } = build();
+    const { indicator } = build();
+    assert.equal(indicator.getSide(), 'right');
+    assert.equal(indicator.getPosition(), null, 'and it has not been placed by hand yet');
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('a drag tracks the pointer 1:1 while it is happening', () => {
+  // Before release, there is no docking yet — the chip has to follow the
+  // cursor exactly, or dragging would feel laggy or teleport-y.
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const { indicator, element } = build();
     layout(element, { left: 1148, top: 762 });
 
-    drag(element, { x: 1200, y: 770 }, { x: 900, y: 400 });
+    element.dispatch('pointerdown', { pointerId: 1, button: 0, clientX: 1200, clientY: 770 });
+    element.dispatch('pointermove', { pointerId: 1, clientX: 900, clientY: 400 });
 
     assert.deepEqual(indicator.getPosition(), { left: 848, top: 392 });
     assert.equal(element.style.left, '848px');
@@ -425,10 +484,101 @@ test('a drag moves the chip and remembers where it was put', async () => {
     // Both corner anchors have to be released or left/top do nothing at all.
     assert.equal(element.style.right, 'auto');
     assert.equal(element.style.bottom, 'auto');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('releasing the drag snaps the chip to the nearer edge and remembers it', async () => {
+  installFakeDocument();
+  const fake = installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const { indicator, element, saved } = build();
+    layout(element, { left: 1148, top: 762 });
+
+    // Dropped at x=848 in a 1280-wide viewport: 312px from the right edge,
+    // 848px from the left — nearer the right, so it docks there. The vertical
+    // spot (392) is exactly where it was dropped, not re-derived.
+    drag(element, { x: 1200, y: 770 }, { x: 900, y: 400 });
+
+    const docked = { left: 1280 - 120 - EDGE_INSET_PX, top: 392 };
+    assert.deepEqual(indicator.getPosition(), docked);
+    assert.equal(element.style.left, `${docked.left}px`);
+    assert.equal(element.style.top, '392px');
+    assert.equal(element.style.right, 'auto');
+    assert.equal(element.style.bottom, 'auto');
 
     await Promise.resolve();
-    assert.deepEqual(saved.at(-1), { left: 848, top: 392 });
+    assert.deepEqual(saved.at(-1), { ...docked, side: 'right' });
     assert.equal(fake.alerts.length, 0);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+// --- which edge a drop lands on ----------------------------------------------
+
+test('a chip dropped left of centre docks to the left edge', async () => {
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const { indicator, saved, element } = build();
+    layout(element, { left: 600, top: 300 });
+
+    // Dropped at x=100: well left of the 1280-wide viewport's centre.
+    drag(element, { x: 640, y: 310 }, { x: 100, y: 310 });
+
+    assert.deepEqual(indicator.getPosition(), { left: EDGE_INSET_PX, top: 300 });
+    await Promise.resolve();
+    assert.equal(saved.at(-1).side, 'left');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('a chip dropped right of centre docks to the right edge', async () => {
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const { indicator, saved, element } = build();
+    layout(element, { left: 600, top: 300 });
+
+    // Dropped at x=1000: well right of centre.
+    drag(element, { x: 640, y: 310 }, { x: 1000, y: 310 });
+
+    assert.deepEqual(indicator.getPosition(), { left: 1280 - 120 - EDGE_INSET_PX, top: 300 });
+    await Promise.resolve();
+    assert.equal(saved.at(-1).side, 'right');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+// --- the snap is animated, unless the OS says not to ------------------------
+
+test('a snap adds the transition class and lifts it again once it is done', async () => {
+  // No matchMedia check anywhere in this file, deliberately: prefers-reduced-
+  // motion is the stylesheet's call alone (see theme.mjs), the same division
+  // already used for the sheen pop. This only proves the class toggles.
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const { element } = build();
+    layout(element, { left: 600, top: 300 });
+
+    element.dispatch('pointerdown', { pointerId: 1, button: 0, clientX: 640, clientY: 310 });
+    element.dispatch('pointermove', { pointerId: 1, clientX: 100, clientY: 310 });
+    element.dispatch('pointerup', { pointerId: 1, clientX: 100, clientY: 310 });
+
+    assert.match(element.className, /psnppp-dock-snap/, 'the snap class is on immediately');
+
+    await new Promise(resolve => setTimeout(resolve, DOCK_SNAP_MS + 20));
+    assert.doesNotMatch(element.className, /psnppp-dock-snap/,
+      'and lifted again once the transition has had time to finish');
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();
@@ -484,10 +634,23 @@ test('a drag is clamped while it happens, not only when it is saved', () => {
     const { indicator, element } = build();
     layout(element, { left: 600, top: 400 });
 
-    drag(element, { x: 640, y: 410 }, { x: 9000, y: 9000 });
+    // Not the shared drag() helper: this needs to inspect the position BEFORE
+    // release, while the pointer is still held past both edges.
+    element.dispatch('pointerdown', { pointerId: 1, button: 0, clientX: 640, clientY: 410 });
+    element.dispatch('pointermove', { pointerId: 1, clientX: 9000, clientY: 9000 });
 
     assert.deepEqual(indicator.getPosition(),
-      { left: 1280 - 120 - EDGE_MARGIN, top: 800 - 26 - EDGE_MARGIN });
+      { left: 1280 - 120 - EDGE_MARGIN, top: 800 - 26 - EDGE_MARGIN },
+      'clamped mid-drag, using the drag margin');
+
+    element.dispatch('pointerup', { pointerId: 1, clientX: 9000, clientY: 9000 });
+
+    // On release it snaps to the dock inset instead — a different, slightly
+    // larger number from the drag-time clamp margin, reused from theme.mjs
+    // rather than invented for this feature.
+    assert.deepEqual(indicator.getPosition(),
+      { left: 1280 - 120 - EDGE_INSET_PX, top: 800 - 26 - EDGE_MARGIN },
+      'docked on release, using the edge inset');
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();
@@ -496,17 +659,48 @@ test('a drag is clamped while it happens, not only when it is saved', () => {
 
 // --- restoring, and the laptop problem --------------------------------------
 
-test('a saved position is restored on load', async () => {
+test('a saved position with a docked side is restored on that side', async () => {
   installFakeDocument();
   installFakeWindow({ width: 1280, height: 800 });
   try {
-    const { indicator, element } = build({ loadPosition: async () => ({ left: 300, top: 200 }) });
+    const { indicator, element, saved } = build({
+      loadPosition: async () => ({ left: 1280 - 120 - EDGE_INSET_PX, top: 200, side: 'right' })
+    });
     layout(element, { left: 0, top: 0 });
 
-    await indicator.restorePosition();
+    const restored = await indicator.restorePosition();
 
-    assert.deepEqual(indicator.getPosition(), { left: 300, top: 200 });
-    assert.equal(element.style.left, '300px');
+    assert.deepEqual(restored, { left: 1280 - 120 - EDGE_INSET_PX, top: 200 });
+    assert.deepEqual(indicator.getPosition(), restored);
+    assert.equal(indicator.getSide(), 'right');
+    assert.equal(element.style.left, `${restored.left}px`);
+    // Already exactly where the dock puts it, so nothing needed re-saving.
+    assert.deepEqual(saved, []);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('a position saved by an older build with no side migrates onto the nearest edge', async () => {
+  // Pre-docking builds only ever stored {left, top}. The first restore under
+  // this build has to pick a side for it rather than leaving it at a free
+  // position the new scheme no longer supports.
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const { indicator, element, saved } = build({ loadPosition: async () => ({ left: 300, top: 200 }) });
+    layout(element, { left: 0, top: 0 });
+
+    const restored = await indicator.restorePosition();
+
+    // 300 is nearer the left edge of a 1280-wide viewport than the right.
+    assert.deepEqual(restored, { left: EDGE_INSET_PX, top: 200 });
+    assert.equal(indicator.getSide(), 'left');
+    assert.equal(element.style.left, `${EDGE_INSET_PX}px`);
+    // The migrated side is written back so every future load skips this.
+    await Promise.resolve();
+    assert.deepEqual(saved.at(-1), { left: EDGE_INSET_PX, top: 200, side: 'left' });
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();
@@ -522,44 +716,81 @@ test('a position saved on a wide monitor is clamped back into a laptop viewport'
   installFakeWindow({ width: 1280, height: 800 });
   try {
     const { indicator, element, saved } = build({
-      loadPosition: async () => ({ left: 3300, top: 1380 })
+      loadPosition: async () => ({ left: 3300, top: 1380, side: 'right' })
     });
     layout(element, { left: 0, top: 0 });
 
     const restored = await indicator.restorePosition();
 
-    assert.deepEqual(restored, { left: 1280 - 120 - EDGE_MARGIN, top: 800 - 26 - EDGE_MARGIN });
+    assert.deepEqual(restored, { left: 1280 - 120 - EDGE_INSET_PX, top: 800 - 26 - EDGE_MARGIN });
     assert.deepEqual(indicator.getPosition(), restored);
+    assert.equal(indicator.getSide(), 'right');
     await Promise.resolve();
     // The correction is written back: leaving the unreachable value stored
     // means paying the same correction on every single load, forever.
-    assert.deepEqual(saved.at(-1), restored);
+    assert.deepEqual(saved.at(-1), { ...restored, side: 'right' });
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();
   }
 });
 
-test('shrinking the window pulls the chip back into view and re-saves it', async () => {
-  installFakeDocument();
-  const fake = installFakeWindow({ width: 1920, height: 1080 });
-  try {
-    const { indicator, element, saved } = build();
-    layout(element, { left: 1700, top: 1000 });
-    drag(element, { x: 1750, y: 1010 }, { x: 1800, y: 1040 });
-    assert.deepEqual(indicator.getPosition(), { left: 1750, top: 1030 });
+test('a resize to a narrower viewport keeps a right-docked chip docked right and fully visible',
+  async () => {
+    installFakeDocument();
+    const fake = installFakeWindow({ width: 1920, height: 1080 });
+    try {
+      const { indicator, element, saved } = build();
+      layout(element, { left: 1700, top: 1000 });
+      // Dropped near the right edge of a 1920-wide viewport — docks right.
+      drag(element, { x: 1750, y: 1010 }, { x: 1800, y: 1040 });
+      assert.equal(indicator.getSide(), 'right');
+      assert.deepEqual(indicator.getPosition(), { left: 1920 - 120 - EDGE_INSET_PX, top: 1030 });
 
-    fake.resize(1024, 640);
+      fake.resize(1024, 640);
 
-    assert.deepEqual(indicator.getPosition(),
-      { left: 1024 - 120 - EDGE_MARGIN, top: 640 - 26 - EDGE_MARGIN });
-    await Promise.resolve();
-    assert.deepEqual(saved.at(-1), indicator.getPosition());
-  } finally {
-    uninstallFakeWindow();
-    uninstallFakeDocument();
-  }
-});
+      // STILL docked right — not re-derived from the old absolute left, which
+      // on a 1024-wide screen would be nowhere near the right edge any more.
+      assert.equal(indicator.getSide(), 'right');
+      const after = indicator.getPosition();
+      assert.deepEqual(after, { left: 1024 - 120 - EDGE_INSET_PX, top: 640 - 26 - EDGE_MARGIN });
+      // Fully on screen: both edges of the chip are within the new viewport.
+      assert.ok(after.left >= 0 && after.left + 120 <= 1024, 'chip fits horizontally');
+      assert.ok(after.top >= 0 && after.top + 26 <= 640, 'chip fits vertically');
+      await Promise.resolve();
+      assert.deepEqual(saved.at(-1), { ...after, side: 'right' });
+    } finally {
+      uninstallFakeWindow();
+      uninstallFakeDocument();
+    }
+  });
+
+test('a resize to a narrower viewport keeps a left-docked chip docked left and fully visible',
+  async () => {
+    installFakeDocument();
+    const fake = installFakeWindow({ width: 1920, height: 1080 });
+    try {
+      const { indicator, element, saved } = build();
+      layout(element, { left: 200, top: 900 });
+      // Dropped near the left edge — docks left.
+      drag(element, { x: 250, y: 910 }, { x: 150, y: 940 });
+      assert.equal(indicator.getSide(), 'left');
+      assert.deepEqual(indicator.getPosition(), { left: EDGE_INSET_PX, top: 930 });
+
+      fake.resize(320, 480);
+
+      assert.equal(indicator.getSide(), 'left');
+      const after = indicator.getPosition();
+      assert.deepEqual(after, { left: EDGE_INSET_PX, top: 480 - 26 - EDGE_MARGIN });
+      assert.ok(after.left >= 0 && after.left + 120 <= 320, 'chip fits horizontally');
+      assert.ok(after.top >= 0 && after.top + 26 <= 480, 'chip fits vertically');
+      await Promise.resolve();
+      assert.deepEqual(saved.at(-1), { ...after, side: 'left' });
+    } finally {
+      uninstallFakeWindow();
+      uninstallFakeDocument();
+    }
+  });
 
 test('a resize before the chip was ever placed leaves it in its default corner', () => {
   installFakeDocument();
@@ -609,28 +840,33 @@ test('a throwing position store costs the position, never the chip', async () =>
     await Promise.resolve();
 
     assert.equal(errors.length, 2, 'both failures were reported, neither thrown');
-    assert.deepEqual(indicator.getPosition(), { left: 290, top: 290 },
-      'the chip still moved on screen');
+    // Dropped at x=290, nearer the left edge of the (default 1280-wide) fake
+    // window — docks left. The point of this test is that a storage failure
+    // costs only the SAVE, never the on-screen move or the dock itself.
+    assert.deepEqual(indicator.getPosition(), { left: EDGE_INSET_PX, top: 290 },
+      'the chip still moved on screen, and still docked');
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();
   }
 });
 
-test('the position round-trips through real GM storage', async () => {
+test('the docked position AND side round-trip through real GM storage', async () => {
   installFakeDocument();
   installFakeWindow({ width: 1280, height: 800 });
   const store = installFakeGM();
   try {
     const first = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
     layout(first.element, { left: 600, top: 400 });
+    // Dropped at x=360: nearer the left edge of a 1280-wide viewport.
     drag(first.element, { x: 640, y: 410 }, { x: 400, y: 200 });
     await Promise.resolve();
-    assert.deepEqual(store.get(POSITION_KEY), { left: 360, top: 190 });
+    assert.deepEqual(store.get(POSITION_KEY), { left: EDGE_INSET_PX, top: 190, side: 'left' });
 
     const second = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
     await second.restorePosition();
-    assert.deepEqual(second.getPosition(), { left: 360, top: 190 });
+    assert.deepEqual(second.getPosition(), { left: EDGE_INSET_PX, top: 190 });
+    assert.equal(second.getSide(), 'left');
   } finally {
     uninstallFakeGM();
     uninstallFakeWindow();
@@ -638,15 +874,20 @@ test('the position round-trips through real GM storage', async () => {
   }
 });
 
-test('a position stored as JSON text by an older build still restores', async () => {
+test('a position stored as JSON text by an older build still restores, docked to its nearest edge', async () => {
   installFakeDocument();
   installFakeWindow({ width: 1280, height: 800 });
   const store = installFakeGM();
   try {
+    // The pre-docking format: a bare {left, top}, no `side`, sometimes still
+    // stringified from an even older build (see readPosition's JSON.parse path).
     store.set(POSITION_KEY, JSON.stringify({ left: 200, top: 100 }));
     const indicator = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
     await indicator.restorePosition();
-    assert.deepEqual(indicator.getPosition(), { left: 200, top: 100 });
+    assert.deepEqual(indicator.getPosition(), { left: EDGE_INSET_PX, top: 100 });
+    assert.equal(indicator.getSide(), 'left');
+    // The migration is written back as the new shape, not left stringified.
+    assert.deepEqual(store.get(POSITION_KEY), { left: EDGE_INSET_PX, top: 100, side: 'left' });
   } finally {
     uninstallFakeGM();
     uninstallFakeWindow();
