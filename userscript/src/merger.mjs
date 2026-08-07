@@ -106,3 +106,112 @@ export function stampChanges(base, local, now) {
 
   return out;
 }
+
+/** Per-game-id maximum of two tombstone maps. */
+function mergeTombstones(left = {}, right = {}) {
+  const out = { ...left };
+  for (const [gameId, deletedAt] of Object.entries(right)) {
+    if (out[gameId] == null || deletedAt > out[gameId]) out[gameId] = deletedAt;
+  }
+  return out;
+}
+
+/** The most recent activity on a list — used to judge a deletion against edits. */
+function latestActivity(node) {
+  if (node == null) return 0;
+  let latest = Math.max(node.meta?.updatedAt ?? 0, node.orderUpdatedAt ?? 0);
+  for (const game of Object.values(node.games ?? {})) {
+    if (game.updatedAt > latest) latest = game.updatedAt;
+  }
+  return latest;
+}
+
+function mergeList(localNode, remoteNode) {
+  if (localNode == null) return clone(remoteNode);
+  if (remoteNode == null) return clone(localNode);
+
+  // A deletion only stands if nothing newer happened on the other side.
+  const deletedAt = Math.max(localNode.deletedAt ?? 0, remoteNode.deletedAt ?? 0);
+  if (deletedAt > 0) {
+    const survivor = localNode.deletedAt != null ? remoteNode : localNode;
+    if (deletedAt >= latestActivity(survivor)) {
+      const meta = clone((localNode.meta?.updatedAt ?? 0) >= (remoteNode.meta?.updatedAt ?? 0)
+        ? localNode.meta : remoteNode.meta);
+      return {
+        meta, games: {}, gameOrder: [],
+        orderUpdatedAt: Math.max(localNode.orderUpdatedAt ?? 0, remoteNode.orderUpdatedAt ?? 0),
+        deletedGames: mergeTombstones(localNode.deletedGames, remoteNode.deletedGames),
+        deletedAt
+      };
+    }
+    // Otherwise the list is resurrected by the newer edits and falls through.
+  }
+
+  const meta = clone(localNode.meta.updatedAt >= remoteNode.meta.updatedAt
+    ? localNode.meta : remoteNode.meta);
+  const deletedGames = mergeTombstones(localNode.deletedGames, remoteNode.deletedGames);
+
+  const games = {};
+  const gameIds = new Set([...Object.keys(localNode.games), ...Object.keys(remoteNode.games)]);
+  for (const gameId of gameIds) {
+    const localGame = localNode.games[gameId];
+    const remoteGame = remoteNode.games[gameId];
+    const winner = localGame == null ? remoteGame
+      : remoteGame == null ? localGame
+      : (localGame.updatedAt >= remoteGame.updatedAt ? localGame : remoteGame);
+
+    const tombstone = deletedGames[gameId];
+    if (tombstone != null && tombstone > winner.updatedAt) continue;
+    // The record is newer than the delete: it was re-added, so retire the tombstone.
+    if (tombstone != null) delete deletedGames[gameId];
+    games[gameId] = clone(winner);
+  }
+
+  const orderSource = (localNode.orderUpdatedAt ?? 0) >= (remoteNode.orderUpdatedAt ?? 0)
+    ? localNode : remoteNode;
+  const gameOrder = orderSource.gameOrder.filter(id => games[id] != null);
+  const seen = new Set(gameOrder);
+  for (const gameId of Object.keys(games)) {
+    if (!seen.has(gameId)) gameOrder.push(gameId);
+  }
+
+  return {
+    meta, games, gameOrder,
+    orderUpdatedAt: Math.max(localNode.orderUpdatedAt ?? 0, remoteNode.orderUpdatedAt ?? 0),
+    deletedGames,
+    deletedAt: null
+  };
+}
+
+/**
+ * Three-way merge. `local` must already have been through stampChanges, so its
+ * timestamps and tombstones are populated.
+ *
+ * `base` and `now` are accepted for call-site symmetry with `stampChanges` (and
+ * because Task 10 calls this with all four arguments), but are intentionally
+ * unused here: `local` already carries the base-derived stamps and tombstones,
+ * and every resolution below is driven by timestamps already baked into the
+ * two documents rather than by wall-clock time.
+ */
+export function mergeDoc(base, local, remote, now) {
+  const out = { version: DOC_VERSION, lists: {} };
+  const listIds = new Set([...Object.keys(local.lists), ...Object.keys(remote.lists)]);
+  for (const listId of listIds) {
+    out.lists[listId] = mergeList(local.lists[listId], remote.lists[listId]);
+  }
+  return out;
+}
+
+/** Drop tombstones and deleted lists that are older than the TTL. */
+export function gcTombstones(doc, now, ttl = TOMBSTONE_TTL_MS) {
+  const out = { version: DOC_VERSION, lists: {} };
+  for (const [listId, node] of Object.entries(doc.lists)) {
+    if (node.deletedAt != null && now - node.deletedAt > ttl) continue;
+    const copy = clone(node);
+    for (const [gameId, deletedAt] of Object.entries(copy.deletedGames)) {
+      if (now - deletedAt > ttl) delete copy.deletedGames[gameId];
+    }
+    out.lists[listId] = copy;
+  }
+  return out;
+}
