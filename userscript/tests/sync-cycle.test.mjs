@@ -424,6 +424,13 @@ test('a list that stops being 📡 while the adoption confirm is open survives l
 });
 
 test('a storage write landing during the push is not overwritten by the stale merge', async () => {
+  // THE property this test exists for, unchanged: the merge computed from the
+  // pre-write snapshot must never reach storage, because it would delete the
+  // list that just stopped being 📡. What changed is what happens next — the
+  // cycle used to give up here, stranding `base` a generation behind the push
+  // it had just made (which resurrected deletions on the next cycle). It now
+  // retries: fresh snapshot, re-merge against what it wrote, then settle. The
+  // stale merge is still discarded; it is simply no longer the last word.
   const storage = fakeStorage();
   writeLists(storage, [
     list('F', 'Frozen', [game('g1')], { url: 'https://x/y.json' }),
@@ -434,28 +441,252 @@ test('a storage write landing during the push is not overwritten by the stale me
   const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
   const h = harness(storage, server);
 
+  let pushes = 0;
   const realPut = server.putState.bind(server);
   server.putState = async (baseRevision, doc) => {
-    // Second tab clears F's url while our push is in flight — after the
-    // snapshot this attempt's merge was computed from.
-    writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('A', 'Wishlist')]);
+    pushes += 1;
+    // Second tab clears F's url while our FIRST push is in flight — after the
+    // snapshot that attempt's merge was computed from. One write, so the retry
+    // sees a stable world.
+    if (pushes === 1) {
+      writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('A', 'Wishlist')]);
+    }
     return realPut(baseRevision, doc);
   };
 
   const result = await runSyncCycle(h.args);
   assert.equal(result.status, 'synced');
-  assert.equal(result.changed, false);
   assert.ok(readLists(storage).some(l => l.id === 'F'), 'F must not vanish from localStorage');
-  assert.equal(h.backups.length, 0);
-  // base must not advance past a write that never happened, or the next cycle
-  // reads "in base, missing from local" and tombstones the difference.
-  assert.deepEqual(Object.keys(h.base.lists), []);
+  assert.equal(pushes, 2, 'the aborted attempt retried instead of returning');
+  // The write that landed is the retry's, computed from the snapshot that
+  // already contained the other tab's write — F is syncable now, and present.
+  assert.equal(result.changed, true);
+  assert.deepEqual(readLists(storage).map(l => l.id).sort(), ['A', 'B', 'F']);
+  // The backup is a snapshot of what the write actually replaced, not of the
+  // bytes the abandoned attempt had in hand.
+  assert.equal(h.backups.length, 1);
+  assert.deepEqual(h.backups[0].map(l => l.id).sort(), ['A', 'F']);
+  // base may claim exactly what reached storage — no more (that would tombstone
+  // the difference server-wide) and no less (that would resurrect it).
+  assert.deepEqual(Object.keys(h.base.lists).sort(), ['A', 'B', 'F']);
+  assert.deepEqual(Object.keys(h.base.lists).sort(), readLists(storage).map(l => l.id).sort());
 
-  // The next cycle sees a consistent world and settles it.
+  // ...and the settled world is stable: the next cycle has nothing to do and
+  // F was never tombstoned.
   const second = await runSyncCycle(h.args);
   assert.equal(second.status, 'synced');
+  assert.equal(second.changed, false);
   assert.equal(server.doc.lists.F?.deletedAt ?? null, null);
   assert.deepEqual(readLists(storage).map(l => l.id).sort(), ['A', 'B', 'F']);
+});
+
+// --- A CAS abort AFTER an accepted push must retry, not give up -------------
+//
+// The push is the point of no return: once the server has accepted the merge,
+// this device HAS settled on it, and `base` has to say so. Returning from a CAS
+// abort left `base` one generation behind the server. The next cycle then read
+// every record the stale base did not know about as brand new and stamped it
+// with a fresh `now` — which outranks a tombstone another device pushed in the
+// meantime, so a game (or a whole list) deleted elsewhere came back everywhere.
+//
+// Reproduced end to end below with two devices and a revision-CAS server. It
+// needs NO failure at all: the user simply saves an edit in PSNP+ while a sync
+// is in flight, which is exactly what the CAS is watching for.
+//
+// The fix is to retry the attempt rather than return, so a fresh snapshot is
+// re-merged against what was actually just written and the cycle reaches
+// saveBase. The CAS itself is untouched — the stale merge is still abandoned,
+// it is just no longer the end of the cycle.
+
+/** Fires its callback exactly once: the user saves one edit, mid-cycle. */
+const oneShot = fn => {
+  let fired = false;
+  return () => { if (!fired) { fired = true; fn(); } };
+};
+
+const addGame = (storage, id) => {
+  const lists = readLists(storage);
+  lists[0].games.push(game(id));
+  writeLists(storage, lists);
+};
+
+const removeGame = (storage, id) => {
+  const lists = readLists(storage);
+  lists[0].games = lists[0].games.filter(g => g.id !== id);
+  writeLists(storage, lists);
+};
+
+/**
+ * Two devices, one server, one concurrent save.
+ *
+ * A adds game 77 and, in the same cycle, receives game 55 from B — so the
+ * cycle both pushes AND has a local write to make, which is what puts the
+ * saveBackup abort (path D) on the table at all. `abortDuring` picks which
+ * await the user's save lands in.
+ *
+ * Game ids are numeric strings because PSNP game ids are, and a fixture that
+ * did not match production data shape has already hidden a Critical here.
+ */
+async function casAbortAfterPush(abortDuring) {
+  const server = fakeServer();
+  const storageA = fakeStorage();
+  writeLists(storageA, [list('L1', 'Backlog', [game('9000'), game('30')])]);
+  const storageB = fakeStorage();
+  const A = harness(storageA, server);
+  const B = harness(storageB, server);
+  const runA = (now, over = {}) => runSyncCycle({ ...A.args, now, ...over });
+  const runB = now => runSyncCycle({ ...B.args, now });
+
+  await runA(1000);                       // A publishes 9000, 30
+  await runB(2000);                       // B receives them
+  addGame(storageB, '55');
+  await runB(3000);                       // the server gains 55
+
+  addGame(storageA, '77');                // A's own new game
+  const userSaves = oneShot(() => addGame(storageA, '88'));
+  const over = abortDuring === 'push'
+    ? {
+      client: {
+        getState: () => server.getState(),
+        putState: async (revision, doc) => {
+          const result = await server.putState(revision, doc);
+          userSaves();                    // lands after the push, before the CAS
+          return result;
+        }
+      }
+    }
+    : {
+      saveBackup: async lists => {
+        A.backups.push(lists);
+        userSaves();                      // lands inside the backup await
+      }
+    };
+
+  const cycle = await runA(4000, over);
+  const baseAfter = A.base.lists.L1?.games ?? {};
+
+  await runB(5000);                       // B receives 77
+  const bSaw77 = (readLists(storageB)[0]?.games ?? []).some(g => g.id === '77');
+  removeGame(storageB, '77');
+  await runB(6000);                       // B deletes it — a tombstone is pushed
+
+  await runA(7000);                       // A's next cycle: does it resurrect 77?
+  await runB(8000);
+
+  return {
+    cycle,
+    baseAfter,
+    bSaw77,
+    aLists: readLists(storageA),
+    bGames: (readLists(storageB)[0]?.games ?? []).map(g => g.id),
+    server
+  };
+}
+
+test('C: a CAS abort DURING the push still settles base, so another device\'s deletion holds', async () => {
+  const r = await casAbortAfterPush('push');
+
+  assert.equal(r.cycle.status, 'synced');
+  assert.ok(r.bSaw77, 'the scenario is only meaningful if 77 actually reached B');
+  assert.ok(!r.bGames.includes('77'), '77 was deleted on B and must stay deleted');
+  // ...and the mechanism that makes that true: base must know about the push it
+  // made, or the next cycle re-stamps 77 with a fresh `now` that outranks B's
+  // tombstone.
+  assert.ok('77' in r.baseAfter, 'base must record the record the server accepted');
+  assert.equal(r.server.doc.lists.L1.deletedGames['77'] != null, true,
+    'the tombstone must survive on the server too');
+  // ...and the edit the user made mid-cycle is not collateral damage.
+  assert.deepEqual(r.aLists[0].games.map(g => g.id).sort(),
+    ['30', '55', '88', '9000'], "A keeps its own concurrent edit and B's game");
+  assert.deepEqual(r.bGames.sort(), ['30', '55', '88', '9000']);
+});
+
+test('D: a CAS abort during saveBackup still settles base, so another device\'s deletion holds', async () => {
+  const r = await casAbortAfterPush('backup');
+
+  assert.equal(r.cycle.status, 'synced');
+  assert.ok(r.bSaw77, 'the scenario is only meaningful if 77 actually reached B');
+  assert.ok(!r.bGames.includes('77'), '77 was deleted on B and must stay deleted');
+  assert.ok('77' in r.baseAfter, 'base must record the record the server accepted');
+  assert.equal(r.server.doc.lists.L1.deletedGames['77'] != null, true,
+    'the tombstone must survive on the server too');
+  assert.deepEqual(r.aLists[0].games.map(g => g.id).sort(),
+    ['30', '55', '88', '9000'], "A keeps its own concurrent edit and B's game");
+  assert.deepEqual(r.bGames.sort(), ['30', '55', '88', '9000']);
+});
+
+test('the retry is bounded — storage changing on every attempt exhausts maxAttempts and corrupts nothing', async () => {
+  // A pathological second tab that writes during EVERY push. The retry must
+  // not spin: it gets maxAttempts tries and then gives up, leaving the other
+  // tab's write intact, base unadvanced, and a delta that claims nothing.
+  const storage = fakeStorage();
+  writeLists(storage, [list('L1', 'Backlog', [game('9000')])]);
+  const server = fakeServer(toDoc([list('L2', 'Wishlist', [game('55')])]), 1);
+  const h = harness(storage, server);
+
+  let pushes = 0;
+  const realPut = server.putState.bind(server);
+  server.putState = async (revision, doc) => {
+    pushes += 1;
+    const result = await realPut(revision, doc);
+    // A different write every time, so the snapshot is stale on every attempt.
+    writeLists(storage, [list('L1', 'Backlog', [game('9000'), game(`x${pushes}`)])]);
+    return result;
+  };
+
+  const result = await runSyncCycle({ ...h.args, maxAttempts: 3 });
+
+  assert.equal(pushes, 3, 'exactly maxAttempts attempts, then stop');
+  assert.equal(result.status, 'synced');
+  assert.equal(result.changed, false, 'no write ever reached storage');
+  assert.deepEqual(result.delta, {
+    listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0
+  });
+  // The other tab's last write survives untouched, and base did not advance
+  // past a write that never happened.
+  assert.deepEqual(readLists(storage).map(l => l.id), ['L1']);
+  assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['9000', 'x3']);
+  assert.equal(h.base.lists.L1, undefined, 'base must not claim an abandoned write');
+});
+
+test('a retry that SKIPS its own push still owes base the push the cycle already made', async () => {
+  // The debt is the CYCLE's, not the attempt's. Attempt 1 pushes and its CAS
+  // aborts; attempt 2 re-merges to exactly what attempt 1 wrote, so it skips
+  // the push — and if the flag that drives the retry were scoped to the
+  // attempt it would read false there, return, and strand `base` a generation
+  // behind a push that definitely happened. That is the original bug wearing a
+  // different hat, and it is reachable: an external write touching only fields
+  // toDoc ignores changes the raw bytes (aborting the CAS) without changing
+  // the merge (so the push is skipped).
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
+  const h = harness(storage, server);
+  const withIgnoredField = value =>
+    storage.setItem(LISTS_KEY,
+      JSON.stringify([{ ...list('A', 'Wishlist', [game('g1')]), zzIgnoredByToDoc: value }]));
+
+  let pushes = 0;
+  const realPut = server.putState.bind(server);
+  server.putState = async (revision, doc) => {
+    pushes += 1;
+    if (pushes === 1) withIgnoredField(1);       // aborts attempt 1's CAS
+    return realPut(revision, doc);
+  };
+  let backups = 0;
+  h.args.saveBackup = async () => {
+    backups += 1;
+    if (backups === 1) withIgnoredField(2);      // aborts attempt 2's CAS
+  };
+
+  const result = await runSyncCycle(h.args);
+
+  assert.equal(pushes, 1, 'attempt 2 re-merged to the same document and skipped its push');
+  assert.equal(result.status, 'synced');
+  assert.equal(result.changed, true);
+  assert.deepEqual(readLists(storage).map(l => l.id).sort(), ['A', 'B']);
+  assert.deepEqual(Object.keys(h.base.lists).sort(), ['A', 'B'],
+    'base must settle on the document the server accepted back in attempt 1');
 });
 
 // --- Fix round 4: corrupt storage (P1) and unfreeze divergence (P2) ---------
@@ -888,7 +1119,11 @@ test('an exhausted-retry conflict reports a zero delta', async () => {
   assert.deepEqual(result.delta, ZERO);
 });
 
-test('a cycle aborted by the CAS reports a zero delta — the write never happened', async () => {
+test('a cycle aborted by the CAS reports the delta of the write that actually landed', async () => {
+  // A delta describes what reached storage. The abandoned attempt still reports
+  // nothing — but the cycle no longer ENDS there, so what the caller is told
+  // has to be the retry's write, not the abandoned one's intentions and not a
+  // zero that would hide a real change from the history log.
   const storage = fakeStorage();
   writeLists(storage, [
     list('F', 'Frozen', [game('g1')], { url: 'https://x/y.json' }),
@@ -897,17 +1132,33 @@ test('a cycle aborted by the CAS reports a zero delta — the write never happen
   const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
   const h = harness(storage, server);
 
+  let pushes = 0;
   const realPut = server.putState.bind(server);
   server.putState = async (baseRevision, doc) => {
-    // Another tab writes while our push is in flight, invalidating the snapshot
-    // this attempt's merge was computed from.
-    writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('A', 'Wishlist')]);
+    pushes += 1;
+    // Another tab writes while our first push is in flight, invalidating the
+    // snapshot that attempt's merge was computed from.
+    if (pushes === 1) {
+      writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('A', 'Wishlist')]);
+    }
     return realPut(baseRevision, doc);
   };
 
   const result = await runSyncCycle(h.args);
-  assert.equal(result.changed, false);
-  assert.deepEqual(result.delta, ZERO, 'a delta must never describe a write that was abandoned');
+  assert.equal(result.changed, true);
+  // The retry's snapshot was [F, A]; what it wrote is [F, A, B]. Exactly one
+  // list and its one game arrived, and nothing was removed.
+  assert.deepEqual(result.delta, { ...ZERO, listsAdded: 1, gamesAdded: 1 });
+  const after = readLists(storage);
+  assert.deepEqual(after.map(l => l.id).sort(), ['A', 'B', 'F'],
+    'the delta must match the bytes actually in storage');
+  assert.deepEqual(after.find(l => l.id === 'B').games.map(g => g.id), ['g9']);
+  // The abandoned half of the contract still holds: a cycle that reaches no
+  // write at all claims nothing. (The bounded-retry test above pins the same
+  // thing for a CAS abort that never settles.)
+  const quiet = await runSyncCycle(h.args);
+  assert.equal(quiet.changed, false);
+  assert.deepEqual(quiet.delta, ZERO);
 });
 
 // --- The push is skipped when the server already holds the merge ------------

@@ -235,6 +235,19 @@ export async function runSyncCycle({
   // The same plan the merge applies, in the shape the delta needs.
   const renames = new Map(adopt ? adoptions.map(a => [String(a.localId), String(a.remoteId)]) : []);
 
+  // Has THIS CYCLE, on any attempt, had a push accepted? Scoped to the cycle
+  // rather than to the attempt on purpose. Once the server has taken a merge
+  // from us, `base` owes it a `saveBase` for the rest of the cycle, and which
+  // attempt made the push is irrelevant to that debt. A per-attempt flag leaves
+  // a real hole, reproduced against the real modules: attempt 1 pushes and its
+  // CAS aborts; attempt 2 re-merges to exactly what attempt 1 wrote, so it
+  // SKIPS the push, and if its own CAS then aborts a per-attempt flag reads
+  // false and returns — stranding `base` a generation behind a push that
+  // definitely happened, which is the whole bug. (Reachable: an external write
+  // that only touches fields `toDoc` ignores changes the raw bytes, aborting
+  // the CAS without changing the merge.)
+  let pushed = false;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     // ONE read of localStorage per attempt. Which lists are frozen, what the
     // working base is, what the local document is, and what gets backed up are
@@ -343,6 +356,11 @@ export async function runSyncCycle({
     // `settledRevision` is what the server is at once this attempt is done —
     // the new revision if we pushed, the one we pulled if we did not. Truthful
     // either way, because in the skip case the server's document is unchanged.
+    //
+    // The push is the point of no return for `base`: once the server has
+    // accepted the merge, this device HAS settled on it, and every path below
+    // has to end at `saveBase` or the next cycle re-derives the difference as
+    // local news. See the retries at the two CAS aborts.
     let settledRevision = remote.revision;
     if (!sameDoc(merged, remote.doc)) {
       // Push before writing anything to storage. Writing first (and only
@@ -362,6 +380,12 @@ export async function runSyncCycle({
         continue;
       }
       settledRevision = result.revision;
+      pushed = true;
+      // The server now holds `merged` at `settledRevision`. Recording it here
+      // is what makes a retry below correct rather than dangerous: the next
+      // attempt re-merges against what we just WROTE, not against the older
+      // copy we pulled, so it cannot undo its own push.
+      remote = { revision: settledRevision, doc: merged };
     }
 
     // `mergedLists` and `merged` describe the world as of `snapshot`, and
@@ -370,9 +394,25 @@ export async function runSyncCycle({
     // If another tab wrote during the push, abandon this cycle's local write
     // AND leave `base` where it is: writing a stale merge would delete a list
     // that just stopped being 📡, and advancing `base` past a write that
-    // never happened would tombstone it server-wide on the next cycle. Doing
-    // nothing is always safe — the server already has the merge, and the
-    // write that invalidated us also re-triggers a cycle.
+    // never happened would tombstone it server-wide on the next cycle. Both
+    // halves of that still hold — `saveBase` on this path would be exactly the
+    // bug it describes, and nothing below calls it.
+    //
+    // But simply RETURNING here is not safe either, and that was its own
+    // data-loss path. Once the push was accepted, the server is a generation
+    // ahead of `base`; returning strands it there, and the next cycle reads
+    // every record the stale `base` does not know about as brand new, stamps
+    // it `now`, and that beats a tombstone another device pushed in between —
+    // resurrecting a game or a whole list on every device, under a green
+    // "Synced" chip. So when the push landed, RETRY: the loop takes a fresh
+    // snapshot, re-merges against the document we just wrote (`remote` was
+    // updated to it above), and reaches `saveBase` normally. The stale merge
+    // is still discarded; it is just no longer the end of the cycle.
+    //
+    // Unpushed attempts still return — there is nothing the server knows that
+    // `base` does not, so leaving both alone really is complete. That is the
+    // skip-the-push path, and the write that invalidated us re-triggers a
+    // cycle anyway.
     //
     // Still checked when the push was skipped. Nothing awaited between the
     // snapshot and here on that path, so it cannot fire yet — but it is the
@@ -389,6 +429,7 @@ export async function runSyncCycle({
     // that converges on the next cycle does not justify another change to
     // this path.
     if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+      if (pushed && attempt < maxAttempts) continue;
       return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
     }
     if (changed) {
@@ -400,8 +441,11 @@ export async function runSyncCycle({
       // irreducible without breaking something worse: the backup has to
       // precede the write, and the write has to be the last thing after the
       // last await. It is also mild — the slot holds a genuine snapshot of
-      // genuine data, so at most it displaces an older snapshot.
+      // genuine data, so at most it displaces an older snapshot. A retry can
+      // now spend a second slot on the same cycle; still genuine snapshots,
+      // and still bounded by maxAttempts.
       if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+        if (pushed && attempt < maxAttempts) continue;
         return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
       }
       writeSyncable(storage, mergedLists);

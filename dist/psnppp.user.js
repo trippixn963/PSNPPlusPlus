@@ -681,6 +681,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     const adoptions = planAdoptions(toDoc(readSyncable(storage).syncable), remote.doc);
     const adopt = adoptions.length > 0 && await confirmAdoptions2(adoptions);
     const renames = new Map(adopt ? adoptions.map((a) => [String(a.localId), String(a.remoteId)]) : []);
+    let pushed = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const snapshot = readSnapshot(storage);
       if (snapshot.raw == null && Object.values(base.lists).some((n) => n.deletedAt == null)) {
@@ -707,13 +708,17 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
           continue;
         }
         settledRevision = result.revision;
+        pushed = true;
+        remote = { revision: settledRevision, doc: merged };
       }
       if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+        if (pushed && attempt < maxAttempts) continue;
         return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
       }
       if (changed) {
         await saveBackup2(currentLists);
         if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
+          if (pushed && attempt < maxAttempts) continue;
           return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
         }
         writeSyncable(storage, mergedLists);
