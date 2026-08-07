@@ -33,6 +33,13 @@ def test_state_rejects_wrong_key(client):
     assert res.status_code == 401
 
 
+def test_put_rejects_missing_or_wrong_key(client):
+    body = {"baseRevision": 0, "doc": {"version": 1, "lists": {}}}
+    assert client.put(f"{BASE}/state", json=body).status_code == 401
+    res = client.put(f"{BASE}/state", headers={"X-Sync-Key": "nope"}, json=body)
+    assert res.status_code == 401
+
+
 def test_empty_state_is_revision_zero(client):
     res = client.get(f"{BASE}/state", headers=AUTH)
     assert res.status_code == 200
