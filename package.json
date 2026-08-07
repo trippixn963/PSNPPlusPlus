@@ -6,7 +6,7 @@
   "description": "Two-way sync for PSNP+ game lists",
   "author": "Trippixn <90400991+trippixn963@users.noreply.github.com>",
   "scripts": {
-    "test": "node --test userscript/tests/",
+    "test": "node --test 'userscript/tests/*.test.mjs'",
     "build": "node userscript/build.mjs"
   },
   "devDependencies": {
