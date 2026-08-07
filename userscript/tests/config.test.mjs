@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_ENDPOINT, loadConfig, saveConfig, promptForConfig, isAllowedEndpoint } from '../src/config.mjs';
+import { DEFAULT_ENDPOINT, loadConfig, saveConfig, applyConfig, isAllowedEndpoint,
+  describeStoredKey, INSECURE_ENDPOINT_MESSAGE } from '../src/config.mjs';
 
 /** A fake GM.* backed by a Map, so config.mjs can be exercised in node. */
 function installFakeGM() {
@@ -58,84 +59,35 @@ test('loadConfig returns a stored endpoint over the default', async () => {
 
 // --- the secret must never be handed to a page we do not control ------------
 //
-// promptForConfig runs on psnprofiles.com. window.prompt's second argument is
-// the input's initial VALUE, so pre-filling it with the stored key paints the
-// live credential in plaintext inside a third-party page — visible to anyone
-// looking at the screen, to a screenshot, and to any script that reads the
-// dialog's surroundings. The endpoint is not sensitive and may still be
-// pre-filled.
+// The settings form renders inside psnprofiles.com. Anything it can say about
+// the stored key is visible to whoever is looking at that screen, to a
+// screenshot, and to the page itself — so it may report only THAT a key is
+// stored, never any part of it and not even its length. (panel.mjs holds the
+// matching rule for the input's value; this is the text beside it.)
 
-/**
- * A fake window whose prompt answers are scripted and whose every prompt
- * argument is recorded, so a test can assert on what was DISPLAYED and not
- * merely on what came back.
- */
-function installFakeWindow({ prompts = [] } = {}) {
-  const promptCalls = [];
-  const alerts = [];
-  globalThis.window = {
-    prompt: (message, initial) => {
-      promptCalls.push({ message, initial });
-      return prompts.length ? prompts.shift() : null;
-    },
-    alert: message => { alerts.push(message); }
-  };
-  return { promptCalls, alerts };
-}
-function uninstallFakeWindow() { delete globalThis.window; }
-
-test('the stored key is never pre-filled into a prompt', async () => {
-  installFakeGM();
-  try {
-    await saveConfig({ endpoint: 'https://example.test/api', key: 'super-secret-key' });
-    const fake = installFakeWindow({ prompts: ['https://example.test/api', ''] });
-    try {
-      await promptForConfig();
-    } finally {
-      uninstallFakeWindow();
-    }
-
-    // Not in the initial value, and not smuggled into the message either.
-    for (const call of fake.promptCalls) {
-      assert.equal(String(call.initial ?? '').includes('super-secret-key'), false,
-        `secret leaked into a prompt's initial value: ${JSON.stringify(call.initial)}`);
-      assert.equal(String(call.message ?? '').includes('super-secret-key'), false,
-        `secret leaked into a prompt's message: ${JSON.stringify(call.message)}`);
-    }
-  } finally {
-    uninstallFakeGM();
-  }
+test('the stored key is never rendered, not even in part', () => {
+  const hint = describeStoredKey('super-secret-key');
+  assert.equal(hint.includes('super-secret-key'), false, `secret leaked: ${hint}`);
+  assert.equal(/secret|sekrit/i.test(hint), false, `secret leaked: ${hint}`);
+  // Not its length either — a 16-character mask is a 16-character disclosure.
+  assert.equal(/•{5,}/.test(hint), false, `the mask discloses a length: ${hint}`);
+  assert.match(hint, /already stored/i);
 });
 
-test('cancelling the key prompt keeps the stored key rather than wiping it', async () => {
-  installFakeGM();
-  try {
-    await saveConfig({ endpoint: 'https://example.test/api', key: 'super-secret-key' });
-    installFakeWindow({ prompts: ['https://example.test/api', null] });
-    try {
-      const result = await promptForConfig();
-      assert.equal(result, null, 'a cancelled prompt saves nothing');
-    } finally {
-      uninstallFakeWindow();
-    }
-    assert.equal((await loadConfig()).key, 'super-secret-key');
-  } finally {
-    uninstallFakeGM();
-  }
+test('with nothing stored the form says so rather than showing an empty hint', () => {
+  const hint = describeStoredKey('');
+  assert.match(hint, /none stored/i);
 });
 
 test('submitting a blank key keeps the stored key (the field starts empty by design)', async () => {
   installFakeGM();
   try {
     await saveConfig({ endpoint: 'https://example.test/api', key: 'super-secret-key' });
-    installFakeWindow({ prompts: ['https://other.test/api', '   '] });
-    try {
-      await promptForConfig();
-    } finally {
-      uninstallFakeWindow();
-    }
-    // With nothing pre-filled, "OK on an empty box" is the natural way to say
+    // With nothing pre-filled, "submit an empty box" is the natural way to say
     // "I only wanted to change the endpoint" — it must not mean "erase my key".
+    const result = await applyConfig({ endpoint: 'https://other.test/api', key: '   ' });
+    assert.equal(result.ok, true);
+
     const config = await loadConfig();
     assert.equal(config.key, 'super-secret-key');
     assert.equal(config.endpoint, 'https://other.test/api');
@@ -148,30 +100,27 @@ test('a typed key replaces the stored one', async () => {
   installFakeGM();
   try {
     await saveConfig({ endpoint: 'https://example.test/api', key: 'old-key' });
-    installFakeWindow({ prompts: ['https://example.test/api', '  new-key  '] });
-    try {
-      await promptForConfig();
-    } finally {
-      uninstallFakeWindow();
-    }
+    await applyConfig({ endpoint: 'https://example.test/api', key: '  new-key  ' });
     assert.equal((await loadConfig()).key, 'new-key');
   } finally {
     uninstallFakeGM();
   }
 });
 
-test('the endpoint is still pre-filled — it is not a secret', async () => {
+test('applyConfig never reaches for a browser dialog', async () => {
+  // The whole point of the panel is that these three are gone from the settings
+  // path. A stray prompt() here would be a regression, so make one fatal.
   installFakeGM();
+  globalThis.window = {
+    prompt: () => { throw new Error('applyConfig used window.prompt'); },
+    alert: () => { throw new Error('applyConfig used window.alert'); },
+    confirm: () => { throw new Error('applyConfig used window.confirm'); }
+  };
   try {
-    await saveConfig({ endpoint: 'https://example.test/api', key: 'k' });
-    const fake = installFakeWindow({ prompts: [null] });
-    try {
-      await promptForConfig();
-    } finally {
-      uninstallFakeWindow();
-    }
-    assert.equal(fake.promptCalls[0].initial, 'https://example.test/api');
+    assert.equal((await applyConfig({ endpoint: 'https://ok.test/api', key: 'k' })).ok, true);
+    assert.equal((await applyConfig({ endpoint: 'http://bad.test/api', key: 'k' })).ok, false);
   } finally {
+    delete globalThis.window;
     uninstallFakeGM();
   }
 });
@@ -215,18 +164,18 @@ test('a plaintext endpoint is rejected on save, and nothing is stored', async ()
   installFakeGM();
   try {
     await saveConfig({ endpoint: 'https://good.test/api', key: 'super-secret-key' });
-    const fake = installFakeWindow({ prompts: ['http://trippixn.com/api/psnppp', 'whatever'] });
-    try {
-      const result = await promptForConfig();
-      assert.equal(result, null);
-    } finally {
-      uninstallFakeWindow();
-    }
 
-    assert.equal(fake.alerts.length, 1, 'the user must be told why');
-    assert.match(fake.alerts[0], /https/i);
-    // The key prompt must not even be reached, and the good config must stand.
-    assert.equal(fake.promptCalls.length, 1);
+    const result = await applyConfig({ endpoint: 'http://trippixn.com/api/psnppp', key: 'whatever' });
+
+    assert.equal(result.ok, false);
+    // The user must be told WHY, and the reason has to name the rule. This
+    // message used to be a window.alert; it now lands in the panel's message
+    // region, and losing it there would be losing the only explanation for why
+    // what they typed did nothing.
+    assert.match(result.message, /https/i);
+    assert.equal(result.message, INSECURE_ENDPOINT_MESSAGE);
+    // The good config must stand — including the key that came with the
+    // rejected submission.
     assert.deepEqual(await loadConfig(), { endpoint: 'https://good.test/api', key: 'super-secret-key' });
   } finally {
     uninstallFakeGM();
@@ -236,13 +185,26 @@ test('a plaintext endpoint is rejected on save, and nothing is stored', async ()
 test('a loopback endpoint is accepted for local testing', async () => {
   installFakeGM();
   try {
-    installFakeWindow({ prompts: ['http://127.0.0.1:8091/api/psnppp', 'local-key'] });
-    try {
-      await promptForConfig();
-    } finally {
-      uninstallFakeWindow();
-    }
+    const result = await applyConfig({ endpoint: 'http://127.0.0.1:8091/api/psnppp', key: 'local-key' });
+    assert.equal(result.ok, true);
     assert.deepEqual(await loadConfig(), { endpoint: 'http://127.0.0.1:8091/api/psnppp', key: 'local-key' });
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('applyConfig trims the endpoint and survives junk input without throwing', async () => {
+  installFakeGM();
+  try {
+    assert.equal((await applyConfig({ endpoint: '  https://ok.test/api  ', key: 'k' })).ok, true);
+    assert.equal((await loadConfig()).endpoint, 'https://ok.test/api');
+
+    for (const bad of [undefined, null, {}, { endpoint: null, key: null }, { endpoint: 42 }]) {
+      const result = await applyConfig(bad);
+      assert.equal(result.ok, false, JSON.stringify(bad));
+    }
+    // ...and none of that disturbed what was already stored.
+    assert.deepEqual(await loadConfig(), { endpoint: 'https://ok.test/api', key: 'k' });
   } finally {
     uninstallFakeGM();
   }

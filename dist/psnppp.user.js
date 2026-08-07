@@ -173,32 +173,21 @@
     if (parsed.protocol !== "http:") return false;
     return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
   }
-  async function promptForConfig() {
-    const current = await loadConfig();
-    const rawEndpoint = window.prompt("PSNP++ \u2014 sync endpoint:", current.endpoint);
-    if (rawEndpoint == null) return null;
-    const endpoint = rawEndpoint.trim();
+  var INSECURE_ENDPOINT_MESSAGE = "That endpoint was not saved. The sync key is sent as a request header, so the endpoint must be https:// (http:// is allowed only for localhost or 127.0.0.1).";
+  function describeStoredKey(key) {
+    return key ? "One is already stored. Leave this blank to keep it." : "None stored yet.";
+  }
+  async function applyConfig(submitted) {
+    const endpoint = String(submitted?.endpoint ?? "").trim();
+    const rawKey = submitted?.key;
     if (!isAllowedEndpoint(endpoint)) {
-      window.alert(
-        `PSNP++ \u2014 that endpoint was not saved:
-
-${endpoint}
-
-The sync key is sent as a request header, so the endpoint must be https:// (http:// is allowed only for localhost / 127.0.0.1).`
-      );
-      return null;
+      return { ok: false, message: INSECURE_ENDPOINT_MESSAGE };
     }
-    const rawKey = window.prompt(
-      `PSNP++ \u2014 sync key (${current.key ? "one is already stored: \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : "none stored yet"}).
-
-Type a new key, or leave this blank to keep the stored one.`,
-      ""
-    );
-    if (rawKey == null) return null;
-    const typedKey = rawKey.trim();
+    const current = await loadConfig();
+    const typedKey = String(rawKey ?? "").trim();
     const config = { endpoint, key: typedKey === "" ? current.key : typedKey };
     await saveConfig(config);
-    return config;
+    return { ok: true, config };
   }
 
   // userscript/src/backup.mjs
@@ -334,66 +323,965 @@ Type a new key, or leave this blank to keep the stored one.`,
     };
   }
 
+  // userscript/src/theme.mjs
+  var TOKENS = {
+    plate: "#1b1d1f",
+    sunken: "#141618",
+    control: "#24272a",
+    hairline: "#26292b",
+    edge: "#33373a",
+    quiet: "#646464",
+    engrave: "#8a8d91",
+    data: "#cfd2d5",
+    bright: "#e0e0e0",
+    bronze: "#dd8301",
+    bronzeDim: "#a77b34",
+    silver: "#c3c6cc",
+    gold: "#f0c117",
+    platinum: "#a9d6ea",
+    fault: "#ba4b47",
+    faultDim: "#5c3230",
+    // The same red as `fault`, in the form rgba() needs. Written out because a
+    // hand-converted `rgba(186, 75, 71, …)` elsewhere in the sheet would keep the
+    // old colour after `fault` changed, with nothing to catch it.
+    faultRgb: "186, 75, 71"
+  };
+  var TIERS = {
+    locked: TOKENS.edge,
+    bronze: TOKENS.bronze,
+    silver: TOKENS.silver,
+    gold: TOKENS.gold,
+    platinum: TOKENS.platinum,
+    fault: TOKENS.fault
+  };
+  var LOCKED_TIER = "locked";
+  var INDICATOR_ID = "psnppp-indicator";
+  var PANEL_ID = "psnppp-panel";
+  var PANEL_WIDTH_PX = 300;
+  var EDGE_INSET_PX = 12;
+  var CHIP_FALLBACK_SIZE = { width: 120, height: 26 };
+  var Z_LAYER = 99999;
+  var PLATE_SHADOW = "0 1px 4px rgba(0, 0, 0, .45)";
+  var TYPE = {
+    display: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+    data: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    body: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
+  };
+  var STYLE_ID = "psnppp-style";
+  var styled = /* @__PURE__ */ new WeakSet();
+  var t = TOKENS;
+  var tierRules = Object.entries(TIERS).map(
+    ([tier, color]) => `
+#${INDICATOR_ID}.psnppp-tier-${tier} .psnppp-rail { background: ${color}; }
+#${INDICATOR_ID}.psnppp-tier-${tier} .psnppp-label { color: ${tier === LOCKED_TIER ? t.engrave : color}; }`
+  ).join("");
+  var litTiers = Object.keys(TIERS).filter((tier) => tier !== LOCKED_TIER).map((tier) => `#${INDICATOR_ID}.psnppp-tier-${tier}`).join(",\n");
+  var CSS = `
+/* A reset that cannot leak: the universal selector is fenced behind our own
+   ids, so it only ever reaches our own descendants. psnprofiles.com sets
+   margins, floats and text-shadows on plenty of generic elements, and any of
+   them landing inside the widget would be a page style reaching in. */
+#${INDICATOR_ID},
+#${INDICATOR_ID} *,
+#${PANEL_ID},
+#${PANEL_ID} * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+  float: none;
+  text-shadow: none;
+}
+
+/* ---- the chip ---------------------------------------------------------- */
+
+#${INDICATOR_ID} {
+  position: fixed;
+  right: ${EDGE_INSET_PX}px;
+  bottom: ${EDGE_INSET_PX}px;
+  z-index: ${Z_LAYER};
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  max-width: calc(100vw - ${EDGE_INSET_PX * 2}px);
+  min-height: ${CHIP_FALLBACK_SIZE.height - 2}px;
+  overflow: hidden;
+  background: ${t.plate};
+  border: 1px solid ${t.edge};
+  border-radius: 3px;
+  box-shadow: ${PLATE_SHADOW};
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  opacity: .55;
+  transition: opacity .18s ease, border-color .18s ease;
+}
+
+/* PSNP+'s own floating menu sits at opacity .2 until you touch it. Fading at
+   rest is this page's established manner for a guest widget; .55 keeps ours
+   legible while still receding. */
+#${INDICATOR_ID}:hover,
+#${INDICATOR_ID}:focus-visible,
+#${INDICATOR_ID}.psnppp-open {
+  opacity: 1;
+}
+
+#${INDICATOR_ID}:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 2px;
+}
+
+#${INDICATOR_ID} .psnppp-rail {
+  flex: 0 0 3px;
+  width: 3px;
+  align-self: stretch;
+  background: ${t.edge};
+  transition: background .18s ease;
+}
+
+#${INDICATOR_ID} .psnppp-label {
+  flex: 0 1 auto;
+  padding: 6px 10px 6px 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: ${TYPE.display};
+  font-size: 10px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: ${t.engrave};
+  transition: color .18s ease;
+}
+
+/* Locked is the settled look: an unlit plate. No metal, no gradient, nothing
+   to look at \u2014 which is the point, because nothing is being asked of anyone. */
+${tierRules}
+
+/* Anything with a metal has something to say, so it stops receding. */
+${litTiers} {
+  opacity: 1;
+}
+
+/* An error is the one state that may not be mistaken for the page. Full
+   opacity, the only warm hue in the widget, and the plate's own edge turns. */
+#${INDICATOR_ID}.psnppp-tier-fault {
+  border-color: ${t.fault};
+  box-shadow: ${PLATE_SHADOW}, 0 0 0 1px rgba(${t.faultRgb}, .35);
+}
+
+/* THE SIGNATURE \u2014 the pop.
+   One specular band crosses the plate the moment a state arrives that needs
+   the user, and never again until the next one. It is the trophy-unlock shine
+   from the console this hobby lives on, spent once, on the only event worth
+   spending it on. Locked states never get it. */
+#${INDICATOR_ID} .psnppp-sheen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, .16) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+#${INDICATOR_ID}.psnppp-pop .psnppp-sheen {
+  animation: psnppp-sweep .52s cubic-bezier(.22, .61, .36, 1) 1;
+}
+
+@keyframes psnppp-sweep {
+  0%   { opacity: 0; transform: translateX(-120%); }
+  12%  { opacity: 1; }
+  100% { opacity: 0; transform: translateX(340%); }
+}
+
+/* ---- the panel --------------------------------------------------------- */
+
+#${PANEL_ID} {
+  position: fixed;
+  z-index: ${Z_LAYER};
+  width: ${PANEL_WIDTH_PX}px;
+  max-width: calc(100vw - ${EDGE_INSET_PX * 2}px);
+  max-height: calc(100vh - ${EDGE_INSET_PX * 2}px);
+  overflow: auto;
+  background: ${t.plate};
+  border: 1px solid ${t.edge};
+  border-radius: 3px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .55);
+  color: ${t.engrave};
+  font-family: ${TYPE.body};
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+#${PANEL_ID} .psnppp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  border-bottom: 1px solid ${t.edge};
+}
+
+#${PANEL_ID} .psnppp-title {
+  font-family: ${TYPE.display};
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: ${t.engrave};
+}
+
+#${PANEL_ID} .psnppp-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid ${t.edge};
+}
+
+#${PANEL_ID} .psnppp-tab {
+  flex: 1 1 0;
+  padding: 8px 4px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  text-align: center;
+  color: ${t.quiet};
+}
+
+#${PANEL_ID} .psnppp-tab:hover { color: ${t.engrave}; }
+
+/* Deliberately NOT gold. Gold is spent once in this panel, on Save \u2014 the one
+   control that writes anything. A gold tab underline competed with it and made
+   "which tab am I on" look as urgent as "this is the button that commits". */
+#${PANEL_ID} .psnppp-tab[aria-selected="true"] {
+  color: ${t.bright};
+  border-bottom-color: ${t.bright};
+}
+
+#${PANEL_ID} .psnppp-pane { padding: 10px; }
+
+#${PANEL_ID} .psnppp-field { margin-bottom: 10px; }
+
+#${PANEL_ID} .psnppp-fieldlabel {
+  display: block;
+  margin-bottom: 4px;
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: ${t.quiet};
+}
+
+#${PANEL_ID} .psnppp-input {
+  display: block;
+  width: 100%;
+  padding: 6px 7px;
+  background: ${t.sunken};
+  border: 1px solid ${t.edge};
+  border-radius: 2px;
+  font-family: ${TYPE.data};
+  font-size: 11px;
+  line-height: 1.4;
+  color: ${t.bright};
+}
+
+#${PANEL_ID} .psnppp-input:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 1px;
+}
+
+#${PANEL_ID} .psnppp-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: ${t.quiet};
+}
+
+#${PANEL_ID} .psnppp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid ${t.hairline};
+}
+
+#${PANEL_ID} .psnppp-row:first-child { border-top: 0; }
+
+#${PANEL_ID} .psnppp-rowmain {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ${TYPE.data};
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: ${t.data};
+  overflow-wrap: anywhere;
+}
+
+#${PANEL_ID} .psnppp-rowmeta {
+  display: block;
+  font-size: 10px;
+  color: ${t.quiet};
+}
+
+#${PANEL_ID} .psnppp-empty {
+  padding: 4px 0 2px;
+  color: ${t.quiet};
+}
+
+#${PANEL_ID} .psnppp-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+#${PANEL_ID} .psnppp-btn {
+  padding: 5px 10px;
+  background: ${t.control};
+  border: 1px solid ${t.edge};
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: ${t.engrave};
+}
+
+#${PANEL_ID} .psnppp-btn:hover { border-color: ${t.quiet}; color: ${t.bright}; }
+
+#${PANEL_ID} .psnppp-btn:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 1px;
+}
+
+#${PANEL_ID} .psnppp-btn-key { color: ${t.gold}; border-color: ${t.bronzeDim}; }
+#${PANEL_ID} .psnppp-btn-key:hover { color: ${t.gold}; border-color: ${t.gold}; }
+
+#${PANEL_ID} .psnppp-btn-danger { color: ${t.fault}; border-color: ${t.faultDim}; }
+#${PANEL_ID} .psnppp-btn-danger:hover { color: ${t.fault}; border-color: ${t.fault}; }
+
+#${PANEL_ID} .psnppp-close {
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: ${TYPE.body};
+  font-size: 14px;
+  line-height: 1;
+  color: ${t.quiet};
+}
+
+#${PANEL_ID} .psnppp-close:hover { color: ${t.bright}; }
+
+#${PANEL_ID} .psnppp-close:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 1px;
+}
+
+#${PANEL_ID} .psnppp-message {
+  padding: 8px 10px;
+  border-top: 1px solid ${t.edge};
+  font-size: 11px;
+  color: ${t.engrave};
+  overflow-wrap: anywhere;
+}
+
+#${PANEL_ID} .psnppp-message-error {
+  color: ${t.fault};
+  background: rgba(${t.faultRgb}, .08);
+}
+
+/* Full width, under the row it belongs to. Sitting beside the timestamp
+   squeezed both into two ragged columns and put "Replace lists" \u2014 the only
+   destructive control in the widget \u2014 where it read as an afterthought. */
+#${PANEL_ID} .psnppp-confirm {
+  flex: 1 0 100%;
+  padding: 4px 0 2px;
+  color: ${t.engrave};
+}
+
+#${PANEL_ID} .psnppp-confirm .psnppp-actions { padding-top: 6px; }
+
+/* The quality floor, not announced anywhere in the UI: a widget that animates
+   through a vestibular disorder is a bug, and every transition above is
+   decoration over an instant state change. */
+@media (prefers-reduced-motion: reduce) {
+  #${INDICATOR_ID},
+  #${INDICATOR_ID} .psnppp-rail,
+  #${INDICATOR_ID} .psnppp-label {
+    transition: none;
+  }
+  #${INDICATOR_ID}.psnppp-pop .psnppp-sheen { animation: none; }
+}
+
+/* Narrow viewports: the plate keeps its metal and loses its width. */
+@media (max-width: 420px) {
+  #${INDICATOR_ID} .psnppp-label { padding: 6px 8px 6px 6px; max-width: 46vw; }
+  #${PANEL_ID} { width: calc(100vw - ${EDGE_INSET_PX * 2}px); }
+}
+`;
+  function installStyles(doc) {
+    if (!doc || styled.has(doc)) return null;
+    if (doc.getElementById?.(STYLE_ID)) {
+      styled.add(doc);
+      return null;
+    }
+    const host = doc.head ?? doc.documentElement ?? doc.body;
+    if (!host || typeof host.appendChild !== "function") return null;
+    if (typeof doc.createElement !== "function") return null;
+    const style = doc.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = CSS;
+    host.appendChild(style);
+    styled.add(doc);
+    return style;
+  }
+
   // userscript/src/indicator.mjs
   var STATES = {
-    idle: { label: "Sync", color: "#6c757d", action: "sync" },
-    syncing: { label: "Syncing\u2026", color: "#0d6efd", action: "sync" },
-    synced: { label: "Synced", color: "#198754", action: "sync" },
-    reload: { label: "Synced \u2014 reload page", color: "#198754", action: "reload" },
-    offline: { label: "Offline", color: "#fd7e14", action: "sync" },
-    conflict: { label: "Conflict", color: "#dc3545", action: "sync" },
-    unconfigured: { label: "Set up sync", color: "#6f42c1", action: "sync" },
+    idle: { label: "Sync", tier: "locked", action: "sync", pops: false },
+    syncing: { label: "Syncing", tier: "silver", action: "sync", pops: false },
+    synced: { label: "Synced", tier: "locked", action: "sync", pops: false },
+    reload: { label: "Reload page", tier: "platinum", action: "reload", pops: true },
+    offline: { label: "Offline", tier: "fault", action: "sync", pops: true },
+    conflict: { label: "Conflict", tier: "fault", action: "sync", pops: true },
+    unconfigured: { label: "Set up sync", tier: "bronze", action: "sync", pops: true },
     // A userscript cannot silently self-install — that would be a security hole
     // — so this is an offer, not an update. The click opens the install page in
     // a NEW tab (see onUpdate below); it deliberately does not navigate the
     // current psnprofiles.com tab away.
-    update: { label: "Update available", color: "#0dcaf0", action: "update" }
+    update: { label: "Update ready", tier: "gold", action: "update", pops: true }
   };
   var CLICK_HINT = {
     sync: "click to sync now, right-click for settings.",
     reload: "click to reload the page, right-click for settings.",
     update: "click to install the update, right-click for settings."
   };
-  function createIndicator({ onSyncNow, onSettings, onReload, onUpdate }) {
+  var POSITION_KEY = "psnppp.chipPosition";
+  var EDGE_MARGIN = 8;
+  var DRAG_THRESHOLD_PX = 4;
+  var FALLBACK_SIZE = CHIP_FALLBACK_SIZE;
+  var finiteOr = (value, fallback) => Number.isFinite(value) ? value : fallback;
+  function clampAxis(value, size, view, margin = EDGE_MARGIN) {
+    const furthest = Math.max(margin, finiteOr(view, 0) - Math.max(0, finiteOr(size, 0)) - margin);
+    return Math.min(Math.max(finiteOr(value, margin), margin), furthest);
+  }
+  function clampToViewport(position, size, viewport, margin = EDGE_MARGIN) {
+    return {
+      left: clampAxis(
+        position?.left,
+        finiteOr(size?.width, FALLBACK_SIZE.width),
+        viewport?.width,
+        margin
+      ),
+      top: clampAxis(
+        position?.top,
+        finiteOr(size?.height, FALLBACK_SIZE.height),
+        viewport?.height,
+        margin
+      )
+    };
+  }
+  function isUsablePosition(position) {
+    return position != null && typeof position === "object" && Number.isFinite(position.left) && Number.isFinite(position.top);
+  }
+  var readPosition = async () => {
+    const stored = await GM.getValue(POSITION_KEY, null);
+    if (typeof stored === "string") {
+      try {
+        return JSON.parse(stored);
+      } catch {
+        return null;
+      }
+    }
+    return stored;
+  };
+  var writePosition = async (position) => GM.setValue(POSITION_KEY, position);
+  function createIndicator({
+    onSyncNow,
+    onSettings,
+    onReload,
+    onUpdate,
+    loadPosition = readPosition,
+    savePosition = writePosition,
+    onPositionError = (error) => console.error("[psnppp] chip position:", error)
+  } = {}) {
+    installStyles(document);
     const element = document.createElement("div");
-    element.id = "psnppp-indicator";
-    element.style.cssText = [
-      "position:fixed",
-      "right:12px",
-      "bottom:12px",
-      "z-index:99999",
-      "font:12px/1.4 Arial,sans-serif",
-      "color:#fff",
-      "padding:6px 10px",
-      "border-radius:4px",
-      "cursor:pointer",
-      "user-select:none",
-      "box-shadow:0 2px 6px rgba(0,0,0,.35)",
-      "opacity:.9"
-    ].join(";");
+    element.id = INDICATOR_ID;
+    element.setAttribute("role", "button");
+    element.setAttribute("tabindex", "0");
+    const rail = document.createElement("span");
+    rail.className = "psnppp-rail";
+    rail.setAttribute("aria-hidden", "true");
+    element.appendChild(rail);
     const label = document.createElement("span");
+    label.className = "psnppp-label";
     element.appendChild(label);
-    let action = STATES.idle.action;
-    element.addEventListener("click", () => {
-      if (action === "reload") onReload();
-      else if (action === "update") onUpdate();
+    const sheen = document.createElement("span");
+    sheen.className = "psnppp-sheen";
+    sheen.setAttribute("aria-hidden", "true");
+    element.appendChild(sheen);
+    let current = STATES.idle;
+    let panelOpen = false;
+    const paintClasses = (pop = false) => {
+      element.className = [
+        `psnppp-tier-${current.tier}`,
+        pop ? "psnppp-pop" : "",
+        panelOpen ? "psnppp-open" : ""
+      ].filter(Boolean).join(" ");
+    };
+    const viewport = () => ({
+      width: globalThis.window?.innerWidth ?? 0,
+      height: globalThis.window?.innerHeight ?? 0
+    });
+    const rectOf = () => typeof element.getBoundingClientRect === "function" ? element.getBoundingClientRect() : null;
+    const measure = () => {
+      const rect = rectOf();
+      return {
+        width: rect?.width || element.offsetWidth || FALLBACK_SIZE.width,
+        height: rect?.height || element.offsetHeight || FALLBACK_SIZE.height
+      };
+    };
+    let position = null;
+    function apply(next) {
+      position = next;
+      element.style.left = `${next.left}px`;
+      element.style.top = `${next.top}px`;
+      element.style.right = "auto";
+      element.style.bottom = "auto";
+    }
+    const place = (candidate, size = measure()) => apply(clampToViewport(candidate, size, viewport()));
+    const persist = () => {
+      if (position == null) return;
+      try {
+        Promise.resolve(savePosition({ ...position })).catch(onPositionError);
+      } catch (error) {
+        onPositionError(error);
+      }
+    };
+    async function restorePosition() {
+      try {
+        const stored = await loadPosition();
+        if (!isUsablePosition(stored)) return null;
+        place(stored);
+        const corrected = position;
+        if (corrected.left !== stored.left || corrected.top !== stored.top) persist();
+        return corrected;
+      } catch (error) {
+        onPositionError(error);
+        return null;
+      }
+    }
+    function handleResize() {
+      if (position == null) return;
+      const before = position;
+      place(before);
+      if (position.left !== before.left || position.top !== before.top) persist();
+    }
+    globalThis.window?.addEventListener?.("resize", handleResize);
+    let drag = null;
+    let suppressClick = false;
+    element.addEventListener("pointerdown", (event) => {
+      if ((event.button ?? 0) !== 0) return;
+      const size = measure();
+      const rect = rectOf();
+      const start2 = position ?? clampToViewport({ left: rect?.left ?? 0, top: rect?.top ?? 0 }, size, viewport());
+      drag = {
+        pointerId: event.pointerId,
+        originX: event.clientX ?? 0,
+        originY: event.clientY ?? 0,
+        startLeft: start2.left,
+        startTop: start2.top,
+        // Measured once here and reused for the whole gesture. The chip cannot
+        // change size while it is being dragged, and re-measuring per move forced
+        // a synchronous layout at pointer frequency (120Hz+) on a page we do not
+        // own — write, read, write, every single move event.
+        size,
+        moved: false
+      };
+      try {
+        element.setPointerCapture?.(event.pointerId);
+      } catch {
+      }
+    });
+    element.addEventListener("pointermove", (event) => {
+      if (drag == null || event.pointerId != null && event.pointerId !== drag.pointerId) return;
+      const dx = (event.clientX ?? 0) - drag.originX;
+      const dy = (event.clientY ?? 0) - drag.originY;
+      if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+      drag.moved = true;
+      place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
+    });
+    const endDrag = (event, { commit = true } = {}) => {
+      if (drag == null || event?.pointerId != null && event.pointerId !== drag.pointerId) return;
+      const { moved, pointerId } = drag;
+      drag = null;
+      try {
+        element.releasePointerCapture?.(pointerId);
+      } catch {
+      }
+      if (!commit || !moved) return;
+      suppressClick = true;
+      persist();
+    };
+    element.addEventListener("pointerup", endDrag);
+    element.addEventListener("pointercancel", (event) => endDrag(event, { commit: false }));
+    const activate = () => {
+      if (current.action === "reload") onReload();
+      else if (current.action === "update") onUpdate();
       else onSyncNow();
+    };
+    element.addEventListener("click", () => {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
+      activate();
+    });
+    element.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+      event.preventDefault?.();
+      activate();
     });
     element.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       onSettings();
     });
     function setState(state, detail = "") {
-      const style = Object.hasOwn(STATES, state) ? STATES[state] : STATES.idle;
-      action = style.action;
-      element.style.background = style.color;
+      const name = typeof state === "string" ? state : "";
+      const text = typeof detail === "string" ? detail : "";
+      const style = Object.hasOwn(STATES, name) ? STATES[name] : STATES.idle;
+      const arrived = style.tier !== current.tier;
+      const pop = style.pops && arrived;
+      current = style;
+      if (pop) {
+        paintClasses(false);
+        void element.offsetWidth;
+      }
+      paintClasses(pop);
       label.textContent = style.label;
-      const hint = CLICK_HINT[action] ?? CLICK_HINT.sync;
-      element.title = detail ? `PSNP++ \u2014 ${detail}
+      const hint = CLICK_HINT[style.action] ?? CLICK_HINT.sync;
+      const title = text ? `PSNP++ \u2014 ${text}
 ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
+      element.title = title;
+      element.setAttribute("aria-label", title.replace(/\n/g, " "));
+    }
+    function setPanelOpen(open) {
+      panelOpen = Boolean(open);
+      paintClasses(element.className.includes("psnppp-pop"));
     }
     setState("idle");
-    return { element, setState };
+    return {
+      element,
+      setState,
+      setPanelOpen,
+      restorePosition,
+      handleResize,
+      /** Where the chip is, or null while it still sits in its default corner. */
+      getPosition: () => position == null ? null : { ...position }
+    };
+  }
+
+  // userscript/src/panel.mjs
+  var TABS = [
+    { name: "sync", label: "Sync" },
+    { name: "backups", label: "Backups" },
+    { name: "log", label: "Log" }
+  ];
+  function describeFailure(error, fallback) {
+    try {
+      const text = typeof error?.message === "string" && error.message ? error.message : String(error);
+      return text && text !== "null" && text !== "undefined" && text !== "[object Object]" ? `${fallback}: ${text}` : `${fallback}.`;
+    } catch {
+      return `${fallback}.`;
+    }
+  }
+  var stamp = (at) => {
+    const date = new Date(at);
+    return Number.isNaN(date.getTime()) ? "unknown time" : date.toLocaleString();
+  };
+  var countOf = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  function createSettingsPanel({
+    doc = globalThis.document,
+    anchor = null,
+    config = { endpoint: "", key: "" },
+    backups = [],
+    history = [],
+    describeDelta: describeDelta2 = () => "lists updated",
+    // Refusing defaults, not permissive ones. An unwired panel must not report a
+    // saved credential or a completed restore.
+    onSave = async () => ({ ok: false, message: "Settings are not wired up." }),
+    onRestore = async () => ({ ok: false, message: "Restore is not wired up." }),
+    onClose = () => {
+    }
+  } = {}) {
+    const make = (tag2, className, text) => {
+      const node = doc.createElement(tag2);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const tag = (node, value) => {
+      node.setAttribute("data-psnppp", value);
+      return node;
+    };
+    const show = (node, visible) => {
+      node.hidden = !visible;
+      node.style.display = visible ? "" : "none";
+    };
+    const element = make("div");
+    element.id = PANEL_ID;
+    element.setAttribute("role", "dialog");
+    element.setAttribute("aria-label", "PSNP++ settings");
+    const head = make("div", "psnppp-head");
+    head.appendChild(make("span", "psnppp-title", "PSNP++"));
+    const closeButton = tag(make("button", "psnppp-close", "\xD7"), "close");
+    closeButton.setAttribute("type", "button");
+    closeButton.setAttribute("aria-label", "Close settings");
+    closeButton.addEventListener("click", () => close());
+    head.appendChild(closeButton);
+    element.appendChild(head);
+    const tabBar = make("div", "psnppp-tabs");
+    tabBar.setAttribute("role", "tablist");
+    const tabButtons = /* @__PURE__ */ new Map();
+    const panes = /* @__PURE__ */ new Map();
+    for (const { name, label } of TABS) {
+      const button = tag(make("button", "psnppp-tab", label), `tab-${name}`);
+      button.setAttribute("type", "button");
+      button.setAttribute("role", "tab");
+      button.addEventListener("click", () => selectTab(name));
+      tabBar.appendChild(button);
+      tabButtons.set(name, button);
+    }
+    element.appendChild(tabBar);
+    const syncPane = tag(make("div", "psnppp-pane"), "pane-sync");
+    const endpointField = make("div", "psnppp-field");
+    const endpointLabel = make("label", "psnppp-fieldlabel", "Endpoint");
+    endpointLabel.setAttribute("for", "psnppp-endpoint");
+    endpointField.appendChild(endpointLabel);
+    const endpointInput = tag(make("input", "psnppp-input"), "endpoint");
+    endpointInput.id = "psnppp-endpoint";
+    endpointInput.setAttribute("type", "text");
+    endpointInput.setAttribute("spellcheck", "false");
+    endpointInput.setAttribute("autocomplete", "off");
+    endpointInput.value = config?.endpoint ?? "";
+    endpointField.appendChild(endpointInput);
+    syncPane.appendChild(endpointField);
+    const keyField = make("div", "psnppp-field");
+    const keyLabel = make("label", "psnppp-fieldlabel", "Sync key");
+    keyLabel.setAttribute("for", "psnppp-key");
+    keyField.appendChild(keyLabel);
+    const keyInput = tag(make("input", "psnppp-input"), "key");
+    keyInput.id = "psnppp-key";
+    keyInput.setAttribute("type", "password");
+    keyInput.setAttribute("autocomplete", "off");
+    keyInput.value = "";
+    keyField.appendChild(keyInput);
+    keyField.appendChild(tag(
+      make("div", "psnppp-hint", describeStoredKey(config?.key)),
+      "keyhint"
+    ));
+    syncPane.appendChild(keyField);
+    const syncActions = make("div", "psnppp-actions");
+    const cancelButton = tag(make("button", "psnppp-btn", "Cancel"), "cancel");
+    cancelButton.setAttribute("type", "button");
+    cancelButton.addEventListener("click", () => close());
+    syncActions.appendChild(cancelButton);
+    const saveButton = tag(make("button", "psnppp-btn psnppp-btn-key", "Save"), "save");
+    saveButton.setAttribute("type", "button");
+    saveButton.addEventListener("click", () => {
+      submit().catch((error) => {
+        showMessage(describeFailure(error, "Could not save your settings"), { error: true });
+      });
+    });
+    syncActions.appendChild(saveButton);
+    syncPane.appendChild(syncActions);
+    element.appendChild(syncPane);
+    panes.set("sync", syncPane);
+    const backupsPane = tag(make("div", "psnppp-pane"), "pane-backups");
+    if (backups.length === 0) {
+      backupsPane.appendChild(tag(
+        make("div", "psnppp-empty", "No backups yet. One is taken before every merge that writes."),
+        "backups-empty"
+      ));
+    } else {
+      for (const entry of backups) {
+        backupsPane.appendChild(backupRow(entry));
+      }
+    }
+    element.appendChild(backupsPane);
+    panes.set("backups", backupsPane);
+    function backupRow(entry) {
+      const row = tag(make("div", "psnppp-row"), "backup-row");
+      const main = make("div", "psnppp-rowmain", stamp(entry?.at));
+      main.appendChild(tag(
+        make("span", "psnppp-rowmeta", countOf(Number(entry?.listCount) || 0, "list")),
+        "backup-count"
+      ));
+      row.appendChild(main);
+      const restoreButton = tag(make("button", "psnppp-btn", "Restore"), "restore");
+      restoreButton.setAttribute("type", "button");
+      row.appendChild(restoreButton);
+      const confirm = tag(make("div", "psnppp-confirm"), "backup-confirm");
+      confirm.appendChild(make("div", null, "Replace your lists with this backup?"));
+      const confirmActions = make("div", "psnppp-actions");
+      const keepButton = tag(make("button", "psnppp-btn", "Keep mine"), "restore-cancel");
+      keepButton.setAttribute("type", "button");
+      keepButton.addEventListener("click", () => {
+        show(confirm, false);
+        show(restoreButton, true);
+      });
+      confirmActions.appendChild(keepButton);
+      const goButton = tag(make("button", "psnppp-btn psnppp-btn-danger", "Replace lists"), "restore-confirm");
+      goButton.setAttribute("type", "button");
+      goButton.addEventListener("click", () => {
+        runRestore(entry?.id, goButton).catch((error) => {
+          goButton.disabled = false;
+          showMessage(describeFailure(error, "Could not restore that backup"), { error: true });
+        });
+      });
+      confirmActions.appendChild(goButton);
+      confirm.appendChild(confirmActions);
+      show(confirm, false);
+      row.appendChild(confirm);
+      restoreButton.addEventListener("click", () => {
+        show(restoreButton, false);
+        show(confirm, true);
+      });
+      return row;
+    }
+    const logPane = tag(make("div", "psnppp-pane"), "pane-log");
+    if (history.length === 0) {
+      logPane.appendChild(tag(
+        make(
+          "div",
+          "psnppp-empty",
+          "No sync changes yet. Only syncs that actually wrote to your lists are logged, so a run of quiet syncs leaves this empty."
+        ),
+        "log-empty"
+      ));
+    } else {
+      for (const entry of history) {
+        const row = tag(make("div", "psnppp-row"), "log-row");
+        const main = make("div", "psnppp-rowmain", stamp(entry?.at));
+        main.appendChild(make(
+          "span",
+          "psnppp-rowmeta",
+          `r${entry?.revision} \u2014 ${describeDelta2(entry?.delta)}`
+        ));
+        row.appendChild(main);
+        logPane.appendChild(row);
+      }
+    }
+    element.appendChild(logPane);
+    panes.set("log", logPane);
+    const message = tag(make("div", "psnppp-message"), "message");
+    show(message, false);
+    element.appendChild(message);
+    function showMessage(text, { error = false } = {}) {
+      message.textContent = text;
+      message.className = error ? "psnppp-message psnppp-message-error" : "psnppp-message";
+      message.setAttribute("role", error ? "alert" : "status");
+      show(message, Boolean(text));
+    }
+    function clearMessage() {
+      showMessage("");
+    }
+    let currentTab = null;
+    function selectTab(name) {
+      if (!panes.has(name) || name === currentTab) return;
+      currentTab = name;
+      for (const [key, pane] of panes) show(pane, key === name);
+      for (const [key, button] of tabButtons) {
+        button.setAttribute("aria-selected", key === name ? "true" : "false");
+        button.setAttribute("tabindex", key === name ? "0" : "-1");
+      }
+    }
+    async function submit() {
+      clearMessage();
+      const result = await onSave({ endpoint: endpointInput.value, key: keyInput.value });
+      if (!result || result.ok !== true) {
+        showMessage(result?.message ?? "Could not save your settings.", { error: true });
+        return;
+      }
+      close();
+    }
+    async function runRestore(id, button) {
+      clearMessage();
+      button.disabled = true;
+      const result = await onRestore(id);
+      if (!result || result.ok !== true) {
+        button.disabled = false;
+        showMessage(result?.message ?? "Could not restore that backup.", { error: true });
+        return;
+      }
+      showMessage(result.message ?? "Backup restored.");
+    }
+    let closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      try {
+        element.remove?.();
+      } catch (error) {
+        console.error("[psnppp] could not remove the settings panel:", error);
+      }
+      try {
+        onClose();
+      } catch (error) {
+        console.error("[psnppp] settings panel onClose failed:", error);
+      }
+    }
+    element.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" && event.key !== "Esc") return;
+      event.stopPropagation?.();
+      close();
+    });
+    selectTab(TABS[0].name);
+    position();
+    function position() {
+      const view = {
+        width: globalThis.window?.innerWidth ?? 0,
+        height: globalThis.window?.innerHeight ?? 0
+      };
+      const rect = typeof anchor?.getBoundingClientRect === "function" ? anchor.getBoundingClientRect() : null;
+      if (!rect || !view.width || !view.height) {
+        element.style.right = `${EDGE_INSET_PX}px`;
+        element.style.bottom = `${EDGE_INSET_PX * 2 + CHIP_FALLBACK_SIZE.height}px`;
+        return;
+      }
+      const width = Math.min(PANEL_WIDTH_PX, Math.max(0, view.width - EDGE_INSET_PX * 2));
+      element.style.left = `${clampAxis(rect.left, width, view.width, EDGE_INSET_PX)}px`;
+      element.style.right = "auto";
+      const spaceBelow = view.height - rect.bottom;
+      if (spaceBelow >= rect.top) {
+        element.style.top = `${Math.round(rect.bottom + EDGE_INSET_PX)}px`;
+        element.style.bottom = "auto";
+      } else {
+        element.style.bottom = `${Math.round(view.height - rect.top + EDGE_INSET_PX)}px`;
+        element.style.top = "auto";
+      }
+    }
+    return { element, close, showMessage };
   }
 
   // userscript/src/merger.mjs
@@ -893,69 +1781,93 @@ ${names}
 Link them so they stay in sync? Choose Cancel to keep them separate.`
     );
   }
-  function showSyncHistory(history) {
-    if (history.length === 0) {
-      window.alert(
-        "PSNP++ \u2014 no sync changes recorded yet.\n\nOnly syncs that actually wrote to your lists are logged here, so a run of quiet syncs leaves this empty."
-      );
-      return;
-    }
-    const lines = history.map(
-      (entry) => `${new Date(entry.at).toLocaleString()} \u2014 r${entry.revision} \u2014 ${describeDelta(entry.delta)}`
-    );
-    window.alert(`PSNP++ \u2014 recent sync changes (newest first):
-
-${lines.join("\n")}`);
-  }
-  async function openSettings() {
+  var activePanel = null;
+  var PENDING_PANEL = { close() {
+  } };
+  async function openSettings({ chip = null } = {}) {
+    let panel = null;
+    let mounted = false;
     try {
-      const backups = await listBackups();
-      const history = await listSyncHistory();
-      const choice = window.prompt(
-        `PSNP++
-
-1 \u2014 Enter endpoint and sync key
-2 \u2014 Restore a pre-merge backup (${backups.length} available)
-3 \u2014 Recent sync changes (${history.length})
-
-Choose 1, 2 or 3:`,
-        "1"
-      );
-      if (choice === "1") {
-        await promptForConfig();
+      if (activePanel) {
+        const open = activePanel;
+        activePanel = null;
+        open.close();
         return;
       }
-      if (choice === "3") {
-        showSyncHistory(history);
-        return;
-      }
-      if (choice !== "2") return;
-      if (backups.length === 0) {
-        window.alert("PSNP++ \u2014 no backups yet.");
-        return;
-      }
-      const menu = backups.map((entry, index2) => `${index2 + 1} \u2014 ${new Date(entry.at).toLocaleString()} (${entry.listCount} lists)`).join("\n");
-      const picked = window.prompt(`PSNP++ \u2014 restore which backup?
-
-${menu}
-
-Enter a number:`, "1");
-      const index = Number(picked) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
-      const chosen = backups[index];
-      const confirmed = window.confirm(
-        `PSNP++ \u2014 restore the backup from ${new Date(chosen.at).toLocaleString()} (${chosen.listCount} lists)? This replaces your current lists.`
-      );
-      if (!confirmed) return;
-      const restored = await restoreBackup(chosen.id);
-      const { syncable: currentLists } = readSyncable(window.localStorage);
-      await saveBackup(currentLists);
-      writeSyncable(window.localStorage, restored);
-      window.alert("PSNP++ \u2014 backup restored. Reloading.");
-      window.location.reload();
+      activePanel = PENDING_PANEL;
+      const [backups, history, config, loadError] = await loadPanelData();
+      await new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          activePanel = null;
+          try {
+            chip?.setPanelOpen?.(false);
+          } catch (error) {
+            console.error("[psnppp] could not un-mark the chip:", error);
+          }
+          resolve();
+        };
+        panel = createSettingsPanel({
+          anchor: chip?.element ?? null,
+          config,
+          backups,
+          history,
+          describeDelta,
+          onSave: async ({ endpoint, key }) => {
+            try {
+              return await applyConfig({ endpoint, key });
+            } catch (error) {
+              console.error("[psnppp] could not save settings:", error);
+              return { ok: false, message: describeFailure(error, "Could not save your settings") };
+            }
+          },
+          onRestore: async (id) => {
+            try {
+              const restored = await restoreBackup(id);
+              const { syncable: currentLists } = readSyncable(window.localStorage);
+              await saveBackup(currentLists);
+              writeSyncable(window.localStorage, restored);
+              window.location.reload();
+              return { ok: true, message: "Backup restored. Reloading." };
+            } catch (error) {
+              console.error("[psnppp] could not restore a backup:", error);
+              return { ok: false, message: describeFailure(error, "Could not restore that backup") };
+            }
+          },
+          onClose: finish
+        });
+        activePanel = panel;
+        chip?.setPanelOpen?.(true);
+        document.body.appendChild(panel.element);
+        mounted = true;
+        if (loadError) panel.showMessage(loadError, { error: true });
+      });
     } catch (error) {
-      window.alert(`PSNP++ \u2014 settings/restore failed: ${String(error?.message ?? error)}`);
+      console.error("[psnppp] settings failed:", error);
+      if (mounted && panel) {
+        panel.showMessage(describeFailure(error, "Settings failed"), { error: true });
+        return;
+      }
+      activePanel = null;
+      chip?.setPanelOpen?.(false);
+      window.alert(`PSNP++ \u2014 ${describeFailure(error, "settings failed")}`);
     }
+  }
+  async function loadPanelData() {
+    const [backups, history, config] = await Promise.allSettled([
+      listBackups(),
+      listSyncHistory(),
+      loadConfig()
+    ]);
+    const failures = [backups, history, config].filter((result) => result.status === "rejected").map((result) => describeFailure(result.reason, "Could not read your saved settings"));
+    return [
+      backups.status === "fulfilled" ? backups.value : [],
+      history.status === "fulfilled" ? history.value : [],
+      config.status === "fulfilled" ? config.value : { endpoint: DEFAULT_ENDPOINT, key: "" },
+      failures[0] ?? ""
+    ];
   }
   async function handleSyncNowClick({ loadConfig: loadConfig2, openSettings: openSettings2, sync }) {
     const config = await loadConfig2();
@@ -965,15 +1877,15 @@ Enter a number:`, "1");
     }
     await sync();
   }
-  var countOf = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  var countOf2 = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
   function describeDelta(delta) {
     if (delta == null) return "lists updated";
     const parts = [];
-    if (delta.gamesAdded > 0) parts.push(`+${countOf(delta.gamesAdded, "game")}`);
-    if (delta.gamesRemoved > 0) parts.push(`-${countOf(delta.gamesRemoved, "game")}`);
-    if (delta.listsAdded > 0) parts.push(`+${countOf(delta.listsAdded, "list")}`);
-    if (delta.listsRemoved > 0) parts.push(`-${countOf(delta.listsRemoved, "list")}`);
-    if (delta.listsLinked > 0) parts.push(`${countOf(delta.listsLinked, "list")} linked`);
+    if (delta.gamesAdded > 0) parts.push(`+${countOf2(delta.gamesAdded, "game")}`);
+    if (delta.gamesRemoved > 0) parts.push(`-${countOf2(delta.gamesRemoved, "game")}`);
+    if (delta.listsAdded > 0) parts.push(`+${countOf2(delta.listsAdded, "list")}`);
+    if (delta.listsRemoved > 0) parts.push(`-${countOf2(delta.listsRemoved, "list")}`);
+    if (delta.listsLinked > 0) parts.push(`${countOf2(delta.listsLinked, "list")} linked`);
     return parts.length > 0 ? parts.join(", ") : "lists updated";
   }
   function describeSyncResult(result) {
@@ -1016,7 +1928,7 @@ Enter a number:`, "1");
       setState(state, detail);
     };
   }
-  var INSECURE_ENDPOINT_WARNING = "WARNING: this endpoint is not https, so your sync key is sent unencrypted. Right-click and choose 1 to change it.";
+  var INSECURE_ENDPOINT_WARNING = "WARNING: this endpoint is not https, so your sync key is sent unencrypted. Right-click the chip and change it on the Sync tab.";
   function decorateDetail(detail, endpoint) {
     if (isAllowedEndpoint(endpoint)) return detail;
     return detail ? `${INSECURE_ENDPOINT_WARNING}
@@ -1028,12 +1940,14 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
     } catch (error) {
       console.error("[psnppp] GM storage migration failed:", error);
     }
-    const indicator = createIndicator({
+    let indicator;
+    const settings = () => openSettings({ chip: indicator });
+    indicator = createIndicator({
       onSyncNow: () => {
-        void handleSyncNowClick({ loadConfig, openSettings, sync });
+        void handleSyncNowClick({ loadConfig, openSettings: settings, sync });
       },
       onSettings: async () => {
-        await openSettings();
+        await settings();
         void sync();
       },
       // Only ever reached from the `reload` state, i.e. after a cycle that
@@ -1051,6 +1965,9 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
       }
     });
     document.body.appendChild(indicator.element);
+    indicator.restorePosition().catch((error) => {
+      console.error("[psnppp] could not restore the chip position:", error);
+    });
     const paint = createIndicatorPainter(indicator.setState);
     let running = false;
     let pending = false;
@@ -1088,7 +2005,7 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
           }
         }
       } catch (error) {
-        paint("offline", String(error?.message ?? error));
+        paint("offline", describeFailure(error, "Sync failed"));
       } finally {
         running = false;
         if (pending) {

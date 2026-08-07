@@ -3,68 +3,417 @@ import assert from 'node:assert/strict';
 import { saveBackup, listBackups } from '../src/backup.mjs';
 import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
+import { loadConfig, saveConfig } from '../src/config.mjs';
 import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta,
   createIndicatorPainter, decorateDetail, currentScriptVersion } from '../src/main.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
+import { describeFailure, createSettingsPanel } from '../src/panel.mjs';
+import { installFakeDocument, uninstallFakeDocument, installFakeWindow, uninstallFakeWindow,
+  installFakeGM, uninstallFakeGM, fakeStorage, find, findAll, isVisible } from './fake-dom.mjs';
 
 /**
  * main.mjs is the browser entry point and is otherwise verified in a real
  * browser during deploy (per the project's own convention — see sync-cycle.mjs
  * vs. main.mjs). openSettings is the one exception: it is the escape-hatch
  * restore path, and a review round found a real ordering bug in it (R1), so
- * it is worth pinning against fake GM/window globals the same way backup.mjs
- * and config.mjs are already tested against a fake GM.
+ * it is worth pinning against fake GM/window/document globals the same way
+ * backup.mjs and config.mjs are already tested against a fake GM.
+ *
+ * These used to script `window.prompt` answers ('2', then '1'). They now click
+ * the panel that replaced those dialogs — same behaviour, real gestures. The
+ * fake window still carries prompt/alert/confirm, but only so a test can prove
+ * none of them was reached.
  */
-
-const fakeStorage = (initial = {}) => {
-  const data = { ...initial };
-  return {
-    getItem: key => (key in data ? data[key] : null),
-    setItem: (key, value) => { data[key] = String(value); },
-    removeItem: key => { delete data[key]; }
-  };
-};
 
 const list = (id, name, games = []) => ({
   id, name, tags: [], removeStartedGames: false, removeGames: false,
   orderBy: 'custom', direction: 'ascending', note: '', timestamp: 100, games
 });
 
-/** A fake GM.* backed by a Map, so backup.mjs can be exercised in node. */
-function installFakeGM() {
-  const store = new Map();
-  globalThis.GM = {
-    async getValue(key, fallback) { return store.has(key) ? store.get(key) : fallback; },
-    async setValue(key, value) { store.set(key, value); },
-    async deleteValue(key) { store.delete(key); }
-  };
-  return store;
-}
-function uninstallFakeGM() { delete globalThis.GM; }
+/** Drain the microtask queue so the panel's async work has finished. */
+const settle = () => new Promise(resolve => { setImmediate(resolve); });
 
 /**
- * A fake window.* with scripted prompt/confirm answers, consumed in order.
- * Every prompt call is also recorded, so a test can assert on the menu text
- * itself and not only on what the answer produced.
+ * Open the settings panel and hand back everything a test needs to drive it.
+ *
+ * openSettings does not resolve until the panel CLOSES, so its promise is held
+ * rather than awaited — exactly as the chip's own contextmenu handler holds it.
  */
-function installFakeWindow(storage, { prompts = [], confirms = [] } = {}) {
-  const alerts = [];
-  const promptCalls = [];
-  let reloaded = false;
-  globalThis.window = {
-    localStorage: storage,
-    prompt: (message, initial) => {
-      promptCalls.push({ message, initial });
-      return prompts.length ? prompts.shift() : null;
+async function openPanel(storage) {
+  const dom = installFakeDocument();
+  const fake = installFakeWindow({ localStorage: storage });
+  const closed = openSettings();
+  await settle();
+  return {
+    dom,
+    fake,
+    closed,
+    get panel() { return dom.panel; },
+    node: name => find(dom.panel, name),
+    nodes: name => findAll(dom.panel, name),
+    async click(name) {
+      const node = find(dom.panel, name);
+      assert.ok(node, `no such control: ${name}`);
+      node.dispatch('click');
+      await settle();
     },
-    confirm: () => (confirms.length ? confirms.shift() : true),
-    alert: message => { alerts.push(message); },
-    location: { reload: () => { reloaded = true; } }
+    /**
+     * Close anything still open before restoring the globals.
+     *
+     * openSettings keeps module-level state for the one panel that may exist at
+     * a time. A test that walks away from an open panel would leave that set,
+     * and the NEXT test's openSettings would helpfully close it instead of
+     * opening its own — every later test in the file failing for a reason that
+     * has nothing to do with what it is testing.
+     */
+    teardown() {
+      find(dom.panel, 'close')?.dispatch('click');
+      uninstallFakeWindow();
+      uninstallFakeDocument();
+    }
   };
-  return { alerts, promptCalls, wasReloaded: () => reloaded };
 }
-function uninstallFakeWindow() { delete globalThis.window; }
+
+/** Every assertion that "no browser dialog was used" shares this. */
+const assertNoDialogs = fake => {
+  assert.deepEqual(fake.prompts, [], 'window.prompt must be gone from the settings path');
+  assert.deepEqual(fake.confirms, [], 'window.confirm must be gone from the settings path');
+  assert.deepEqual(fake.alerts, [], `window.alert must be gone: ${fake.alerts.join(' | ')}`);
+};
+
+// --- the panel opens and closes ---------------------------------------------
+
+test('the settings panel opens on the page and closes without leaving anything behind', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    const ui = await openPanel(storage);
+    try {
+      assert.ok(ui.panel, 'the panel must be in the document');
+      assert.equal(ui.panel.getAttribute('role'), 'dialog');
+      assertNoDialogs(ui.fake);
+
+      await ui.click('close');
+      await ui.closed;
+
+      assert.equal(ui.dom.panel, null, 'closing must remove the panel from the page');
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a second request closes the open panel rather than stacking another', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    const ui = await openPanel(storage);
+    try {
+      assert.equal(findAll(ui.dom.body, 'close').length, 1);
+      const again = openSettings();
+      await settle();
+      await again;
+      await ui.closed;
+      assert.equal(ui.dom.panel, null);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the panel never focuses itself — this is somebody else\'s page', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    const ui = await openPanel(storage);
+    try {
+      let focused = 0;
+      for (const name of ['endpoint', 'key']) {
+        const node = ui.node(name);
+        node.focus = () => { focused += 1; };
+      }
+      // Nothing has run since the panel was built, so if it were going to steal
+      // the caret it would already have done it; re-opening proves the same.
+      assert.equal(focused, 0);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('two requests that overlap while storage is being read still yield one panel', async () => {
+  // The single-panel guard used to be read three awaited storage reads before
+  // `activePanel` was assigned. A left-click (which awaits loadConfig, then
+  // opens settings when no key is stored) and a right-click landing in that
+  // window both built a panel and appended it — leaving the first orphaned on
+  // the page forever, with its promise pending.
+  installFakeGM();
+  const storage = fakeStorage();
+  const dom = installFakeDocument();
+  const fake = installFakeWindow({ localStorage: storage });
+  try {
+    const first = openSettings();
+    const second = openSettings();
+    await settle();
+    await second;
+
+    assert.equal(findAll(dom.body, 'close').length, 1, 'exactly one panel may exist');
+    find(dom.panel, 'close')?.dispatch('click');
+    await first;
+    assert.equal(dom.panel, null);
+    assertNoDialogs(fake);
+  } finally {
+    find(dom.panel, 'close')?.dispatch('click');
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+    uninstallFakeGM();
+  }
+});
+
+test('an unreadable backup index does not replace the user\'s endpoint with the default', async () => {
+  // The three reads used to share one try, sequentially, so a listBackups
+  // failure skipped loadConfig entirely — the form then rendered
+  // DEFAULT_ENDPOINT over the real one, and Save would have committed it.
+  installFakeGM();
+  await saveConfig({ endpoint: 'https://mine.test/api', key: 'super-secret-key' });
+  const realGetValue = globalThis.GM.getValue;
+  globalThis.GM.getValue = async (key, fallback) => {
+    if (key === 'psnppp.backups') throw new Error('backup index is corrupt');
+    return realGetValue(key, fallback);
+  };
+  const storage = fakeStorage();
+  try {
+    const ui = await openPanel(storage);
+    try {
+      assert.equal(ui.node('endpoint').value, 'https://mine.test/api',
+        'the real endpoint must survive an unrelated read failure');
+      assert.match(ui.node('keyhint').textContent, /already stored/i);
+      assert.match(ui.node('message').textContent, /backup index is corrupt/);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a thrown null or undefined never reaches the user as the word "undefined"', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    await saveBackup([list('b', 'B')], 1000);
+    // restoreBackup throws a plain Error, so force the exotic case at the layer
+    // that actually converts it.
+    assert.equal(describeFailure(null, 'Could not restore that backup'),
+      'Could not restore that backup.');
+    assert.equal(describeFailure(undefined, 'Could not save your settings'),
+      'Could not save your settings.');
+    assert.equal(describeFailure({}, 'Settings failed'), 'Settings failed.');
+    assert.equal(describeFailure(new Error('disk is full'), 'Settings failed'),
+      'Settings failed: disk is full');
+    // An object whose message getter throws must not fault inside the catch.
+    const hostile = { get message() { throw new Error('nope'); } };
+    assert.doesNotThrow(() => describeFailure(hostile, 'Settings failed'));
+
+    for (const bad of [null, undefined, {}, hostile]) {
+      assert.doesNotMatch(describeFailure(bad, 'Settings failed'), /undefined|null|\[object/,
+        `describeFailure(${String(bad === hostile ? 'hostile' : bad)}) leaked a raw coercion`);
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a malformed result from the wiring is a failure, never a silent success', async () => {
+  // The destructive control may not default to "it worked". A handler that
+  // returns undefined (or a rejected-shape object) used to close the panel
+  // reporting a saved credential, and print "Backup restored." for a restore
+  // that never happened.
+  const dom = installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  try {
+    for (const result of [undefined, null, {}, { ok: 'true' }, { ok: false }]) {
+      const panel = createSettingsPanel({
+        backups: [{ id: 'b1', at: 1000, listCount: 3 }],
+        onSave: async () => result,
+        onRestore: async () => result
+      });
+      dom.body.appendChild(panel.element);
+
+      find(panel.element, 'save').dispatch('click');
+      await settle();
+      assert.ok(isVisible(find(panel.element, 'message')),
+        `save must report ${JSON.stringify(result)} as a failure`);
+      assert.equal(find(panel.element, 'message').getAttribute('role'), 'alert');
+      assert.ok(panel.element.parentNode ?? panel.element.parent, 'and must not close');
+
+      const row = find(panel.element, 'backup-row');
+      find(row, 'restore').dispatch('click');
+      find(row, 'restore-confirm').dispatch('click');
+      await settle();
+      assert.match(find(panel.element, 'message').textContent, /could not restore/i,
+        `restore must report ${JSON.stringify(result)} as a failure`);
+      // The button has to come back, or the escape hatch is a one-shot.
+      assert.equal(find(row, 'restore-confirm').disabled, false);
+      panel.close();
+    }
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('an unwired panel refuses rather than claiming success', async () => {
+  const dom = installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  try {
+    const panel = createSettingsPanel({ backups: [{ id: 'b1', at: 1000, listCount: 1 }] });
+    dom.body.appendChild(panel.element);
+    find(panel.element, 'save').dispatch('click');
+    await settle();
+    assert.match(find(panel.element, 'message').textContent, /not wired up/i);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+// --- credentials -------------------------------------------------------------
+
+test('the stored key is never painted into the form', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    await saveConfig({ endpoint: 'https://example.test/api', key: 'super-secret-key' });
+    const ui = await openPanel(storage);
+    try {
+      assert.equal(ui.node('key').value, '', 'the key field must start empty');
+      assert.equal(ui.node('endpoint').value, 'https://example.test/api',
+        'the endpoint is not a secret and stays pre-filled');
+      assert.equal(ui.panel.textContent.includes('super-secret-key'), false,
+        'the key leaked into the panel');
+      assert.match(ui.node('keyhint').textContent, /already stored/i);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('saving credentials stores them and closes the panel', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    const ui = await openPanel(storage);
+    try {
+      ui.node('endpoint').value = 'https://new.test/api';
+      ui.node('key').value = 'brand-new-key';
+      await ui.click('save');
+      await ui.closed;
+
+      assert.deepEqual(await loadConfig(), { endpoint: 'https://new.test/api', key: 'brand-new-key' });
+      assert.equal(ui.dom.panel, null);
+      assertNoDialogs(ui.fake);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('an http endpoint is refused with the reason on screen, and nothing is stored', async () => {
+  // This message used to be a window.alert. Losing it in the move to a panel
+  // would leave the user with a Save button that silently does nothing.
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    await saveConfig({ endpoint: 'https://good.test/api', key: 'super-secret-key' });
+    const ui = await openPanel(storage);
+    try {
+      ui.node('endpoint').value = 'http://trippixn.com/api/psnppp';
+      ui.node('key').value = 'whatever';
+      await ui.click('save');
+
+      const message = ui.node('message');
+      assert.ok(isVisible(message), 'the refusal must be visible');
+      assert.match(message.textContent, /https/i);
+      assert.equal(message.getAttribute('role'), 'alert');
+      assert.ok(ui.dom.panel, 'a refused save must not close the panel');
+      assert.deepEqual(await loadConfig(),
+        { endpoint: 'https://good.test/api', key: 'super-secret-key' });
+      assertNoDialogs(ui.fake);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('cancelling changes nothing at all', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    await saveConfig({ endpoint: 'https://good.test/api', key: 'super-secret-key' });
+    await saveBackup([list('backup-1', 'Backup One')], 1000);
+    const listsBefore = storage.getItem(LISTS_KEY);
+
+    const ui = await openPanel(storage);
+    try {
+      // Type over everything, then back out.
+      ui.node('endpoint').value = 'https://somewhere.else/api';
+      ui.node('key').value = 'a-different-key';
+      await ui.click('cancel');
+      await ui.closed;
+
+      assert.deepEqual(await loadConfig(),
+        { endpoint: 'https://good.test/api', key: 'super-secret-key' });
+      assert.equal(storage.getItem(LISTS_KEY), listsBefore);
+      assert.equal(ui.fake.wasReloaded(), false);
+      assert.equal((await listBackups()).length, 1, 'cancelling must not take a backup');
+      assert.equal(ui.dom.panel, null);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('Escape closes the panel and changes nothing', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    await saveConfig({ endpoint: 'https://good.test/api', key: 'k' });
+    const ui = await openPanel(storage);
+    try {
+      ui.node('endpoint').value = 'https://nope.test/api';
+      ui.panel.dispatch('keydown', { key: 'Escape', stopPropagation() {} });
+      await ui.closed;
+
+      assert.equal(ui.dom.panel, null);
+      assert.deepEqual(await loadConfig(), { endpoint: 'https://good.test/api', key: 'k' });
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+// --- restore -----------------------------------------------------------------
 
 test('restoring the oldest of 5 full backup slots succeeds without evicting itself', async () => {
   installFakeGM();
@@ -84,23 +433,54 @@ test('restoring the oldest of 5 full backup slots succeeds without evicting itse
     const backups = await listBackups();
     assert.equal(backups.length, 5);
     // listBackups is newest-first (backup.test.mjs pins this), so the oldest
-    // entry is the LAST menu row — number 5 in the 1-based prompt.
-    const oldestMenuNumber = String(backups.length);
+    // entry is the LAST row in the panel.
     assert.equal(backups[backups.length - 1].listCount, 1);
 
-    const fake = installFakeWindow(storage, {
-      prompts: ['2', oldestMenuNumber], // "2" = restore a backup, then pick the oldest
-      confirms: [true]
-    });
+    const ui = await openPanel(storage);
     try {
-      await openSettings();
-    } finally {
-      uninstallFakeWindow();
-    }
+      await ui.click('tab-backups');
+      const rows = ui.nodes('backup-row');
+      assert.equal(rows.length, 5);
 
-    assert.deepEqual(readLists(storage).map(l => l.id), ['oldest']);
-    assert.equal(fake.alerts.some(a => /failed/i.test(a)), false, `unexpected alert(s): ${fake.alerts.join(' | ')}`);
-    assert.ok(fake.wasReloaded());
+      const oldestRow = rows[rows.length - 1];
+      find(oldestRow, 'restore').dispatch('click');
+      await settle();
+      find(oldestRow, 'restore-confirm').dispatch('click');
+      await settle();
+
+      assert.deepEqual(readLists(storage).map(l => l.id), ['oldest']);
+      assert.equal(/could not|failed/i.test(ui.node('message').textContent), false,
+        `unexpected failure: ${ui.node('message').textContent}`);
+      assert.ok(ui.fake.wasReloaded());
+      assertNoDialogs(ui.fake);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the backup rows are newest first, with the time and the list count', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    await saveBackup([list('a', 'A')], 1000);
+    await saveBackup([list('b', 'B'), list('c', 'C')], 2000);
+
+    const ui = await openPanel(storage);
+    try {
+      await ui.click('tab-backups');
+      const rows = ui.nodes('backup-row');
+      assert.equal(rows.length, 2);
+      // Newest first: the two-list snapshot was taken second.
+      assert.match(find(rows[0], 'backup-count').textContent, /2 lists/);
+      assert.match(find(rows[1], 'backup-count').textContent, /1 list\b/);
+      assert.match(rows[0].textContent, new RegExp(new Date(2000).toLocaleString()
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    } finally {
+      ui.teardown();
+    }
   } finally {
     uninstallFakeGM();
   }
@@ -115,18 +495,106 @@ test('declining the restore confirmation leaves storage untouched', async () => 
     await saveBackup([list('backup-1', 'Backup One')], 1000);
     const before = storage.getItem(LISTS_KEY);
 
-    const fake = installFakeWindow(storage, {
-      prompts: ['2', '1'],
-      confirms: [false] // decline the "replace your current lists?" confirm
-    });
+    const ui = await openPanel(storage);
     try {
-      await openSettings();
-    } finally {
-      uninstallFakeWindow();
-    }
+      await ui.click('tab-backups');
+      const row = ui.nodes('backup-row')[0];
 
-    assert.equal(storage.getItem(LISTS_KEY), before);
-    assert.equal(fake.wasReloaded(), false);
+      find(row, 'restore').dispatch('click');
+      await settle();
+      assert.ok(isVisible(find(row, 'backup-confirm')), 'the confirmation must appear in the row');
+
+      find(row, 'restore-cancel').dispatch('click');
+      await settle();
+
+      assert.equal(storage.getItem(LISTS_KEY), before);
+      assert.equal(ui.fake.wasReloaded(), false);
+      assert.equal((await listBackups()).length, 1, 'declining must not take a backup either');
+      assert.ok(ui.dom.panel, 'and must not close the panel');
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a restore that cannot be read says so, on screen, and leaves the lists alone', async () => {
+  // The escape hatch's own failure mode. It used to be a window.alert; if the
+  // panel swallowed it the user would click "Replace lists", see nothing
+  // happen, and have no idea whether their lists had just been overwritten.
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    await saveBackup([list('gone', 'Gone')], 1000);
+    // The index entry survives, the blob does not — what an evicted or
+    // half-deleted slot looks like from here.
+    await GM.deleteValue('psnppp.backup.1000');
+    const before = storage.getItem(LISTS_KEY);
+
+    const ui = await openPanel(storage);
+    try {
+      await ui.click('tab-backups');
+      const row = ui.nodes('backup-row')[0];
+      find(row, 'restore').dispatch('click');
+      await settle();
+      find(row, 'restore-confirm').dispatch('click');
+      await settle();
+
+      const message = ui.node('message');
+      assert.ok(isVisible(message), 'the failure must be visible, not swallowed');
+      assert.match(message.textContent, /could not restore/i);
+      assert.match(message.textContent, /No such backup/i, 'and must name what went wrong');
+      assert.equal(message.getAttribute('role'), 'alert');
+
+      assert.equal(storage.getItem(LISTS_KEY), before, 'the lists must be untouched');
+      assert.equal(ui.fake.wasReloaded(), false);
+      assert.ok(ui.dom.panel, 'the panel must stay open so another backup can be tried');
+      assertNoDialogs(ui.fake);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('no backups yet says so rather than showing an empty tab', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    const ui = await openPanel(storage);
+    try {
+      await ui.click('tab-backups');
+      assert.match(ui.node('backups-empty').textContent, /no backups/i);
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('settings that cannot be read still open a panel, with the reason showing', async () => {
+  // Opening is the recovery path. Refusing to open because the backup index is
+  // unreadable would take away the credential form too — and re-entering
+  // credentials is a plausible fix for exactly that.
+  installFakeGM();
+  globalThis.GM.getValue = async () => { throw new Error('extension storage is unavailable'); };
+  const storage = fakeStorage();
+  try {
+    const ui = await openPanel(storage);
+    try {
+      assert.ok(ui.panel, 'the panel must still open');
+      const message = ui.node('message');
+      assert.ok(isVisible(message));
+      assert.match(message.textContent, /extension storage is unavailable/);
+      assert.equal(message.getAttribute('role'), 'alert');
+      assert.deepEqual(ui.fake.alerts, [], 'and it must land in the panel, not in a dialog');
+    } finally {
+      ui.teardown();
+    }
   } finally {
     uninstallFakeGM();
   }
@@ -466,9 +934,9 @@ test('the warning still appears when there is no other detail to show', () => {
   assert.doesNotMatch(detail, /^\s|undefined/);
 });
 
-// --- the settings menu exposes the history ----------------------------------
+// --- the panel exposes the sync history -------------------------------------
 
-test('the settings menu offers the sync history and prints the recorded entries', async () => {
+test('the log tab lists the recorded entries, newest first, in the tooltip\'s own words', async () => {
   installFakeGM();
   const storage = fakeStorage();
   writeLists(storage, [list('current', 'Current')]);
@@ -476,62 +944,99 @@ test('the settings menu offers the sync history and prints the recorded entries'
     await recordSync({ revision: 11, delta: delta({ gamesAdded: 2 }) }, 1000);
     await recordSync({ revision: 12, delta: delta({ listsRemoved: 1 }) }, 2000);
 
-    const fake = installFakeWindow(storage, { prompts: ['3'] });
+    const ui = await openPanel(storage);
     try {
-      await openSettings();
-    } finally {
-      uninstallFakeWindow();
-    }
+      // The tab itself must exist, or the log does not.
+      assert.ok(ui.node('tab-log'));
+      await ui.click('tab-log');
 
-    // The menu itself must advertise the option, or it does not exist.
-    assert.match(fake.promptCalls[0].message, /3 —/);
-    assert.equal(fake.alerts.length, 1);
-    const shown = fake.alerts[0];
-    assert.match(shown, /12/, 'the newest revision must be listed');
-    assert.match(shown, /11/, 'and the older one too');
-    assert.match(shown, /2 games/);
-    assert.match(shown, /1 list\b/);
-    // Reading history must not touch the lists.
-    assert.deepEqual(readLists(storage).map(l => l.id), ['current']);
+      const rows = ui.nodes('log-row');
+      assert.equal(rows.length, 2);
+      assert.match(rows[0].textContent, /r12/, 'the newest revision comes first');
+      assert.match(rows[0].textContent, /1 list\b/);
+      assert.match(rows[1].textContent, /r11/);
+      assert.match(rows[1].textContent, /2 games/);
+
+      // Reading history must not touch the lists.
+      assert.deepEqual(readLists(storage).map(l => l.id), ['current']);
+      assertNoDialogs(ui.fake);
+    } finally {
+      ui.teardown();
+    }
   } finally {
     uninstallFakeGM();
   }
 });
 
-test('an empty history says so rather than showing a blank box', async () => {
+test('an empty history says so rather than showing a blank tab', async () => {
   installFakeGM();
   const storage = fakeStorage();
   writeLists(storage, [list('current', 'Current')]);
   try {
-    const fake = installFakeWindow(storage, { prompts: ['3'] });
+    const ui = await openPanel(storage);
     try {
-      await openSettings();
+      await ui.click('tab-log');
+      assert.equal(ui.nodes('log-row').length, 0);
+      assert.match(ui.node('log-empty').textContent, /no sync/i);
     } finally {
-      uninstallFakeWindow();
+      ui.teardown();
     }
-    assert.equal(fake.alerts.length, 1);
-    assert.match(fake.alerts[0], /no sync/i);
   } finally {
     uninstallFakeGM();
   }
 });
 
-test('the restore flow still works now that the menu has three options', async () => {
-  // The menu's numbering is the only thing standing between "restore a backup"
-  // and "show me a log", and one of them overwrites the user's lists.
+test('only one tab is showing at a time', async () => {
+  // The old menu's numbering was the only thing standing between "restore a
+  // backup" and "show me a log", and one of them overwrites the user's lists.
+  // Tabs replaced it; if two panes were ever open at once, a Restore button
+  // could sit under a heading that says Log.
+  installFakeGM();
+  const storage = fakeStorage();
+  try {
+    await saveBackup([list('backup-1', 'Backup One')], 1000);
+    const ui = await openPanel(storage);
+    try {
+      for (const [tab, pane] of [['tab-sync', 'pane-sync'], ['tab-backups', 'pane-backups'],
+        ['tab-log', 'pane-log']]) {
+        await ui.click(tab);
+        const visible = ['pane-sync', 'pane-backups', 'pane-log'].filter(p => isVisible(ui.node(p)));
+        assert.deepEqual(visible, [pane], `${tab} should show only ${pane}`);
+        assert.equal(ui.node(tab).getAttribute('aria-selected'), 'true');
+      }
+    } finally {
+      ui.teardown();
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the restore flow still works with the panel\'s three tabs', async () => {
   installFakeGM();
   const storage = fakeStorage();
   writeLists(storage, [list('current', 'Current')]);
   try {
     await saveBackup([list('backup-1', 'Backup One')], 1000);
-    const fake = installFakeWindow(storage, { prompts: ['2', '1'], confirms: [true] });
+    const ui = await openPanel(storage);
     try {
-      await openSettings();
+      await ui.click('tab-backups');
+      const row = ui.nodes('backup-row')[0];
+      find(row, 'restore').dispatch('click');
+      await settle();
+      find(row, 'restore-confirm').dispatch('click');
+      await settle();
+
+      assert.deepEqual(readLists(storage).map(l => l.id), ['backup-1']);
+      assert.equal(/could not|failed/i.test(ui.node('message').textContent), false,
+        ui.node('message').textContent);
+      // The lists that were replaced are themselves now a backup — the escape
+      // hatch may not be a one-way door.
+      const backups = await listBackups();
+      assert.equal(backups.length, 2);
     } finally {
-      uninstallFakeWindow();
+      ui.teardown();
     }
-    assert.deepEqual(readLists(storage).map(l => l.id), ['backup-1']);
-    assert.equal(fake.alerts.some(a => /failed/i.test(a)), false, fake.alerts.join(' | '));
   } finally {
     uninstallFakeGM();
   }

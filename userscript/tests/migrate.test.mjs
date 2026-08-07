@@ -316,16 +316,23 @@ test('an index entry with a foreign id is passed through untouched', async () =>
 function installFakeBrowser(storage) {
   const el = () => {
     const node = {
-      id: '', title: '', textContent: '', style: { cssText: '' },
-      children: [], addEventListener() {}
+      id: '', className: '', title: '', textContent: '', style: { cssText: '' },
+      children: [], attrs: new Map(), addEventListener() {}
     };
     node.appendChild = child => { node.children.push(child); };
+    node.setAttribute = (name, value) => { node.attrs.set(name, String(value)); };
+    node.getAttribute = name => (node.attrs.has(name) ? node.attrs.get(name) : null);
     return node;
   };
   const attached = [];
+  const styles = [];
   globalThis.document = {
     readyState: 'complete',
     visibilityState: 'visible',
+    // The widget's scoped stylesheet goes here. Without a head it would fall
+    // back to body and turn up in `attached` alongside the chip, which is what
+    // every assertion below is counting.
+    head: { appendChild: node => { styles.push(node); } },
     body: { appendChild: node => { attached.push(node); } },
     createElement: el,
     addEventListener() {}
@@ -387,7 +394,10 @@ test('start() migrates GM storage before it reads any of it', async () => {
     // not been left mid-sync.
     const chip = restore.attached[0];
     assert.ok(chip, 'the status chip was never attached');
-    const label = chip.children[0].textContent;
+    // By class, not by index: the chip carries a tier rail and the sheen
+    // alongside its label now, and an index would silently start asserting on
+    // whichever decoration happened to be first.
+    const label = chip.children.find(child => child.className === 'psnppp-label').textContent;
     assert.equal(label, 'Offline', `chip should have settled on Offline, got "${label}"`);
     // The detail branch of the title only renders when setState was given the
     // error text, so this pins that the failure reached the chip rather than

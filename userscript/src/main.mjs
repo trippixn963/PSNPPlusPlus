@@ -12,11 +12,12 @@
  */
 
 import { createSyncClient, gmRequest } from './sync-client.mjs';
-import { loadConfig, promptForConfig, isAllowedEndpoint } from './config.mjs';
+import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT } from './config.mjs';
 import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
 import { recordSync, listSyncHistory } from './history.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
+import { createSettingsPanel, describeFailure } from './panel.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
@@ -90,100 +91,170 @@ async function confirmAdoptions(adoptions) {
   );
 }
 
-/** Render the recorded sync history into one alert. Read-only. */
-function showSyncHistory(history) {
-  if (history.length === 0) {
-    window.alert(
-      'PSNP++ — no sync changes recorded yet.\n\n' +
-      'Only syncs that actually wrote to your lists are logged here, so a run ' +
-      'of quiet syncs leaves this empty.'
-    );
-    return;
-  }
-  const lines = history.map(entry =>
-    `${new Date(entry.at).toLocaleString()} — r${entry.revision} — ${describeDelta(entry.delta)}`
-  );
-  window.alert(`PSNP++ — recent sync changes (newest first):\n\n${lines.join('\n')}`);
-}
+/**
+ * The one panel that may be open at a time, so a second right-click closes the
+ * panel instead of stacking another copy of it on the page.
+ */
+let activePanel = null;
 
 /**
- * Settings menu: re-enter credentials, review recent syncs, or roll back to a
+ * Held in `activePanel` from the moment openSettings commits to building a
+ * panel until the real one exists, so an overlapping call cannot slip through
+ * the guard while storage is being read. Closing it is a no-op by design —
+ * there is nothing on screen yet.
+ */
+const PENDING_PANEL = { close() {} };
+
+/**
+ * Settings: re-enter credentials, review recent syncs, or roll back to a
  * pre-merge snapshot.
  *
  * Restore exists because the merge writes to the only copy of these lists on the
  * device. It is the escape hatch if a merge ever gets it wrong.
  *
- * The whole body is wrapped in try/catch: the only caller is indicator.mjs's
- * `contextmenu` handler, which calls `onSettings()` without awaiting or
- * catching it. An uncaught rejection here would be a silent no-op on the one
- * path that exists specifically for recovery — the worst possible failure
- * mode for an escape hatch — so every error surfaces as an alert instead.
+ * Resolves when the panel CLOSES, which is what preserves the caller's existing
+ * `await openSettings(); void sync();` shape from the days when this was a
+ * blocking `window.prompt`.
+ *
+ * The whole body is wrapped in try/catch, and every failure inside it is routed
+ * to a visible message: the only callers are the chip's `contextmenu` handler
+ * and handleSyncNowClick, neither of which catches. An error swallowed here
+ * would be a silent no-op on the one path that exists specifically for
+ * recovery — the worst possible failure mode for an escape hatch. The panel's
+ * message region is where those land now; `window.alert` survives ONLY as the
+ * last resort for a panel that could not be built at all, because a failure
+ * with nowhere to be displayed still has to be displayed.
  */
-export async function openSettings() {
+export async function openSettings({ chip = null } = {}) {
+  let panel = null;
+  let mounted = false;
   try {
-    const backups = await listBackups();
-    const history = await listSyncHistory();
-    const choice = window.prompt(
-      'PSNP++\n\n1 — Enter endpoint and sync key\n' +
-      `2 — Restore a pre-merge backup (${backups.length} available)\n` +
-      `3 — Recent sync changes (${history.length})\n\nChoose 1, 2 or 3:`,
-      '1'
-    );
-    if (choice === '1') {
-      await promptForConfig();
+    if (activePanel) {
+      // Cleared BEFORE closing: a throw out of close() would otherwise strand
+      // the reference and leave every later right-click toggling a panel that
+      // is no longer on the page.
+      const open = activePanel;
+      activePanel = null;
+      open.close();
       return;
     }
-    // Read-only, and deliberately just another branch of this same prompt: the
-    // settings menu is the established surface for everything that is not the
-    // chip itself, and a log does not justify a panel, an overlay, or anything
-    // else permanently occupying a page we do not own.
-    if (choice === '3') {
-      showSyncHistory(history);
-      return;
-    }
-    if (choice !== '2') return;
+    // Claimed synchronously, before the first await. The guard above used to be
+    // read three awaited storage reads before `activePanel` was assigned, so a
+    // left-click and a right-click landing in that window both built a panel and
+    // appended it — the exact stacking this guard exists to prevent, with the
+    // first panel orphaned on the page and its promise pending forever.
+    activePanel = PENDING_PANEL;
 
-    if (backups.length === 0) {
-      window.alert('PSNP++ — no backups yet.');
-      return;
-    }
-    const menu = backups
-      .map((entry, index) => `${index + 1} — ${new Date(entry.at).toLocaleString()} (${entry.listCount} lists)`)
-      .join('\n');
-    const picked = window.prompt(`PSNP++ — restore which backup?\n\n${menu}\n\nEnter a number:`, '1');
-    const index = Number(picked) - 1;
-    if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
+    // Read together, and independently. Sharing one try meant an unreadable
+    // backup index also skipped loadConfig, so the form rendered the DEFAULT
+    // endpoint over the user's real one — and saving would have committed it.
+    const [backups, history, config, loadError] = await loadPanelData();
 
-    const chosen = backups[index];
-    const confirmed = window.confirm(
-      `PSNP++ — restore the backup from ${new Date(chosen.at).toLocaleString()} ` +
-      `(${chosen.listCount} lists)? This replaces your current lists.`
-    );
-    if (!confirmed) return;
+    await new Promise(resolve => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        activePanel = null;
+        // resolve() must be beyond the reach of anything that can throw, or
+        // `await openSettings()` hangs forever on a panel that already closed.
+        try {
+          chip?.setPanelOpen?.(false);
+        } catch (error) {
+          console.error('[psnppp] could not un-mark the chip:', error);
+        }
+        resolve();
+      };
 
-    // Read the chosen snapshot into memory BEFORE taking the next backup.
-    // backup.mjs caps storage at 5 slots and evicts the oldest on the 6th
-    // save — and the oldest slot is exactly what a "restore" tends to target
-    // once all 5 are full (it's usually the pre-corruption one the user
-    // actually wants). Saving first would evict the very entry being
-    // restored and turn it into a `restoreBackup` failure, on the one slot
-    // most worth restoring.
-    const restored = await restoreBackup(chosen.id);
+      panel = createSettingsPanel({
+        anchor: chip?.element ?? null,
+        config,
+        backups,
+        history,
+        describeDelta,
+        onSave: async ({ endpoint, key }) => {
+          try {
+            return await applyConfig({ endpoint, key });
+          } catch (error) {
+            console.error('[psnppp] could not save settings:', error);
+            return { ok: false, message: describeFailure(error, 'Could not save your settings') };
+          }
+        },
+        onRestore: async id => {
+          try {
+            // Read the chosen snapshot into memory BEFORE taking the next
+            // backup. backup.mjs caps storage at 5 slots and evicts the oldest
+            // on the 6th save — and the oldest slot is exactly what a "restore"
+            // tends to target once all 5 are full (it's usually the
+            // pre-corruption one the user actually wants). Saving first would
+            // evict the very entry being restored and turn it into a
+            // `restoreBackup` failure, on the one slot most worth restoring.
+            const restored = await restoreBackup(id);
 
-    // This restore is itself a destructive write to the same storage every
-    // other write in this file backs up first — it is the escape hatch, and
-    // an escape hatch that can destroy the current lists with no way back is
-    // not one. Now safe to take regardless of what it evicts: `restored` is
-    // already in hand.
-    const { syncable: currentLists } = readSyncable(window.localStorage);
-    await saveBackup(currentLists);
+            // This restore is itself a destructive write to the same storage
+            // every other write in this file backs up first — it is the escape
+            // hatch, and an escape hatch that can destroy the current lists
+            // with no way back is not one. Now safe to take regardless of what
+            // it evicts: `restored` is already in hand.
+            const { syncable: currentLists } = readSyncable(window.localStorage);
+            await saveBackup(currentLists);
 
-    writeSyncable(window.localStorage, restored);
-    window.alert('PSNP++ — backup restored. Reloading.');
-    window.location.reload();
+            writeSyncable(window.localStorage, restored);
+            window.location.reload();
+            return { ok: true, message: 'Backup restored. Reloading.' };
+          } catch (error) {
+            console.error('[psnppp] could not restore a backup:', error);
+            return { ok: false, message: describeFailure(error, 'Could not restore that backup') };
+          }
+        },
+        onClose: finish
+      });
+
+      activePanel = panel;
+      chip?.setPanelOpen?.(true);
+      document.body.appendChild(panel.element);
+      // Only now can the panel carry a message. `panel` being non-null is not
+      // the same as the panel being ON SCREEN, and writing an error into a
+      // detached node is indistinguishable from swallowing it.
+      mounted = true;
+      if (loadError) panel.showMessage(loadError, { error: true });
+    });
   } catch (error) {
-    window.alert(`PSNP++ — settings/restore failed: ${String(error?.message ?? error)}`);
+    console.error('[psnppp] settings failed:', error);
+    if (mounted && panel) {
+      panel.showMessage(describeFailure(error, 'Settings failed'), { error: true });
+      return;
+    }
+    activePanel = null;
+    chip?.setPanelOpen?.(false);
+    // Nothing on screen can carry the message, so fall back to the dialog this
+    // panel replaced rather than let the failure disappear.
+    window.alert(`PSNP++ — ${describeFailure(error, 'settings failed')}`);
   }
+}
+
+/**
+ * Everything the panel needs, read concurrently, with each read's failure
+ * confined to its own value.
+ *
+ * Never rejects: a failure is reported as the fourth element so the panel can
+ * still open. Opening IS the recovery path — refusing to appear because the
+ * backup index is unreadable takes away the credential form too, and re-entering
+ * credentials is a plausible fix for exactly that.
+ */
+async function loadPanelData() {
+  const [backups, history, config] = await Promise.allSettled([
+    listBackups(), listSyncHistory(), loadConfig()
+  ]);
+  const failures = [backups, history, config]
+    .filter(result => result.status === 'rejected')
+    .map(result => describeFailure(result.reason, 'Could not read your saved settings'));
+  return [
+    backups.status === 'fulfilled' ? backups.value : [],
+    history.status === 'fulfilled' ? history.value : [],
+    config.status === 'fulfilled' ? config.value : { endpoint: DEFAULT_ENDPOINT, key: '' },
+    failures[0] ?? ''
+  ];
 }
 
 /**
@@ -330,9 +401,12 @@ export function createIndicatorPainter(setState) {
   };
 }
 
+// Names the panel, not the numbered prompt menu it replaced: "choose 1" was an
+// instruction for a dialog that no longer exists, and this tooltip is the only
+// place a grandfathered http endpoint is ever mentioned.
 const INSECURE_ENDPOINT_WARNING =
   'WARNING: this endpoint is not https, so your sync key is sent unencrypted. ' +
-  'Right-click and choose 1 to change it.';
+  'Right-click the chip and change it on the Sync tab.';
 
 /**
  * Prefix a chip detail with a warning when the endpoint is not https.
@@ -370,9 +444,15 @@ export async function start() {
     console.error('[psnppp] GM storage migration failed:', error);
   }
 
-  const indicator = createIndicator({
-    onSyncNow: () => { void handleSyncNowClick({ loadConfig, openSettings, sync }); },
-    onSettings: async () => { await openSettings(); void sync(); },
+  // `let`, and the handlers below read it rather than close over a value: they
+  // only ever run after createIndicator has returned, and the panel needs the
+  // chip element to anchor itself to now that the chip can be anywhere.
+  let indicator;
+  const settings = () => openSettings({ chip: indicator });
+
+  indicator = createIndicator({
+    onSyncNow: () => { void handleSyncNowClick({ loadConfig, openSettings: settings, sync }); },
+    onSettings: async () => { await settings(); void sync(); },
     // Only ever reached from the `reload` state, i.e. after a cycle that
     // actually wrote to localStorage behind an already-drawn PSNP+ list view.
     // Never automatic — the user asks for it by clicking the chip that says so.
@@ -384,6 +464,14 @@ export async function start() {
     onUpdate: () => { window.open(UPDATE_INSTALL_URL, '_blank', 'noopener'); }
   });
   document.body.appendChild(indicator.element);
+
+  // Fire-and-forget: the chip's default corner is a perfectly good corner, so a
+  // storage failure here must cost the user a remembered position, never the
+  // status widget itself. restorePosition already swallows and reports its own
+  // errors; the catch is belt and braces for the promise itself.
+  indicator.restorePosition().catch(error => {
+    console.error('[psnppp] could not restore the chip position:', error);
+  });
 
   // Every repaint in sync() goes through this, never indicator.setState
   // directly — that is what keeps the reload offer alive across the quiet
@@ -451,7 +539,7 @@ export async function start() {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown
       // non-Error (e.g. `throw null`) must not itself make sync() reject.
-      paint('offline', String(error?.message ?? error));
+      paint('offline', describeFailure(error, 'Sync failed'));
     } finally {
       running = false;
       if (pending) {

@@ -58,47 +58,62 @@ export function isAllowedEndpoint(endpoint) {
 }
 
 /**
- * Ask for the endpoint and secret. Returns the saved config, or null if
- * declined or rejected.
+ * What the user is told when a rejected endpoint is not saved.
  *
- * The key field starts EMPTY. `window.prompt`'s second argument is the input's
- * initial value, and this dialog opens inside psnprofiles.com — a page we do
- * not control — so pre-filling it painted the live credential in plaintext on
- * a third party's page every time the user opened settings just to check the
- * endpoint. The mask below reports only THAT a key is stored, never any part of
- * it and not even its length.
- *
- * That leaves "OK on an empty box" as the natural way to say "I did not want to
- * change the key", so a blank submission KEEPS the stored key; only a non-empty
- * entry replaces it. Cancelling keeps everything. The cost is that this dialog
- * cannot erase a key — an acceptable trade against silently wiping the one
- * credential the user has, and re-entering a key is always possible.
+ * A constant rather than a string built at the call site: this is the entire
+ * explanation for why the thing they just typed did not take effect, and it has
+ * to survive the move off `window.alert` intact. It names the reason (the key
+ * is a header), the rule (https), and the one exception (loopback).
  */
-export async function promptForConfig() {
-  const current = await loadConfig();
+export const INSECURE_ENDPOINT_MESSAGE =
+  'That endpoint was not saved. The sync key is sent as a request header, so ' +
+  'the endpoint must be https:// (http:// is allowed only for localhost or ' +
+  '127.0.0.1).';
 
-  const rawEndpoint = window.prompt('PSNP++ — sync endpoint:', current.endpoint);
-  if (rawEndpoint == null) return null;
-  const endpoint = rawEndpoint.trim();
+/**
+ * Everything a settings form is allowed to say about the stored key.
+ *
+ * Never the key, never a prefix of it, and not even its length — this string is
+ * rendered inside psnprofiles.com, a page we do not control.
+ */
+export function describeStoredKey(key) {
+  return key ? 'One is already stored. Leave this blank to keep it.' : 'None stored yet.';
+}
+
+/**
+ * Validate and save what the settings form was given.
+ *
+ * Returns `{ ok: true, config }` or `{ ok: false, message }` for a REJECTED
+ * endpoint, rather than throwing or alerting, so the caller can put the failure
+ * wherever the user is already looking. Validation runs before any write, so a
+ * rejected endpoint leaves the previous endpoint and key both standing.
+ *
+ * Storage failure is the other kind and is NOT converted: `saveConfig`'s two
+ * `GM.setValue` calls are not atomic, so a rejection from the second one can
+ * leave the endpoint written and the key not. That rejects out of here on
+ * purpose — the caller (openSettings) logs it and shows it — because reporting
+ * `{ ok: false }` would tell the user nothing was saved when something was.
+ *
+ * A blank key KEEPS the stored one. The form's key field starts empty by
+ * design (see panel.mjs), which makes "submit an empty box" the natural way to
+ * say "I only wanted to change the endpoint" — it must not mean "erase my key".
+ * The cost is that this form cannot delete a key, which is a good trade against
+ * silently wiping the one credential the user has.
+ */
+export async function applyConfig(submitted) {
+  // Read off a possibly-null argument rather than destructured in the
+  // signature: a default parameter only covers `undefined`, so `applyConfig(null)`
+  // would throw a TypeError straight out of the settings form's Save button —
+  // past the panel's `{ ok, message }` contract and into an unhandled rejection
+  // with nothing on screen to show for it.
+  const endpoint = String(submitted?.endpoint ?? '').trim();
+  const rawKey = submitted?.key;
   if (!isAllowedEndpoint(endpoint)) {
-    window.alert(
-      `PSNP++ — that endpoint was not saved:\n\n${endpoint}\n\n` +
-      'The sync key is sent as a request header, so the endpoint must be ' +
-      'https:// (http:// is allowed only for localhost / 127.0.0.1).'
-    );
-    return null;
+    return { ok: false, message: INSECURE_ENDPOINT_MESSAGE };
   }
-
-  const rawKey = window.prompt(
-    'PSNP++ — sync key ' +
-    `(${current.key ? 'one is already stored: ••••••••' : 'none stored yet'}).\n\n` +
-    'Type a new key, or leave this blank to keep the stored one.',
-    ''
-  );
-  if (rawKey == null) return null;
-  const typedKey = rawKey.trim();
-
+  const current = await loadConfig();
+  const typedKey = String(rawKey ?? '').trim();
   const config = { endpoint, key: typedKey === '' ? current.key : typedKey };
   await saveConfig(config);
-  return config;
+  return { ok: true, config };
 }
