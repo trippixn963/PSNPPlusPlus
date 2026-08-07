@@ -41,48 +41,68 @@ async function confirmAdoptions(adoptions) {
  *
  * Restore exists because the merge writes to the only copy of these lists on the
  * device. It is the escape hatch if a merge ever gets it wrong.
+ *
+ * The whole body is wrapped in try/catch: the only caller is indicator.mjs's
+ * `contextmenu` handler, which calls `onSettings()` without awaiting or
+ * catching it. An uncaught rejection here would be a silent no-op on the one
+ * path that exists specifically for recovery — the worst possible failure
+ * mode for an escape hatch — so every error surfaces as an alert instead.
  */
-async function openSettings() {
-  const backups = await listBackups();
-  const choice = window.prompt(
-    'PSNPSync\n\n1 — Enter endpoint and sync key\n' +
-    `2 — Restore a pre-merge backup (${backups.length} available)\n\nChoose 1 or 2:`,
-    '1'
-  );
-  if (choice === '1') {
-    await promptForConfig();
-    return;
+export async function openSettings() {
+  try {
+    const backups = await listBackups();
+    const choice = window.prompt(
+      'PSNPSync\n\n1 — Enter endpoint and sync key\n' +
+      `2 — Restore a pre-merge backup (${backups.length} available)\n\nChoose 1 or 2:`,
+      '1'
+    );
+    if (choice === '1') {
+      await promptForConfig();
+      return;
+    }
+    if (choice !== '2') return;
+
+    if (backups.length === 0) {
+      window.alert('PSNPSync — no backups yet.');
+      return;
+    }
+    const menu = backups
+      .map((entry, index) => `${index + 1} — ${new Date(entry.at).toLocaleString()} (${entry.listCount} lists)`)
+      .join('\n');
+    const picked = window.prompt(`PSNPSync — restore which backup?\n\n${menu}\n\nEnter a number:`, '1');
+    const index = Number(picked) - 1;
+    if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
+
+    const chosen = backups[index];
+    const confirmed = window.confirm(
+      `PSNPSync — restore the backup from ${new Date(chosen.at).toLocaleString()} ` +
+      `(${chosen.listCount} lists)? This replaces your current lists.`
+    );
+    if (!confirmed) return;
+
+    // Read the chosen snapshot into memory BEFORE taking the next backup.
+    // backup.mjs caps storage at 5 slots and evicts the oldest on the 6th
+    // save — and the oldest slot is exactly what a "restore" tends to target
+    // once all 5 are full (it's usually the pre-corruption one the user
+    // actually wants). Saving first would evict the very entry being
+    // restored and turn it into a `restoreBackup` failure, on the one slot
+    // most worth restoring.
+    const restored = await restoreBackup(chosen.id);
+
+    // This restore is itself a destructive write to the same storage every
+    // other write in this file backs up first — it is the escape hatch, and
+    // an escape hatch that can destroy the current lists with no way back is
+    // not one. Now safe to take regardless of what it evicts: `restored` is
+    // already in hand.
+    const { syncable: currentLists } = readSyncable(window.localStorage);
+    await saveBackup(currentLists);
+
+    writeSyncable(window.localStorage, restored);
+    window.alert('PSNPSync — backup restored. Reloading.');
+    window.location.reload();
+  } catch (error) {
+    window.alert(`PSNPSync — settings/restore failed: ${String(error?.message ?? error)}`);
   }
-  if (choice !== '2') return;
-
-  if (backups.length === 0) {
-    window.alert('PSNPSync — no backups yet.');
-    return;
-  }
-  const menu = backups
-    .map((entry, index) => `${index + 1} — ${new Date(entry.at).toLocaleString()} (${entry.listCount} lists)`)
-    .join('\n');
-  const picked = window.prompt(`PSNPSync — restore which backup?\n\n${menu}\n\nEnter a number:`, '1');
-  const index = Number(picked) - 1;
-  if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
-
-  const chosen = backups[index];
-  const confirmed = window.confirm(
-    `PSNPSync — restore the backup from ${new Date(chosen.at).toLocaleString()} ` +
-    `(${chosen.listCount} lists)? This replaces your current lists.`
-  );
-  if (!confirmed) return;
-
-  // This restore is itself a destructive write to the same storage every other
-  // write in this file backs up first — it is the escape hatch, and an escape
-  // hatch that can destroy the current lists with no way back is not one.
-  const { syncable: currentLists } = readSyncable(window.localStorage);
-  await saveBackup(currentLists);
-
-  const lists = await restoreBackup(chosen.id);
-  writeSyncable(window.localStorage, lists);
-  window.alert('PSNPSync — backup restored. Reloading.');
-  window.location.reload();
 }
 
 export async function start() {
@@ -169,12 +189,20 @@ export async function start() {
   void sync();
 }
 
-// start() itself is not expected to reject (its own failure modes are inside
-// sync(), which cannot), but both call sites are fire-and-forget from an event
-// callback, so a `.catch()` is cheap insurance against an unhandled rejection.
-const onStartError = error => console.error('[psnpsync] start() failed:', error);
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => { start().catch(onStartError); });
-} else {
-  start().catch(onStartError);
+// Auto-start only in a real browser. Guarded so this module can be imported
+// under Node's test runner (to exercise openSettings against fake GM/window
+// globals, the same way sync-cycle.mjs runs against fake storage and a fake
+// server) without a `document` global — nothing above this line touches
+// `document` at module-eval time, only inside functions that run when called.
+if (typeof document !== 'undefined') {
+  // start() itself is not expected to reject (its own failure modes are inside
+  // sync(), which cannot), but both call sites are fire-and-forget from an
+  // event callback, so a `.catch()` is cheap insurance against an unhandled
+  // rejection.
+  const onStartError = error => console.error('[psnpsync] start() failed:', error);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { start().catch(onStartError); });
+  } else {
+    start().catch(onStartError);
+  }
 }

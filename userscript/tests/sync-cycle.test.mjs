@@ -287,6 +287,35 @@ test('changed truthfully reports whether storage bytes actually changed', async 
   }
 });
 
+test('a confirmed adoption survives a 409 retry instead of being duplicated', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('local-1', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('remote-1', 'Wishlist', [game('g2')])]), 500), 1);
+  const h = harness(storage, server);
+
+  let firstCall = true;
+  const realPut = server.putState.bind(server);
+  server.putState = async (baseRevision, doc) => {
+    if (firstCall) {
+      firstCall = false;
+      // A transient conflict unrelated to this list's content — the server's
+      // copy of remote-1 doesn't even change, only the revision does.
+      server.doc = stampChanges(emptyDoc(), toDoc([list('remote-1', 'Wishlist', [game('g2')])]), 500);
+      server.revision = 2;
+      return { ok: false, conflict: true, revision: 2, doc: server.doc };
+    }
+    return realPut(baseRevision, doc);
+  };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  // The user already confirmed "link them" on attempt 1 — a 409 retry must not
+  // silently revert to two separate "Wishlist" lists.
+  assert.deepEqual(readLists(storage).map(l => l.id), ['remote-1']);
+  assert.deepEqual(Object.keys(server.doc.lists), ['remote-1']);
+  assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g2']);
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {

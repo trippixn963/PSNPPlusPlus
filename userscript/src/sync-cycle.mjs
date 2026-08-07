@@ -47,7 +47,6 @@ export async function runSyncCycle({
   let remote = await client.getState();
 
   const { syncable, remote: remoteLists } = readSyncable(storage);
-  let localDoc = toDoc(syncable);
 
   // Lists that turned into a PSNP+ 📡 remote list on this device (the edit-list
   // dialog assigns `url` onto the existing row, keeping its id) must stop
@@ -59,13 +58,30 @@ export async function runSyncCycle({
   const workingBase = dropLists(base, frozenIds);
 
   // First contact with a list created on another device: match by name once, so
-  // the two "Wishlist" lists become one instead of sitting side by side.
-  const adoptions = planAdoptions(localDoc, remote.doc);
-  if (adoptions.length > 0 && (await confirmAdoptions(adoptions))) {
-    localDoc = applyAdoptions(localDoc, adoptions);
-  }
+  // the two "Wishlist" lists become one instead of sitting side by side. This is
+  // a one-time PLAN, decided against the initial pull and confirmed by the user
+  // (or not) exactly once — never re-planned and never re-prompted below.
+  const adoptions = planAdoptions(toDoc(syncable), remote.doc);
+  const adopt = adoptions.length > 0 && (await confirmAdoptions(adoptions));
+
+  // Re-read from storage on every attempt below (including retries), because a
+  // 409 retry legitimately wants a fresh local snapshot. But storage is only
+  // ever written after a successful push (see below), so every one of these
+  // reads returns local in its pristine, PRE-adoption shape — the confirmed
+  // rename above never reaches storage until the cycle actually succeeds. Left
+  // alone, a retry's re-read would silently revert the very rename the user
+  // just confirmed, producing two "Wishlist" lists instead of one merged list.
+  // Re-applying `adoptions` here, to a doc that is always freshly read from
+  // storage and therefore never already-adopted, is what keeps that rename
+  // alive across retries without ever risking applyAdoptions's collision guard
+  // (which only fires against an already-renamed doc).
+  const currentLocalDoc = () => {
+    const raw = toDoc(readSyncable(storage).syncable);
+    return adopt ? applyAdoptions(raw, adoptions) : raw;
+  };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const localDoc = currentLocalDoc();
     const stamped = stampChanges(workingBase, localDoc, now);
     const merged = gcTombstones(mergeDoc(workingBase, stamped, remote.doc, now), now);
 
@@ -99,12 +115,11 @@ export async function runSyncCycle({
       return { status: 'synced', revision: result.revision, changed };
     }
 
-    // Someone wrote between our pull and our push. Re-merge against their copy.
-    // Storage was never touched by this attempt, so localDoc is unchanged too —
-    // re-deriving it here matters only if the environment mutated storage out
-    // from under us between attempts.
+    // Someone wrote between our pull and our push. Re-merge against their copy
+    // on the next attempt — `currentLocalDoc()` at the top of the loop will
+    // re-read storage (still untouched by this failed attempt) and re-apply
+    // the confirmed adoption, if any.
     remote = { revision: result.revision, doc: result.doc };
-    localDoc = toDoc(readSyncable(storage).syncable);
   }
 
   // Every attempt was rejected: nothing was ever written to storage, so there
