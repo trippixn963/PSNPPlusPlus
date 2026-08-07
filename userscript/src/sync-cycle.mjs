@@ -154,7 +154,17 @@ export async function runSyncCycle({
     //
     // Empty base + absent key is left alone — that is the real new device, and
     // it must be able to pull the server's lists down.
-    if (snapshot.raw == null && Object.keys(base.lists).length > 0) {
+    //
+    // The test is for a LIVE list, not for any key. Tombstones stay in base for
+    // TOMBSTONE_TTL_MS (90 days) and fromDoc skips them, so a new device that
+    // first syncs against an all-deleted server writes nothing (`changed` is
+    // false, the key stays absent) while base.lists gains those tombstone keys.
+    // Counting keys wedged that device permanently: every later cycle returned
+    // corrupt, it never received a list created afterwards, and the chip told a
+    // perfectly healthy browser its data was unreadable with zero backups to
+    // offer. Every base that should trip this guard has at least one live list
+    // in it, so asking for one costs the Clear-button protection nothing.
+    if (snapshot.raw == null && Object.values(base.lists).some(n => n.deletedAt == null)) {
       return { status: 'corrupt', revision: remote.revision, changed: false };
     }
 

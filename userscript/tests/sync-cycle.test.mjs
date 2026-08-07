@@ -692,6 +692,42 @@ test('a brand-new device (absent key, EMPTY base) is not corruption and pulls th
   assert.equal(server.doc.lists.A.deletedAt, null, 'and nothing may be tombstoned');
 });
 
+test('a new device whose base holds only TOMBSTONES still syncs (the guard must not count deleted lists)', async () => {
+  // The other device deleted every list, so the server's document is all
+  // tombstones. Tombstones live in base for TOMBSTONE_TTL_MS (90 days), and
+  // fromDoc skips deletedAt != null — so this device's first cycle writes
+  // nothing (changed === false, psnpp-lists stays absent) while base.lists
+  // gains a key. Counting keys rather than LIVE lists then wedges the device
+  // permanently: every later cycle reports corrupt, it never receives a list
+  // created afterwards, and the chip tells a perfectly healthy browser its
+  // data is unreadable while offering zero backups to restore.
+  const storage = fakeStorage();
+  const deletedWorld = stampChanges(
+    toDoc([list('A', 'Wishlist', [game('g1')])]), emptyDoc(), 500
+  );
+  assert.equal(deletedWorld.lists.A.deletedAt, 500, 'the server world is a tombstone');
+  const server = fakeServer(deletedWorld, 1);
+  const h = harness(storage, server);
+
+  // Cycle 1: nothing to write locally, but base picks up the tombstone.
+  const first = await runSyncCycle(h.args);
+  assert.equal(first.status, 'synced');
+  assert.equal(storage.getItem(LISTS_KEY), null, 'nothing is written, so the key stays absent');
+  assert.deepEqual(Object.keys(h.base.lists), ['A'], 'base now has a key — but no LIVE list');
+
+  // Cycle 2: same healthy device, same absent key. Still not corruption.
+  const second = await runSyncCycle({ ...h.args, now: 2000 });
+  assert.equal(second.status, 'synced', 'a tombstone-only base must not read as a wipe');
+
+  // And the device must still be able to receive a list created elsewhere.
+  const withZ = stampChanges(emptyDoc(), toDoc([list('Z', 'New List', [game('g2')])]), 3000);
+  server.doc = { version: 1, lists: { ...server.doc.lists, ...withZ.lists } };
+  const third = await runSyncCycle({ ...h.args, now: 4000 });
+  assert.equal(third.status, 'synced');
+  assert.equal(third.changed, true);
+  assert.deepEqual(readLists(storage).map(l => l.id), ['Z'], 'the new list must arrive');
+});
+
 test('deleting the last list ("[]") is a real deletion and still mints a tombstone', async () => {
   const storage = fakeStorage();
   const base = toDoc([list('A', 'Wishlist', [game('g1')])]);

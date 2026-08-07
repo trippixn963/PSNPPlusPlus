@@ -582,7 +582,7 @@ Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync n
     const adopt = adoptions.length > 0 && await confirmAdoptions2(adoptions);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const snapshot = readSnapshot(storage);
-      if (snapshot.raw == null && Object.keys(base.lists).length > 0) {
+      if (snapshot.raw == null && Object.values(base.lists).some((n) => n.deletedAt == null)) {
         return { status: "corrupt", revision: remote.revision, changed: false };
       }
       if (snapshot.corrupt) {
