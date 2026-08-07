@@ -13,11 +13,23 @@ import { planAdoptions, applyAdoptions } from './adopt.mjs';
 const DEFAULT_MAX_ATTEMPTS = 3;
 
 /**
- * Order-and-key-insensitive fingerprint of a set of lists.
+ * List-order-insensitive fingerprint of a set of lists.
  *
- * Both sides are normalized through fromDoc so property order is identical, and
- * lists are sorted by id so a reordered array does not read as a change. Without
- * this, every cycle would look "changed" and churn out a backup each time.
+ * Sorting by id is the only normalization this does: a reordered lists array
+ * must not read as a change, or every cycle would look "changed" and churn out
+ * a backup each time.
+ *
+ * It is NOT key-order insensitive, and fromDoc does not make it so. fromDoc
+ * fixes the key order of each LIST (it builds `{id}` and then walks META_FIELDS
+ * in a fixed order), but a game object is passed through with whatever key
+ * order it was stored under, so two content-equal games written by different
+ * devices can serialize differently here. What actually keeps that from
+ * churning a backup every cycle is one level down, in merger.mjs: on an exact
+ * updatedAt tie `pickNewer` compares the two records with `stableStringify`,
+ * which ignores key order, and its `>=` returns the LOCAL copy when they are
+ * content-equal — so the merge hands back the bytes already in storage.
+ * Verified by execution: a game whose server copy has its keys in reverse order
+ * settles after at most one cycle and then runs 10 rounds with 0 backups.
  */
 function fingerprint(lists) {
   return JSON.stringify([...lists].sort((a, b) => String(a.id).localeCompare(String(b.id))));
@@ -122,6 +134,29 @@ export async function runSyncCycle({
     // picks up the newer local state a 409 implies, and re-applying `adoptions`
     // to it keeps a confirmed rename alive across retries.
     const snapshot = readSnapshot(storage);
+
+    // The key is GONE, but this device has synced lists before. PSNP+ never
+    // reaches that state by ordinary use: deleting the last list writes `[]`
+    // (ListStorage.remove -> _save), it never calls removeItem. The one thing
+    // that does is PSNP+'s own "Clear" button (clearData ->
+    // ListStorage.clear -> localStorage.removeItem), plus anything else that
+    // wipes site data for psnprofiles.com — and GM-stored `base` lives in
+    // EXTENSION storage, so it survives all of them.
+    //
+    // `looksCorrupt` cannot catch this: an absent key is genuinely the
+    // brand-new-device state and is indistinguishable from a wipe when all you
+    // have is `raw`. One level up it IS distinguishable, because base says this
+    // device had lists at its last successful sync. Treat it as corruption:
+    // otherwise stampChanges reads it as "the user deleted every list here",
+    // tombstones all of them server-wide in one cycle, takes ZERO backups
+    // (both sides collapse to empty, so `changed` is false) and reports a
+    // cheerful {status:'synced'}.
+    //
+    // Empty base + absent key is left alone — that is the real new device, and
+    // it must be able to pull the server's lists down.
+    if (snapshot.raw == null && Object.keys(base.lists).length > 0) {
+      return { status: 'corrupt', revision: remote.revision, changed: false };
+    }
 
     // Local state is unreadable. Every inference below — above all "in base,
     // missing from local, therefore deleted" — would be drawn from nothing.

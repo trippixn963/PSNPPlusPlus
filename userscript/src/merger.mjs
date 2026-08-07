@@ -16,15 +16,32 @@ const clone = value => JSON.parse(JSON.stringify(value));
  * Serialize an object to JSON with keys sorted recursively.
  * Arrays retain their order (order-bearing), only object keys are sorted.
  * This ensures structural equality is independent of key insertion order.
+ *
+ * `undefined` is handled exactly as JSON.stringify handles it — an
+ * undefined-valued object key is omitted, an undefined array element becomes
+ * null — because this function is the comparison side of a pair whose other
+ * side is JSON.stringify. `doc.mjs` copies all 8 META_FIELDS unconditionally,
+ * so a list that never had (say) `removeGames` gets `meta.removeGames =
+ * undefined`; the base document is persisted with JSON.stringify, which DROPS
+ * that key. Emitting `"removeGames":undefined` for the live side and nothing
+ * for the persisted side made `sameRecord` false on every single cycle, so
+ * `meta.updatedAt` re-stamped to `now` forever: renames flipped between devices
+ * without ever converging, and a deleted list came back permanently because
+ * `latestActivity` always beat the deletion timestamp. PSNP+ itself carries
+ * `!= null` fallbacks for removeGames/orderBy/direction, so such lists exist.
  */
 function stableStringify(obj) {
   if (obj === null || typeof obj !== 'object') {
     return JSON.stringify(obj);
   }
   if (Array.isArray(obj)) {
-    return '[' + obj.map(stableStringify).join(',') + ']';
+    // JSON.stringify renders a hole/undefined element as null; match it.
+    return '[' + obj.map(v => (v === undefined ? 'null' : stableStringify(v))).join(',') + ']';
   }
-  const sorted = Object.keys(obj).sort().map(k => `"${k}":${stableStringify(obj[k])}`);
+  const sorted = Object.keys(obj)
+    .filter(k => obj[k] !== undefined)
+    .sort()
+    .map(k => `"${k}":${stableStringify(obj[k])}`);
   return '{' + sorted.join(',') + '}';
 }
 

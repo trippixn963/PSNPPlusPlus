@@ -575,6 +575,149 @@ test('valid JSON spellings of an empty array still sync (no false positive)', as
   }
 });
 
+// --- Final wave: a list that OMITS a meta field ----------------------------
+//
+// Every other fixture in this project supplies all 8 META_FIELDS. Real lists do
+// not have to: PSNP+ carries `!= null` fallbacks for removeGames, orderBy and
+// direction, and importList hands createList an arbitrary shape. doc.mjs copies
+// all 8 unconditionally, so such a list gets `meta.removeGames = undefined`,
+// while the base document is persisted with JSON.stringify, which drops the key
+// outright. Any comparison that renders the two differently makes sameRecord
+// false forever, and meta.updatedAt re-stamps to `now` on every single cycle.
+
+/** A PSNP+ list with no `removeGames` key at all. */
+const partialList = (id, name, games = []) => ({
+  id, name, tags: [], removeStartedGames: false,
+  orderBy: 'custom', direction: 'ascending', note: '', timestamp: 100, games
+});
+
+/** One device: its own storage and its own base, sharing a server. */
+const device = (storage, server) => {
+  let saved = emptyDoc();
+  return {
+    storage,
+    // saveBase mirrors main.mjs, which persists the base with JSON.stringify.
+    sync: now => runSyncCycle({
+      storage, client: server,
+      loadBase: async () => saved,
+      saveBase: async doc => { saved = JSON.parse(JSON.stringify(doc)); },
+      saveBackup: async () => {},
+      confirmAdoptions: async () => true,
+      now
+    })
+  };
+};
+
+test('a rename converges on a list that omits a meta field', async () => {
+  const server = fakeServer();
+  const sA = fakeStorage();
+  const sB = fakeStorage();
+  writeLists(sA, [partialList('A', 'Wishlist', [game('g1')])]);
+  writeLists(sB, [partialList('A', 'Wishlist', [game('g1')])]);
+  const A = device(sA, server);
+  const B = device(sB, server);
+  await A.sync(1000);
+  await B.sync(1000);
+
+  // The user renames the list on device A.
+  writeLists(sA, [partialList('A', 'Backlog', [game('g1')])]);
+  await A.sync(2000);
+  await B.sync(3000);
+  await A.sync(4000);
+  await B.sync(5000);
+
+  // With meta.updatedAt re-stamped to `now` every cycle, whichever device syncs
+  // last always wins, so the two flip between 'Backlog' and 'Wishlist' forever.
+  assert.equal(readLists(sA)[0].name, 'Backlog');
+  assert.equal(readLists(sB)[0].name, 'Backlog', 'the rename must reach device B and stay');
+  assert.equal(server.doc.lists.A.meta.name, 'Backlog');
+});
+
+test('a deleted list stays deleted when it omits a meta field', async () => {
+  const server = fakeServer();
+  const sA = fakeStorage();
+  const sB = fakeStorage();
+  writeLists(sA, [partialList('A', 'Wishlist', [game('g1')])]);
+  writeLists(sB, [partialList('A', 'Wishlist', [game('g1')])]);
+  const A = device(sA, server);
+  const B = device(sB, server);
+  await A.sync(1000);
+  await B.sync(1000);
+
+  // The user deletes the list on device A.
+  writeLists(sA, []);
+  await A.sync(2000);
+  assert.equal(server.doc.lists.A.deletedAt, 2000);
+
+  // B has not touched it. A perpetually re-stamped meta.updatedAt makes
+  // latestActivity(B) beat the deletion, so B resurrects it — permanently, and
+  // deleting it again just resurrects it again.
+  await B.sync(3000);
+  assert.deepEqual(readLists(sB).map(l => l.id), [], 'the deletion must reach device B');
+  await A.sync(4000);
+  assert.deepEqual(readLists(sA).map(l => l.id), [], 'and must not come back to device A');
+  assert.equal(server.doc.lists.A.deletedAt, 2000, 'the tombstone must survive both cycles');
+});
+
+// --- Final wave: an ABSENT psnpp-lists key ---------------------------------
+//
+// PSNP+ never removes the key by ordinary use — deleting the last list writes
+// `[]` (ListStorage.remove -> _save). Its "Clear" button does
+// (clearData -> ListStorage.clear -> localStorage.removeItem), as does clearing
+// site data for psnprofiles.com. The GM-stored base lives in extension storage
+// and survives all of them, so "key gone, base populated" is a wipe, not a
+// deletion — and reading it as a deletion tombstones every list server-wide
+// while taking ZERO backups (both sides collapse to empty, so changed is false).
+
+test('PSNP+ Clear (an absent key) against a populated base is corruption, not a server-wide delete', async () => {
+  const { storage, server, h } = corruptionHarness();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')]), list('C', 'Backlog', [game('g2')])]);
+  storage.removeItem(LISTS_KEY);
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assert.equal(result.changed, false);
+  assertNothingDestroyed(server, h, storage, null);
+});
+
+test('a brand-new device (absent key, EMPTY base) is not corruption and pulls the server down', async () => {
+  const storage = fakeStorage();
+  const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1')])]), 500), 1);
+  const h = harness(storage, server);
+  assert.equal(storage.getItem(LISTS_KEY), null, 'the key has never been written on this device');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  assert.deepEqual(readLists(storage).map(l => l.id), ['A'], 'the server lists must arrive');
+  assert.equal(server.doc.lists.A.deletedAt, null, 'and nothing may be tombstoned');
+});
+
+test('deleting the last list ("[]") is a real deletion and still mints a tombstone', async () => {
+  const storage = fakeStorage();
+  const base = toDoc([list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(stampChanges(emptyDoc(), base, 500), 1);
+  const h = harness(storage, server, base);
+  // ListStorage.remove -> _save writes an empty array; it never removes the key.
+  writeLists(storage, []);
+  assert.equal(storage.getItem(LISTS_KEY), '[]');
+
+  const result = await runSyncCycle({ ...h.args, now: 6000 });
+  assert.equal(result.status, 'synced');
+  assert.equal(server.doc.lists.A.deletedAt, 6000, 'this deletion MUST propagate');
+});
+
+test('[null] is corruption — the length check is what stops it reading as "everything was deleted"', async () => {
+  const { storage, server, h } = corruptionHarness();
+  // readLists filters the null away and returns [], which against a populated
+  // base is indistinguishable from "the user deleted every list here" unless
+  // looksCorrupt notices that one parsed entry did not survive the filter.
+  storage.setItem(LISTS_KEY, '[null]');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assertNothingDestroyed(server, h, storage, '[null]');
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {
