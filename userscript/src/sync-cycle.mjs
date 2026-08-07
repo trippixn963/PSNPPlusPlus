@@ -49,7 +49,28 @@ function dropLists(doc, ids) {
 function readSnapshot(storage) {
   const raw = storage.getItem(LISTS_KEY);
   const { syncable, remote } = readSyncable(storage);
-  return { raw, syncable, remote };
+  return { raw, syncable, remote, corrupt: looksCorrupt(raw, syncable, remote) };
+}
+
+/**
+ * Storage holds bytes that are not an empty list array, yet yielded no lists.
+ *
+ * `readLists` deliberately swallows a JSON.parse failure and returns `[]` — it
+ * must never throw inside a page we do not own, and that is the right call
+ * there. But this module is the only one that also knows about `base`, and to
+ * `stampChanges` an empty local document against a populated base means "the
+ * user deleted every list here", which mints a tombstone per list and pushes
+ * mass deletion to every device. A truncated quota write, storage corruption,
+ * or any other script writing junk to `psnpp-lists` is enough to trigger it.
+ *
+ * "No key at all", `[]`, and `""` are genuine empty states and stay syncable;
+ * anything else that parses to nothing is corruption and must stop the cycle.
+ */
+function looksCorrupt(raw, syncable, remote) {
+  if (syncable.length > 0 || remote.length > 0) return false;
+  if (raw == null) return false;
+  const trimmed = raw.trim();
+  return trimmed !== '' && trimmed !== '[]';
 }
 
 export async function runSyncCycle({
@@ -85,6 +106,15 @@ export async function runSyncCycle({
     // picks up the newer local state a 409 implies, and re-applying `adoptions`
     // to it keeps a confirmed rename alive across retries.
     const snapshot = readSnapshot(storage);
+
+    // Local state is unreadable. Every inference below — above all "in base,
+    // missing from local, therefore deleted" — would be drawn from nothing.
+    // Bail out before the push, leaving storage, base and the server exactly as
+    // they are, and let the caller tell the user their list data looks broken
+    // and that a backup can be restored. Restoring is the user's call, not ours.
+    if (snapshot.corrupt) {
+      return { status: 'corrupt', revision: remote.revision, changed: false };
+    }
 
     // Lists that turned into a PSNP+ 📡 remote list on this device (the
     // edit-list dialog assigns `url` onto the existing row, keeping its id)
@@ -137,19 +167,45 @@ export async function runSyncCycle({
       // never happened would tombstone it server-wide on the next cycle. Doing
       // nothing is always safe — the server already has the merge, and the
       // write that invalidated us also re-triggers a cycle.
+      //
+      // Known, accepted cosmetic cost: if this attempt had adopted, the adopted
+      // ids are now on the server while localStorage still has the old ones, so
+      // the next cycle proposes the same adoption and the user sees the
+      // "Link them?" confirm a second time. Eliminating it would require the
+      // push and the local write to be atomic, which they cannot be; it
+      // converges on the next cycle either way.
       if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
         return { status: 'synced', revision: result.revision, changed: false };
       }
       if (changed) {
         // Snapshot the untouched lists before the merge result overwrites them.
         await saveBackup(currentLists);
-        // saveBackup is an await, so re-check before the one and only write.
+        // saveBackup is an await too, so re-check before the one and only write.
+        // A write landing inside that window still costs one of the 5 backup
+        // slots for a write that never happens. That residual cost is
+        // irreducible without breaking something worse: the backup has to
+        // precede the write, and the write has to be the last thing after the
+        // last await. It is also mild — the slot holds a genuine snapshot of
+        // genuine data, so at most it displaces an older snapshot.
         if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
           return { status: 'synced', revision: result.revision, changed: false };
         }
         writeSyncable(storage, mergedLists);
       }
-      await saveBase(merged);
+      // Frozen (📡) lists are deliberately kept OUT of base. `merged` carries
+      // the server's own node for them (the merge had nothing local to weigh it
+      // against), and recording that as "what this device last settled" is a
+      // lie: this device is not syncing the list at all, and PSNP+ repopulates
+      // a 📡 row from its feed URL, so local and server content diverge freely.
+      // On unfreeze, stampChanges would then read the server's extra games as
+      // "in base, missing from local" and delete them on every device.
+      //
+      // TRADEOFF, accepted deliberately — do not "fix" this back: with the
+      // list absent from base, a deletion made elsewhere while it was frozen
+      // can never be propagated server-wide by this device. That is consistent
+      // with what frozen means (excluded from sync entirely); silently
+      // destroying diverged content is not.
+      await saveBase(dropLists(merged, frozenIds));
       return { status: 'synced', revision: result.revision, changed };
     }
 

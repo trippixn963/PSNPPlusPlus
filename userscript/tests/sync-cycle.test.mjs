@@ -415,6 +415,65 @@ test('a storage write landing during the push is not overwritten by the stale me
   assert.deepEqual(readLists(storage).map(l => l.id).sort(), ['A', 'B', 'F']);
 });
 
+// --- Fix round 4: corrupt storage (P1) and unfreeze divergence (P2) ---------
+
+test('unreadable psnpp-lists is corruption, not "everything was deleted here"', async () => {
+  const storage = fakeStorage();
+  const base = toDoc([list('A', 'Wishlist', [game('g1')]), list('C', 'Backlog', [game('g2')])]);
+  const server = fakeServer(base, 1);
+  const h = harness(storage, server, base);
+
+  // A truncated quota write, storage corruption, or another script writing junk
+  // to the key. readLists swallows the parse failure and returns [] — which,
+  // against a populated base, reads as "the user deleted every list".
+  storage.setItem(LISTS_KEY, '{ this is not json');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assert.equal(result.changed, false);
+  assert.equal(server.revision, 1, 'nothing may be pushed from an unreadable local state');
+  assert.equal(server.doc.lists.A.deletedAt, null);
+  assert.equal(server.doc.lists.C.deletedAt, null);
+  assert.equal(storage.getItem(LISTS_KEY), '{ this is not json', 'storage left as-is');
+  assert.equal(h.backups.length, 0);
+  assert.deepEqual(Object.keys(h.base.lists).sort(), ['A', 'C'], 'base must not advance');
+});
+
+test('an empty list array is a legitimate empty state, not corruption', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, []);
+  const server = fakeServer();
+  const h = harness(storage, server);
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+});
+
+test('unfreezing a 📡 list that diverged from the server does not delete the difference', async () => {
+  const storage = fakeStorage();
+  // F is settled on the server with two games, under the server's name.
+  const base = toDoc([list('F', 'Server Name', [game('g1'), game('g2')])]);
+  const server = fakeServer(stampChanges(emptyDoc(), base, 500), 1);
+  const h = harness(storage, server, base);
+
+  // The user turns F into a 📡 remote list. PSNP+ repopulates the row from the
+  // feed URL, so its content diverges from the server's copy.
+  writeLists(storage, [list('F', 'Feed Name', [game('g1')], { url: 'https://x/y.json' })]);
+  await runSyncCycle(h.args);
+  assert.equal(server.doc.lists.F.deletedAt, null);
+
+  // Later the user clears the url. F is syncable again, still holding only what
+  // the feed left in it.
+  writeLists(storage, [list('F', 'Feed Name', [game('g1')])]);
+  const result = await runSyncCycle({ ...h.args, now: 5000 });
+  assert.equal(result.status, 'synced');
+  // The server's copy is not "missing from local" — this device simply was not
+  // syncing F. Nothing it holds may be deleted server-wide.
+  assert.deepEqual(Object.keys(server.doc.lists.F.games).sort(), ['g1', 'g2'], 'g2 must survive');
+  assert.deepEqual(Object.keys(server.doc.lists.F.deletedGames), []);
+  assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g2']);
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {

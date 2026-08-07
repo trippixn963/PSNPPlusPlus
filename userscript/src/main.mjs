@@ -150,10 +150,20 @@ export async function start() {
         client, loadBase, saveBase, saveBackup, confirmAdoptions,
         now: Date.now()
       });
-      indicator.setState(
-        result.status === 'synced' ? 'synced' : 'conflict',
-        result.status === 'synced' ? `Revision ${result.revision}` : 'Could not settle — try again'
-      );
+      if (result.status === 'synced') {
+        indicator.setState('synced', `Revision ${result.revision}`);
+      } else if (result.status === 'corrupt') {
+        // runSyncCycle refused to act on an unreadable psnpp-lists rather than
+        // read it as "every list was deleted here". Say so plainly and point at
+        // the escape hatch — restoring is the user's decision, never automatic.
+        indicator.setState(
+          'conflict',
+          'Your PSNP+ list data looks unreadable — nothing was synced. ' +
+          'Right-click to restore a backup.'
+        );
+      } else {
+        indicator.setState('conflict', 'Could not settle — try again');
+      }
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown
