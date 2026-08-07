@@ -12,7 +12,7 @@
  */
 
 import { createSyncClient, gmRequest } from './sync-client.mjs';
-import { loadConfig, promptForConfig } from './config.mjs';
+import { loadConfig, promptForConfig, isAllowedEndpoint } from './config.mjs';
 import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
 import { recordSync, listSyncHistory } from './history.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
@@ -180,20 +180,6 @@ export async function handleSyncNowClick({ loadConfig, openSettings, sync }) {
   await sync();
 }
 
-/**
- * Maps a finished sync cycle to the indicator's state + tooltip detail.
- *
- * PSNP+ renders its list view from localStorage at render time, and this
- * script writes to localStorage behind it — an already-drawn page keeps
- * showing stale data until reload, by design (we do not reach into PSNP+'s
- * internals to force a re-render). `changed` is runSyncCycle's own truthful
- * report of whether the cycle actually wrote, so a sync that changed
- * something gets a state that says so; a sync that changed nothing (the
- * common case) keeps the plain "Synced" text unchanged.
- *
- * Pure and exported so this mapping is pinned directly, without needing a
- * real sync cycle or a DOM.
- */
 const countOf = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
 /**
@@ -219,6 +205,23 @@ export function describeDelta(delta) {
   return parts.length > 0 ? parts.join(', ') : 'lists updated';
 }
 
+/**
+ * Maps a finished sync cycle to the indicator's state + tooltip detail.
+ *
+ * PSNP+ renders its list view from localStorage at render time, and this
+ * script writes to localStorage behind it — an already-drawn page keeps
+ * showing stale data until reload, by design (we do not reach into PSNP+'s
+ * internals to force a re-render). `changed` is runSyncCycle's own truthful
+ * report of whether the cycle actually wrote, so a sync that changed
+ * something gets a state that says so; a sync that changed nothing (the
+ * common case) keeps the plain "Synced" text unchanged.
+ *
+ * Note this only decides what a SINGLE cycle reports. Keeping the reload offer
+ * alive across the quiet cycle that follows is createIndicatorPainter's job.
+ *
+ * Pure and exported so this mapping is pinned directly, without needing a
+ * real sync cycle or a DOM.
+ */
 export function describeSyncResult(result) {
   if (result.status === 'synced') {
     return result.changed
@@ -237,6 +240,62 @@ export function describeSyncResult(result) {
     };
   }
   return { state: 'conflict', detail: 'Could not settle — try again' };
+}
+
+/**
+ * Wraps `indicator.setState` so that `reload` is STICKY until the page is
+ * actually reloaded.
+ *
+ * `reload` is an affordance, not a status. Writing to localStorage goes through
+ * the setItem patch this script installs, so our own write wakes watchLists,
+ * which debounces 3s and runs a second cycle — one that correctly finds nothing
+ * to do and reports `changed === false`. Letting that repaint the chip 'synced'
+ * took the reload offer away about three seconds after making it, while PSNP+'s
+ * drawn list was still stale. Executed end-to-end: the chip went
+ * `reload -> synced` and the click silently reverted from "reload" to "sync".
+ *
+ * Only 'synced' and 'syncing' are suppressed. Errors must always be visible —
+ * and because the flag is not cleared, the reload offer comes back as soon as
+ * the error does. Nothing resets it, deliberately: the only thing that should
+ * is a page load, which destroys this whole closure anyway.
+ *
+ * The suppressed 'syncing' also closes a small misfire window — a chip that
+ * flickered to 'syncing' would, for that moment, treat a click as a sync.
+ */
+export function createIndicatorPainter(setState) {
+  let awaitingReload = false;
+  let reloadDetail = '';
+  return (state, detail = '') => {
+    if (state === 'reload') {
+      awaitingReload = true;
+      reloadDetail = detail;
+    }
+    if (awaitingReload && (state === 'synced' || state === 'syncing')) {
+      setState('reload', reloadDetail);
+      return;
+    }
+    setState(state, detail);
+  };
+}
+
+const INSECURE_ENDPOINT_WARNING =
+  'WARNING: this endpoint is not https, so your sync key is sent unencrypted. ' +
+  'Right-click and choose 1 to change it.';
+
+/**
+ * Prefix a chip detail with a warning when the endpoint is not https.
+ *
+ * `isAllowedEndpoint` is enforced when an endpoint is SAVED, which does nothing
+ * for one that was already stored before the check existed — that install keeps
+ * sending `X-Sync-Key` in cleartext on every cycle, silently and forever.
+ *
+ * Warn, do not block. Refusing to sync would break a working setup to punish a
+ * setting the user cannot see, and the fix is two clicks away in the menu this
+ * message names.
+ */
+export function decorateDetail(detail, endpoint) {
+  if (isAllowedEndpoint(endpoint)) return detail;
+  return detail ? `${INSECURE_ENDPOINT_WARNING}\n${detail}` : INSECURE_ENDPOINT_WARNING;
 }
 
 export async function start() {
@@ -269,6 +328,11 @@ export async function start() {
   });
   document.body.appendChild(indicator.element);
 
+  // Every repaint in sync() goes through this, never indicator.setState
+  // directly — that is what keeps the reload offer alive across the quiet
+  // cycle our own write provokes.
+  const paint = createIndicatorPainter(indicator.setState);
+
   let running = false;
   let pending = false;
   let timer = null;
@@ -297,10 +361,10 @@ export async function start() {
     try {
       const config = await loadConfig();
       if (!config.key) {
-        indicator.setState('unconfigured', 'Click to set up sync (or right-click for settings)');
+        paint('unconfigured', 'Click to set up sync (or right-click for settings)');
         return;
       }
-      indicator.setState('syncing');
+      paint('syncing');
       const client = createSyncClient({ ...config, request: gmRequest });
       const result = await runSyncCycle({
         storage: window.localStorage,
@@ -308,7 +372,7 @@ export async function start() {
         now: Date.now()
       });
       const { state, detail } = describeSyncResult(result);
-      indicator.setState(state, detail);
+      paint(state, decorateDetail(detail, config.endpoint));
 
       // Only cycles that actually wrote are logged. Syncs fire on every load,
       // every tab focus and every debounced edit, and the overwhelming majority
@@ -330,7 +394,7 @@ export async function start() {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown
       // non-Error (e.g. `throw null`) must not itself make sync() reject.
-      indicator.setState('offline', String(error?.message ?? error));
+      paint('offline', String(error?.message ?? error));
     } finally {
       running = false;
       if (pending) {

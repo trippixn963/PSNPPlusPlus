@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { saveBackup, listBackups } from '../src/backup.mjs';
 import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
-import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta } from '../src/main.mjs';
+import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta,
+  createIndicatorPainter, decorateDetail } from '../src/main.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
 
@@ -275,6 +276,88 @@ test('a result carrying no delta at all does not produce "undefined" in the tool
   // Defensive: a history entry written by an older version has no delta.
   const { detail } = describeSyncResult({ status: 'synced', revision: 7, changed: true });
   assert.doesNotMatch(detail, /undefined|NaN/);
+});
+
+// --- `reload` is an affordance, not a status --------------------------------
+//
+// Our own writeSyncable goes through the patched setItem -> watchLists.check()
+// -> onChange -> the 3s debounce -> a second, no-op cycle. That cycle reports
+// changed === false, which used to repaint the chip 'synced' about three
+// seconds after it said 'reload'. PSNP+'s drawn list is still stale at that
+// point, so the chip stopped telling the truth AND the one-click reload the
+// user was being offered silently became a sync.
+
+test('a quiet cycle cannot repaint the chip out of the reload state', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('syncing');
+  paint('reload', 'Revision 3 — +1 game');
+  paint('syncing');                       // the debounced second cycle starts
+  paint('synced', 'Revision 3');          // ...and finds nothing to do
+
+  assert.deepEqual(painted.map(p => p[0]), ['syncing', 'reload', 'reload', 'reload']);
+  // The tooltip keeps the delta that earned the reload, not the empty later one.
+  assert.equal(painted[3][1], 'Revision 3 — +1 game');
+});
+
+test('a later cycle that brings MORE changes keeps reload and updates the detail', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('reload', 'Revision 3 — +1 game');
+  paint('reload', 'Revision 4 — +2 lists');
+
+  assert.deepEqual(painted[1], ['reload', 'Revision 4 — +2 lists']);
+});
+
+test('errors still show through a pending reload, and it survives them', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  paint('reload', 'Revision 3 — +1 game');
+  paint('offline', 'Network error');      // must be visible, not swallowed
+  paint('conflict', 'Could not settle');
+  paint('synced', 'Revision 3');          // back to quiet -> reload returns
+
+  assert.deepEqual(painted.map(p => p[0]), ['reload', 'offline', 'conflict', 'reload']);
+});
+
+test('before any reload, every state paints exactly as given', () => {
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push([state, detail]));
+
+  for (const state of ['idle', 'syncing', 'synced', 'offline', 'conflict', 'unconfigured']) {
+    paint(state, `d-${state}`);
+  }
+  assert.deepEqual(painted.map(p => p[0]),
+    ['idle', 'syncing', 'synced', 'offline', 'conflict', 'unconfigured']);
+  assert.deepEqual(painted.map(p => p[1]),
+    ['d-idle', 'd-syncing', 'd-synced', 'd-offline', 'd-conflict', 'd-unconfigured']);
+});
+
+// --- a grandfathered http endpoint keeps leaking the key --------------------
+//
+// isAllowedEndpoint is a save-time check, so an endpoint stored before it
+// existed still sends X-Sync-Key in cleartext on every cycle. Warn rather than
+// block: refusing to sync would break a working install to punish a setting the
+// user cannot see.
+
+test('an http endpoint is called out in the chip detail', () => {
+  const detail = decorateDetail('Revision 7', 'http://trippixn.com/api/psnppp');
+  assert.match(detail, /not https|unencrypted/i);
+  assert.match(detail, /Revision 7/, 'the real detail must survive the warning');
+});
+
+test('an https or loopback endpoint adds no warning at all', () => {
+  assert.equal(decorateDetail('Revision 7', 'https://trippixn.com/api/psnppp'), 'Revision 7');
+  assert.equal(decorateDetail('Revision 7', 'http://127.0.0.1:8091/api'), 'Revision 7');
+});
+
+test('the warning still appears when there is no other detail to show', () => {
+  const detail = decorateDetail('', 'http://trippixn.com/api/psnppp');
+  assert.match(detail, /unencrypted/i);
+  assert.doesNotMatch(detail, /^\s|undefined/);
 });
 
 // --- the settings menu exposes the history ----------------------------------

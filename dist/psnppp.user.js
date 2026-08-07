@@ -377,11 +377,11 @@ Type a new key, or leave this blank to keep the stored one.`,
       onSettings();
     });
     function setState(state, detail = "") {
-      const style = STATES[state] ?? STATES.idle;
+      const style = Object.hasOwn(STATES, state) ? STATES[state] : STATES.idle;
       action = style.action;
       element.style.background = style.color;
       label.textContent = style.label;
-      const hint = CLICK_HINT[action];
+      const hint = CLICK_HINT[action] ?? CLICK_HINT.sync;
       element.title = detail ? `PSNP++ \u2014 ${detail}
 ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
@@ -912,6 +912,27 @@ Enter a number:`, "1");
     }
     return { state: "conflict", detail: "Could not settle \u2014 try again" };
   }
+  function createIndicatorPainter(setState) {
+    let awaitingReload = false;
+    let reloadDetail = "";
+    return (state, detail = "") => {
+      if (state === "reload") {
+        awaitingReload = true;
+        reloadDetail = detail;
+      }
+      if (awaitingReload && (state === "synced" || state === "syncing")) {
+        setState("reload", reloadDetail);
+        return;
+      }
+      setState(state, detail);
+    };
+  }
+  var INSECURE_ENDPOINT_WARNING = "WARNING: this endpoint is not https, so your sync key is sent unencrypted. Right-click and choose 1 to change it.";
+  function decorateDetail(detail, endpoint) {
+    if (isAllowedEndpoint(endpoint)) return detail;
+    return detail ? `${INSECURE_ENDPOINT_WARNING}
+${detail}` : INSECURE_ENDPOINT_WARNING;
+  }
   async function start() {
     try {
       await migrateGmStorage();
@@ -934,6 +955,7 @@ Enter a number:`, "1");
       }
     });
     document.body.appendChild(indicator.element);
+    const paint = createIndicatorPainter(indicator.setState);
     let running = false;
     let pending = false;
     let timer = null;
@@ -946,10 +968,10 @@ Enter a number:`, "1");
       try {
         const config = await loadConfig();
         if (!config.key) {
-          indicator.setState("unconfigured", "Click to set up sync (or right-click for settings)");
+          paint("unconfigured", "Click to set up sync (or right-click for settings)");
           return;
         }
-        indicator.setState("syncing");
+        paint("syncing");
         const client = createSyncClient({ ...config, request: gmRequest });
         const result = await runSyncCycle({
           storage: window.localStorage,
@@ -961,7 +983,7 @@ Enter a number:`, "1");
           now: Date.now()
         });
         const { state, detail } = describeSyncResult(result);
-        indicator.setState(state, detail);
+        paint(state, decorateDetail(detail, config.endpoint));
         if (result.status === "synced" && result.changed) {
           try {
             await recordSync({ revision: result.revision, delta: result.delta });
@@ -970,7 +992,7 @@ Enter a number:`, "1");
           }
         }
       } catch (error) {
-        indicator.setState("offline", String(error?.message ?? error));
+        paint("offline", String(error?.message ?? error));
       } finally {
         running = false;
         if (pending) {

@@ -69,11 +69,19 @@ export function createIndicator({ onSyncNow, onSettings, onReload }) {
   });
 
   function setState(state, detail = '') {
-    const style = STATES[state] ?? STATES.idle;
+    // Own-property lookup, not `STATES[state] ?? STATES.idle`. Every key on
+    // Object.prototype ('constructor', 'toString', '__proto__', ...) resolves
+    // truthy through the prototype chain, so `??` never fires for them and
+    // `style` ends up as a function with no color/label/action. That made
+    // setState THROW on `hint[0]` — breaking Task 9's HARD no-throw guarantee,
+    // which exists because this runs inside a page we do not own. The old
+    // bogus-state test used 'some-bogus-state', which is not on the prototype
+    // and so never caught it.
+    const style = Object.hasOwn(STATES, state) ? STATES[state] : STATES.idle;
     action = style.action;
     element.style.background = style.color;
     label.textContent = style.label;
-    const hint = CLICK_HINT[action];
+    const hint = CLICK_HINT[action] ?? CLICK_HINT.sync;
     element.title = detail
       ? `PSNP++ — ${detail}\n${hint[0].toUpperCase()}${hint.slice(1)}`
       : `PSNP++ — ${hint}`;

@@ -53,6 +53,45 @@ test('createIndicator does not throw on unknown state', () => {
   }
 });
 
+test('createIndicator does not throw on an Object.prototype key', () => {
+  // 'some-bogus-state' is not on the prototype chain, so `STATES[state] ??
+  // STATES.idle` catches it and the original no-throw test passed. These do
+  // resolve truthy through the chain, so the ?? never fires and `style` is a
+  // function with no color/label/action — which is what made the click-hint
+  // lookup throw. Task 9 pinned "setState must never throw" as HARD because
+  // this runs inside a page we do not own.
+  installFakeDocument();
+  try {
+    const indicator = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {} });
+    for (const state of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      // BOTH branches. The tooltip only capitalises the click hint when there
+      // IS a detail, so `setState(state)` alone takes the other branch and
+      // renders "undefined" harmlessly — it never reaches the throwing line.
+      // Every real call from sync() passes a detail.
+      assert.doesNotThrow(() => indicator.setState(state), `setState(${state}) must not throw`);
+      assert.doesNotThrow(() => indicator.setState(state, 'Revision 7'),
+        `setState(${state}, detail) must not throw`);
+    }
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('an Object.prototype key falls back to idle and still clicks as a sync', () => {
+  const fake = installFakeDocument();
+  try {
+    const { calls, handlers } = spies();
+    const indicator = createIndicator(handlers);
+    indicator.setState('constructor');
+    fake.chip.listeners.get('click')();
+    assert.equal(calls.sync, 1, 'the idle fallback syncs');
+    assert.equal(calls.reload, 0);
+    assert.match(fake.chip.title, /click to sync/i);
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
 test('createIndicator does not throw on valid state', () => {
   installFakeDocument();
   try {
