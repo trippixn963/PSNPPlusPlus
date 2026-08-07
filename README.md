@@ -13,8 +13,53 @@ architecture, merge rules, and failure handling.
 
 | Path | Contents |
 |---|---|
+| `userscript/src/` | Userscript ESM sources — `main.mjs` is the entry point |
+| `userscript/tests/` | Node test-runner suites (`npm test`) |
+| `userscript/banner.txt` | The `==UserScript==` metadata block, prepended at build time |
+| `userscript/build.mjs` | esbuild bundler (`npm run build`) |
+| `dist/psnp-sync.user.js` | **The built userscript — this is the file you install** |
+| `sidecar/app.py` | FastAPI sync service (SQLite, one document, revision guard) |
+| `sidecar/tests/` | pytest suite for the sidecar |
+| `sidecar/deploy/` | systemd unit, nginx location block, and the [deployment runbook](sidecar/deploy/README.md) |
 | `docs/specs/` | Design specs |
 | `vendor/psnp-plus.user.js` | Upstream PSNP+ — read-only reference |
+
+## Setup
+
+Target platform: desktop Chrome with Tampermonkey, alongside PSNP+.
+
+### 1. Deploy the sidecar
+
+Follow [`sidecar/deploy/README.md`](sidecar/deploy/README.md) end to end. It generates the shared
+secret, installs the service on the VPS, and adds the nginx location block — including the
+before/after checks that prove the shared nginx config did not break a neighbouring service, a neighbouring service, or the
+portfolio. Keep the secret from step 1; each browser needs it.
+
+### 2. Build and install the userscript
+
+```bash
+npm install
+npm test          # 130 tests
+npm run build     # writes dist/psnp-sync.user.js
+```
+
+Install `dist/psnp-sync.user.js` in Tampermonkey — open the Tampermonkey dashboard, choose
+**Utilities → File → Import** (or drag the file onto the dashboard), and enable it. `dist/` is
+committed, so it can also be installed straight from the repo without a local build. Rebuild and
+reinstall after any change to `userscript/src/` — the bundle is what actually runs.
+
+### 3. Enter the sync key on each device
+
+Load any `psnprofiles.com` page. A small status chip appears in the bottom-right corner; until it
+is configured it reads **Set up sync**.
+
+**Right-click the chip** to open settings, choose `1`, accept the default endpoint
+(`https://trippixn.com/api/psnp-sync`), and paste the secret from step 1. The key is stored in
+Tampermonkey's own storage, never in the script file. Left-clicking the chip syncs immediately;
+right-click also offers `2` to restore a pre-merge backup.
+
+Repeat on every device. The first device to sync uploads its lists; the next one is offered a
+one-time prompt to link same-named lists instead of ending up with two copies of "Wishlist".
 
 ## Vendored PSNP+
 
