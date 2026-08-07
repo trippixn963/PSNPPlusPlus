@@ -41,6 +41,65 @@ function fingerprint(lists) {
   return JSON.stringify([...lists].sort((a, b) => String(a.id).localeCompare(String(b.id))));
 }
 
+const ZERO_DELTA = {
+  listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0
+};
+
+/**
+ * The delta for a cycle that wrote nothing.
+ *
+ * Every early return in this file — corrupt storage, an exhausted retry, either
+ * CAS abort — reports one of these. A delta describes what reached storage, so
+ * a cycle that abandoned its write has nothing to report, and saying otherwise
+ * would make the history log lie in exactly the situation it exists to explain.
+ */
+const zeroDelta = () => ({ ...ZERO_DELTA });
+
+/**
+ * What a cycle did, in the only terms the user thinks in.
+ *
+ * Derived from the two list arrays the cycle already built — the snapshot it
+ * read and the merge it is about to write — so it costs one pass over data
+ * already in hand. Deliberately NOT a second merge and NOT a re-read of
+ * storage: a delta computed from a different read than the write it describes
+ * would be a second source of truth about the same cycle, and this file has
+ * already destroyed data twice by letting two reads disagree.
+ *
+ * `renames` folds an adoption's id rewrite (local-1 -> remote-1) into one
+ * identity. Without it the single most alarming line this log can print — "1
+ * list removed, 1 list added" — would appear on the most ordinary first sync
+ * there is, and it would be false: nothing was removed, the list simply took
+ * the id the server already had for it.
+ */
+function summarizeDelta(before, after, renames) {
+  const gameIds = list => new Set((list.games ?? []).map(g => String(g.id)));
+  const beforeById = new Map(before.map(l => [renames.get(String(l.id)) ?? String(l.id), l]));
+  const afterById = new Map(after.map(l => [String(l.id), l]));
+
+  const delta = { ...ZERO_DELTA, listsLinked: renames.size };
+
+  for (const [listId, list] of afterById) {
+    const previous = beforeById.get(listId);
+    if (previous == null) {
+      delta.listsAdded += 1;
+      delta.gamesAdded += gameIds(list).size;
+      continue;
+    }
+    const had = gameIds(previous);
+    const has = gameIds(list);
+    for (const gameId of has) if (!had.has(gameId)) delta.gamesAdded += 1;
+    for (const gameId of had) if (!has.has(gameId)) delta.gamesRemoved += 1;
+  }
+
+  for (const [listId, list] of beforeById) {
+    if (afterById.has(listId)) continue;
+    delta.listsRemoved += 1;
+    delta.gamesRemoved += gameIds(list).size;
+  }
+
+  return delta;
+}
+
 /** A copy of `doc` with the given list ids removed. */
 function dropLists(doc, ids) {
   if (ids.size === 0) return doc;
@@ -131,6 +190,8 @@ export async function runSyncCycle({
   // whatever storage actually holds by then.
   const adoptions = planAdoptions(toDoc(readSyncable(storage).syncable), remote.doc);
   const adopt = adoptions.length > 0 && (await confirmAdoptions(adoptions));
+  // The same plan the merge applies, in the shape the delta needs.
+  const renames = new Map(adopt ? adoptions.map(a => [String(a.localId), String(a.remoteId)]) : []);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     // ONE read of localStorage per attempt. Which lists are frozen, what the
@@ -171,7 +232,7 @@ export async function runSyncCycle({
     // offer. Every base that should trip this guard has at least one live list
     // in it, so asking for one costs the Clear-button protection nothing.
     if (snapshot.raw == null && Object.values(base.lists).some(n => n.deletedAt == null)) {
-      return { status: 'corrupt', revision: remote.revision, changed: false };
+      return { status: 'corrupt', revision: remote.revision, changed: false, delta: zeroDelta() };
     }
 
     // Local state is unreadable. Every inference below — above all "in base,
@@ -180,7 +241,7 @@ export async function runSyncCycle({
     // they are, and let the caller tell the user their list data looks broken
     // and that a backup can be restored. Restoring is the user's call, not ours.
     if (snapshot.corrupt) {
-      return { status: 'corrupt', revision: remote.revision, changed: false };
+      return { status: 'corrupt', revision: remote.revision, changed: false, delta: zeroDelta() };
     }
 
     // Lists that turned into a PSNP+ 📡 remote list on this device (the
@@ -214,6 +275,10 @@ export async function runSyncCycle({
     // and that rewrite still has to reach localStorage.
     const currentLists = snapshot.syncable;
     const changed = fingerprint(fromDoc(toDoc(currentLists))) !== fingerprint(mergedLists);
+    // Only computed when there is a write to describe. `changed === false` means
+    // the fingerprints agree, so every count would come out zero anyway — this
+    // just says so without the pass.
+    const delta = changed ? summarizeDelta(currentLists, mergedLists, renames) : zeroDelta();
 
     // Push before writing anything to storage. Writing first (and only
     // advancing `base` on success) meant a rejected attempt still left its
@@ -244,7 +309,7 @@ export async function runSyncCycle({
       // that converges on the next cycle does not justify another change to
       // this path.
       if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-        return { status: 'synced', revision: result.revision, changed: false };
+        return { status: 'synced', revision: result.revision, changed: false, delta: zeroDelta() };
       }
       if (changed) {
         // Snapshot the untouched lists before the merge result overwrites them.
@@ -257,7 +322,7 @@ export async function runSyncCycle({
         // last await. It is also mild — the slot holds a genuine snapshot of
         // genuine data, so at most it displaces an older snapshot.
         if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-          return { status: 'synced', revision: result.revision, changed: false };
+          return { status: 'synced', revision: result.revision, changed: false, delta: zeroDelta() };
         }
         writeSyncable(storage, mergedLists);
       }
@@ -275,7 +340,7 @@ export async function runSyncCycle({
       // with what frozen means (excluded from sync entirely); silently
       // destroying diverged content is not.
       await saveBase(dropLists(merged, frozenIds));
-      return { status: 'synced', revision: result.revision, changed };
+      return { status: 'synced', revision: result.revision, changed, delta };
     }
 
     // Someone wrote between our pull and our push. Re-merge against their copy
@@ -285,5 +350,5 @@ export async function runSyncCycle({
 
   // Every attempt was rejected: nothing was ever written to storage, so there
   // is nothing to report as changed.
-  return { status: 'conflict', revision: remote.revision, changed: false };
+  return { status: 'conflict', revision: remote.revision, changed: false, delta: zeroDelta() };
 }

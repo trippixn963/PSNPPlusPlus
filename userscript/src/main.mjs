@@ -14,6 +14,7 @@
 import { createSyncClient, gmRequest } from './sync-client.mjs';
 import { loadConfig, promptForConfig } from './config.mjs';
 import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
+import { recordSync, listSyncHistory } from './history.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
@@ -61,8 +62,25 @@ async function confirmAdoptions(adoptions) {
   );
 }
 
+/** Render the recorded sync history into one alert. Read-only. */
+function showSyncHistory(history) {
+  if (history.length === 0) {
+    window.alert(
+      'PSNP++ — no sync changes recorded yet.\n\n' +
+      'Only syncs that actually wrote to your lists are logged here, so a run ' +
+      'of quiet syncs leaves this empty.'
+    );
+    return;
+  }
+  const lines = history.map(entry =>
+    `${new Date(entry.at).toLocaleString()} — r${entry.revision} — ${describeDelta(entry.delta)}`
+  );
+  window.alert(`PSNP++ — recent sync changes (newest first):\n\n${lines.join('\n')}`);
+}
+
 /**
- * Settings menu: re-enter credentials, or roll back to a pre-merge snapshot.
+ * Settings menu: re-enter credentials, review recent syncs, or roll back to a
+ * pre-merge snapshot.
  *
  * Restore exists because the merge writes to the only copy of these lists on the
  * device. It is the escape hatch if a merge ever gets it wrong.
@@ -76,13 +94,23 @@ async function confirmAdoptions(adoptions) {
 export async function openSettings() {
   try {
     const backups = await listBackups();
+    const history = await listSyncHistory();
     const choice = window.prompt(
       'PSNP++\n\n1 — Enter endpoint and sync key\n' +
-      `2 — Restore a pre-merge backup (${backups.length} available)\n\nChoose 1 or 2:`,
+      `2 — Restore a pre-merge backup (${backups.length} available)\n` +
+      `3 — Recent sync changes (${history.length})\n\nChoose 1, 2 or 3:`,
       '1'
     );
     if (choice === '1') {
       await promptForConfig();
+      return;
+    }
+    // Read-only, and deliberately just another branch of this same prompt: the
+    // settings menu is the established surface for everything that is not the
+    // chip itself, and a log does not justify a panel, an overlay, or anything
+    // else permanently occupying a page we do not own.
+    if (choice === '3') {
+      showSyncHistory(history);
       return;
     }
     if (choice !== '2') return;
@@ -166,12 +194,38 @@ export async function handleSyncNowClick({ loadConfig, openSettings, sync }) {
  * Pure and exported so this mapping is pinned directly, without needing a
  * real sync cycle or a DOM.
  */
+const countOf = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+/**
+ * A cycle's delta as one short human phrase, e.g. "+3 games, -1 list linked".
+ *
+ * Zero counters are omitted rather than printed as "0 games": the whole value
+ * of this line is that everything in it actually happened. When nothing
+ * countable moved but the cycle still wrote — a rename, or a reorder, neither
+ * of which the five counters track — it falls back to a vague-but-true phrase
+ * instead of an inventory of zeros.
+ *
+ * Exported so the settings history can render entries with the same words the
+ * tooltip used at the time, rather than a second dialect of the same data.
+ */
+export function describeDelta(delta) {
+  if (delta == null) return 'lists updated';
+  const parts = [];
+  if (delta.gamesAdded > 0) parts.push(`+${countOf(delta.gamesAdded, 'game')}`);
+  if (delta.gamesRemoved > 0) parts.push(`-${countOf(delta.gamesRemoved, 'game')}`);
+  if (delta.listsAdded > 0) parts.push(`+${countOf(delta.listsAdded, 'list')}`);
+  if (delta.listsRemoved > 0) parts.push(`-${countOf(delta.listsRemoved, 'list')}`);
+  if (delta.listsLinked > 0) parts.push(`${countOf(delta.listsLinked, 'list')} linked`);
+  return parts.length > 0 ? parts.join(', ') : 'lists updated';
+}
+
 export function describeSyncResult(result) {
   if (result.status === 'synced') {
     return result.changed
       ? {
           state: 'reload',
-          detail: `Revision ${result.revision} — reload the page to see your updated lists`
+          detail: `Revision ${result.revision} — ${describeDelta(result.delta)} — ` +
+            'reload the page to see your updated lists'
         }
       : { state: 'synced', detail: `Revision ${result.revision}` };
   }
@@ -255,6 +309,23 @@ export async function start() {
       });
       const { state, detail } = describeSyncResult(result);
       indicator.setState(state, detail);
+
+      // Only cycles that actually wrote are logged. Syncs fire on every load,
+      // every tab focus and every debounced edit, and the overwhelming majority
+      // of them change nothing — recording those would push the 20-entry window
+      // past the one interesting entry within minutes and leave a log that
+      // cannot answer the question it exists for.
+      //
+      // Its own try/catch, INSIDE the state update: the history is a nicety and
+      // the sync is the product, so a failure to write a log line must never
+      // repaint a successful sync as "Offline".
+      if (result.status === 'synced' && result.changed) {
+        try {
+          await recordSync({ revision: result.revision, delta: result.delta });
+        } catch (error) {
+          console.error('[psnppp] could not record sync history:', error);
+        }
+      }
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown

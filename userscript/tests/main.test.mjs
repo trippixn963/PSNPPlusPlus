@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { saveBackup, listBackups } from '../src/backup.mjs';
+import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
-import { openSettings, loadBase, handleSyncNowClick, describeSyncResult } from '../src/main.mjs';
+import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta } from '../src/main.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
 
@@ -41,18 +42,26 @@ function installFakeGM() {
 }
 function uninstallFakeGM() { delete globalThis.GM; }
 
-/** A fake window.* with scripted prompt/confirm answers, consumed in order. */
+/**
+ * A fake window.* with scripted prompt/confirm answers, consumed in order.
+ * Every prompt call is also recorded, so a test can assert on the menu text
+ * itself and not only on what the answer produced.
+ */
 function installFakeWindow(storage, { prompts = [], confirms = [] } = {}) {
   const alerts = [];
+  const promptCalls = [];
   let reloaded = false;
   globalThis.window = {
     localStorage: storage,
-    prompt: () => (prompts.length ? prompts.shift() : null),
+    prompt: (message, initial) => {
+      promptCalls.push({ message, initial });
+      return prompts.length ? prompts.shift() : null;
+    },
     confirm: () => (confirms.length ? confirms.shift() : true),
     alert: message => { alerts.push(message); },
     location: { reload: () => { reloaded = true; } }
   };
-  return { alerts, wasReloaded: () => reloaded };
+  return { alerts, promptCalls, wasReloaded: () => reloaded };
 }
 function uninstallFakeWindow() { delete globalThis.window; }
 
@@ -204,4 +213,137 @@ test('a sync that changed nothing keeps the plain synced text, no reload mention
   const { state, detail } = describeSyncResult({ status: 'synced', revision: 7, changed: false });
   assert.equal(state, 'synced');
   assert.doesNotMatch(detail, /reload/i);
+});
+
+// --- the tooltip says WHAT changed ------------------------------------------
+//
+// "Synced" answers a question nobody has. The merge already knows the delta,
+// and the tooltip is the one place it can go without adding UI chrome — the
+// chip's LABEL stays short and comes from indicator.mjs's fixed state table.
+
+const delta = over => ({
+  listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0, ...over
+});
+
+test('the delta appears in the tooltip detail', () => {
+  const { detail } = describeSyncResult({
+    status: 'synced', revision: 7, changed: true,
+    delta: delta({ gamesAdded: 3, gamesRemoved: 1, listsAdded: 2, listsRemoved: 1, listsLinked: 1 })
+  });
+  assert.match(detail, /3 games/);
+  assert.match(detail, /1 game\b/);
+  assert.match(detail, /2 lists/);
+  assert.match(detail, /1 list\b/);
+  assert.match(detail, /linked/);
+  assert.match(detail, /Revision 7/);
+});
+
+test('the delta is singular or plural as the counts require', () => {
+  const one = describeSyncResult({
+    status: 'synced', revision: 1, changed: true, delta: delta({ gamesAdded: 1 })
+  }).detail;
+  assert.match(one, /\b1 game\b/);
+  assert.doesNotMatch(one, /1 games/);
+
+  const many = describeSyncResult({
+    status: 'synced', revision: 1, changed: true, delta: delta({ gamesAdded: 4 })
+  }).detail;
+  assert.match(many, /\b4 games\b/);
+});
+
+test('counts that did not move are left out of the delta phrase entirely', () => {
+  // Asserted on describeDelta rather than the whole tooltip: the tooltip's
+  // trailing "reload the page to see your updated lists" legitimately contains
+  // the word, and matching against it would test the sentence, not the counts.
+  assert.equal(describeDelta(delta({ gamesAdded: 2 })), '+2 games');
+  assert.equal(describeDelta(delta({ gamesRemoved: 1 })), '-1 game');
+  assert.equal(describeDelta(delta({ listsAdded: 1, gamesAdded: 5 })), '+5 games, +1 list');
+  assert.equal(describeDelta(delta({ listsLinked: 2 })), '2 lists linked');
+});
+
+test('a change with no countable delta still says something true', () => {
+  // A rename or a reorder moves none of the five counters but genuinely wrote.
+  // Reporting "0 games" there would be worse than saying nothing specific.
+  const { detail } = describeSyncResult({
+    status: 'synced', revision: 7, changed: true, delta: delta()
+  });
+  assert.doesNotMatch(detail, /\b0\b/);
+  assert.match(detail, /Revision 7/);
+});
+
+test('a result carrying no delta at all does not produce "undefined" in the tooltip', () => {
+  // Defensive: a history entry written by an older version has no delta.
+  const { detail } = describeSyncResult({ status: 'synced', revision: 7, changed: true });
+  assert.doesNotMatch(detail, /undefined|NaN/);
+});
+
+// --- the settings menu exposes the history ----------------------------------
+
+test('the settings menu offers the sync history and prints the recorded entries', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    await recordSync({ revision: 11, delta: delta({ gamesAdded: 2 }) }, 1000);
+    await recordSync({ revision: 12, delta: delta({ listsRemoved: 1 }) }, 2000);
+
+    const fake = installFakeWindow(storage, { prompts: ['3'] });
+    try {
+      await openSettings();
+    } finally {
+      uninstallFakeWindow();
+    }
+
+    // The menu itself must advertise the option, or it does not exist.
+    assert.match(fake.promptCalls[0].message, /3 —/);
+    assert.equal(fake.alerts.length, 1);
+    const shown = fake.alerts[0];
+    assert.match(shown, /12/, 'the newest revision must be listed');
+    assert.match(shown, /11/, 'and the older one too');
+    assert.match(shown, /2 games/);
+    assert.match(shown, /1 list\b/);
+    // Reading history must not touch the lists.
+    assert.deepEqual(readLists(storage).map(l => l.id), ['current']);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('an empty history says so rather than showing a blank box', async () => {
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    const fake = installFakeWindow(storage, { prompts: ['3'] });
+    try {
+      await openSettings();
+    } finally {
+      uninstallFakeWindow();
+    }
+    assert.equal(fake.alerts.length, 1);
+    assert.match(fake.alerts[0], /no sync/i);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the restore flow still works now that the menu has three options', async () => {
+  // The menu's numbering is the only thing standing between "restore a backup"
+  // and "show me a log", and one of them overwrites the user's lists.
+  installFakeGM();
+  const storage = fakeStorage();
+  writeLists(storage, [list('current', 'Current')]);
+  try {
+    await saveBackup([list('backup-1', 'Backup One')], 1000);
+    const fake = installFakeWindow(storage, { prompts: ['2', '1'], confirms: [true] });
+    try {
+      await openSettings();
+    } finally {
+      uninstallFakeWindow();
+    }
+    assert.deepEqual(readLists(storage).map(l => l.id), ['backup-1']);
+    assert.equal(fake.alerts.some(a => /failed/i.test(a)), false, fake.alerts.join(' | '));
+  } finally {
+    uninstallFakeGM();
+  }
 });

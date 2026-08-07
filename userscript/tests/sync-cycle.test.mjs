@@ -754,6 +754,119 @@ test('[null] is corruption — the length check is what stops it reading as "eve
   assertNothingDestroyed(server, h, storage, '[null]');
 });
 
+// --- The cycle reports WHAT it changed --------------------------------------
+//
+// "Synced" alone cannot answer the only question that ever gets asked after a
+// list looks wrong: did a sync do that? The merge already knows the answer, so
+// the cycle reports it rather than anyone re-deriving it from storage.
+//
+// The delta describes what the cycle DID — so every path that writes nothing
+// reports zeros, and the counts are only ever non-zero when `changed` is true.
+
+const ZERO = { listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0 };
+
+test('a cycle that pulls in a remote game reports it as one game added', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 500), 1);
+
+  const result = await runSyncCycle(harness(storage, server).args);
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.delta, { ...ZERO, gamesAdded: 1 });
+});
+
+test('a cycle that receives a whole new list counts the list AND its games', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist')]);
+  const server = fakeServer(
+    stampChanges(emptyDoc(), toDoc([list('B', 'Backlog', [game('g8'), game('g9')])]), 500), 1
+  );
+
+  const result = await runSyncCycle(harness(storage, server).args);
+  assert.deepEqual(result.delta, { ...ZERO, listsAdded: 1, gamesAdded: 2 });
+});
+
+test('a deletion arriving from another device is reported as a removal', async () => {
+  const storage = fakeStorage();
+  const before = [list('A', 'Wishlist', [game('g1')]), list('B', 'Backlog', [game('g8')])];
+  writeLists(storage, before);
+  const base = toDoc(before);
+  // The other device deleted B, so the server holds a tombstone for it.
+  const server = fakeServer(stampChanges(base, toDoc([list('A', 'Wishlist', [game('g1')])]), 5000), 1);
+  const h = harness(storage, server, base);
+
+  const result = await runSyncCycle({ ...h.args, now: 6000 });
+  assert.equal(result.changed, true);
+  assert.deepEqual(readLists(storage).map(l => l.id), ['A'], 'B really was removed locally');
+  assert.deepEqual(result.delta, { ...ZERO, listsRemoved: 1, gamesRemoved: 1 });
+});
+
+test('an adoption is reported as a link, not as a list removed and re-added', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('local-1', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('remote-1', 'Wishlist', [game('g2')])]), 500), 1);
+
+  const result = await runSyncCycle(harness(storage, server).args);
+  // local-1 became remote-1. Reading that as "a list vanished and another
+  // appeared" would be the single most alarming thing this log could say, and
+  // it would be wrong — it is the same list under the id the server already had.
+  assert.deepEqual(result.delta, { ...ZERO, listsLinked: 1, gamesAdded: 1 });
+});
+
+test('a cycle that writes nothing reports a zero delta', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer();
+  const h = harness(storage, server);
+
+  await runSyncCycle(h.args);
+  const second = await runSyncCycle({ ...h.args, loadBase: async () => h.base });
+  assert.equal(second.changed, false);
+  assert.deepEqual(second.delta, ZERO);
+});
+
+test('a corrupt cycle reports a zero delta — it wrote nothing', async () => {
+  const { storage, h } = corruptionHarness();
+  storage.setItem(LISTS_KEY, '{ this is not json');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assert.deepEqual(result.delta, ZERO);
+});
+
+test('an exhausted-retry conflict reports a zero delta', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist')]);
+  const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
+  server.putState = async () => ({ ok: false, conflict: true, revision: 1, doc: server.doc });
+
+  const result = await runSyncCycle({ ...harness(storage, server).args, maxAttempts: 3 });
+  assert.equal(result.status, 'conflict');
+  assert.deepEqual(result.delta, ZERO);
+});
+
+test('a cycle aborted by the CAS reports a zero delta — the write never happened', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [
+    list('F', 'Frozen', [game('g1')], { url: 'https://x/y.json' }),
+    list('A', 'Wishlist')
+  ]);
+  const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
+  const h = harness(storage, server);
+
+  const realPut = server.putState.bind(server);
+  server.putState = async (baseRevision, doc) => {
+    // Another tab writes while our push is in flight, invalidating the snapshot
+    // this attempt's merge was computed from.
+    writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('A', 'Wishlist')]);
+    return realPut(baseRevision, doc);
+  };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.changed, false);
+  assert.deepEqual(result.delta, ZERO, 'a delta must never describe a write that was abandoned');
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {

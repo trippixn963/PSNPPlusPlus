@@ -223,6 +223,20 @@ Type a new key, or leave this blank to keep the stored one.`,
     return JSON.parse(raw);
   }
 
+  // userscript/src/history.mjs
+  var HISTORY_KEY = "psnppp.history";
+  var MAX_HISTORY = 20;
+  async function listSyncHistory() {
+    const stored = await GM.getValue(HISTORY_KEY, []);
+    return Array.isArray(stored) ? stored : [];
+  }
+  async function recordSync({ revision, delta }, now = Date.now()) {
+    const entries = await listSyncHistory();
+    const next = [{ at: now, revision, delta }, ...entries].slice(0, MAX_HISTORY);
+    await GM.setValue(HISTORY_KEY, next);
+    return next;
+  }
+
   // userscript/src/lists-bridge.mjs
   var LISTS_KEY = "psnpp-lists";
   function readLists(storage) {
@@ -582,6 +596,38 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   function fingerprint(lists) {
     return JSON.stringify([...lists].sort((a, b) => String(a.id).localeCompare(String(b.id))));
   }
+  var ZERO_DELTA = {
+    listsAdded: 0,
+    listsRemoved: 0,
+    gamesAdded: 0,
+    gamesRemoved: 0,
+    listsLinked: 0
+  };
+  var zeroDelta = () => ({ ...ZERO_DELTA });
+  function summarizeDelta(before, after, renames) {
+    const gameIds = (list) => new Set((list.games ?? []).map((g) => String(g.id)));
+    const beforeById = new Map(before.map((l) => [renames.get(String(l.id)) ?? String(l.id), l]));
+    const afterById = new Map(after.map((l) => [String(l.id), l]));
+    const delta = { ...ZERO_DELTA, listsLinked: renames.size };
+    for (const [listId, list] of afterById) {
+      const previous = beforeById.get(listId);
+      if (previous == null) {
+        delta.listsAdded += 1;
+        delta.gamesAdded += gameIds(list).size;
+        continue;
+      }
+      const had = gameIds(previous);
+      const has = gameIds(list);
+      for (const gameId of has) if (!had.has(gameId)) delta.gamesAdded += 1;
+      for (const gameId of had) if (!has.has(gameId)) delta.gamesRemoved += 1;
+    }
+    for (const [listId, list] of beforeById) {
+      if (afterById.has(listId)) continue;
+      delta.listsRemoved += 1;
+      delta.gamesRemoved += gameIds(list).size;
+    }
+    return delta;
+  }
   function dropLists(doc, ids) {
     if (ids.size === 0) return doc;
     const out = { version: doc.version, lists: {} };
@@ -621,13 +667,14 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     let remote = await client.getState();
     const adoptions = planAdoptions(toDoc(readSyncable(storage).syncable), remote.doc);
     const adopt = adoptions.length > 0 && await confirmAdoptions2(adoptions);
+    const renames = new Map(adopt ? adoptions.map((a) => [String(a.localId), String(a.remoteId)]) : []);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const snapshot = readSnapshot(storage);
       if (snapshot.raw == null && Object.values(base.lists).some((n) => n.deletedAt == null)) {
-        return { status: "corrupt", revision: remote.revision, changed: false };
+        return { status: "corrupt", revision: remote.revision, changed: false, delta: zeroDelta() };
       }
       if (snapshot.corrupt) {
-        return { status: "corrupt", revision: remote.revision, changed: false };
+        return { status: "corrupt", revision: remote.revision, changed: false, delta: zeroDelta() };
       }
       const frozenIds = new Set(snapshot.remote.map((l) => l.id));
       const workingBase = dropLists(base, frozenIds);
@@ -638,24 +685,25 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       const mergedLists = fromDoc(dropLists(merged, frozenIds));
       const currentLists = snapshot.syncable;
       const changed = fingerprint(fromDoc(toDoc(currentLists))) !== fingerprint(mergedLists);
+      const delta = changed ? summarizeDelta(currentLists, mergedLists, renames) : zeroDelta();
       const result = await client.putState(remote.revision, merged);
       if (result.ok) {
         if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-          return { status: "synced", revision: result.revision, changed: false };
+          return { status: "synced", revision: result.revision, changed: false, delta: zeroDelta() };
         }
         if (changed) {
           await saveBackup2(currentLists);
           if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
-            return { status: "synced", revision: result.revision, changed: false };
+            return { status: "synced", revision: result.revision, changed: false, delta: zeroDelta() };
           }
           writeSyncable(storage, mergedLists);
         }
         await saveBase2(dropLists(merged, frozenIds));
-        return { status: "synced", revision: result.revision, changed };
+        return { status: "synced", revision: result.revision, changed, delta };
       }
       remote = { revision: result.revision, doc: result.doc };
     }
-    return { status: "conflict", revision: remote.revision, changed: false };
+    return { status: "conflict", revision: remote.revision, changed: false, delta: zeroDelta() };
   }
 
   // userscript/src/migrate.mjs
@@ -748,20 +796,40 @@ ${names}
 Link them so they stay in sync? Choose Cancel to keep them separate.`
     );
   }
+  function showSyncHistory(history) {
+    if (history.length === 0) {
+      window.alert(
+        "PSNP++ \u2014 no sync changes recorded yet.\n\nOnly syncs that actually wrote to your lists are logged here, so a run of quiet syncs leaves this empty."
+      );
+      return;
+    }
+    const lines = history.map(
+      (entry) => `${new Date(entry.at).toLocaleString()} \u2014 r${entry.revision} \u2014 ${describeDelta(entry.delta)}`
+    );
+    window.alert(`PSNP++ \u2014 recent sync changes (newest first):
+
+${lines.join("\n")}`);
+  }
   async function openSettings() {
     try {
       const backups = await listBackups();
+      const history = await listSyncHistory();
       const choice = window.prompt(
         `PSNP++
 
 1 \u2014 Enter endpoint and sync key
 2 \u2014 Restore a pre-merge backup (${backups.length} available)
+3 \u2014 Recent sync changes (${history.length})
 
-Choose 1 or 2:`,
+Choose 1, 2 or 3:`,
         "1"
       );
       if (choice === "1") {
         await promptForConfig();
+        return;
+      }
+      if (choice === "3") {
+        showSyncHistory(history);
         return;
       }
       if (choice !== "2") return;
@@ -800,11 +868,22 @@ Enter a number:`, "1");
     }
     await sync();
   }
+  var countOf = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  function describeDelta(delta) {
+    if (delta == null) return "lists updated";
+    const parts = [];
+    if (delta.gamesAdded > 0) parts.push(`+${countOf(delta.gamesAdded, "game")}`);
+    if (delta.gamesRemoved > 0) parts.push(`-${countOf(delta.gamesRemoved, "game")}`);
+    if (delta.listsAdded > 0) parts.push(`+${countOf(delta.listsAdded, "list")}`);
+    if (delta.listsRemoved > 0) parts.push(`-${countOf(delta.listsRemoved, "list")}`);
+    if (delta.listsLinked > 0) parts.push(`${countOf(delta.listsLinked, "list")} linked`);
+    return parts.length > 0 ? parts.join(", ") : "lists updated";
+  }
   function describeSyncResult(result) {
     if (result.status === "synced") {
       return result.changed ? {
         state: "reload",
-        detail: `Revision ${result.revision} \u2014 reload the page to see your updated lists`
+        detail: `Revision ${result.revision} \u2014 ${describeDelta(result.delta)} \u2014 reload the page to see your updated lists`
       } : { state: "synced", detail: `Revision ${result.revision}` };
     }
     if (result.status === "corrupt") {
@@ -865,6 +944,13 @@ Enter a number:`, "1");
         });
         const { state, detail } = describeSyncResult(result);
         indicator.setState(state, detail);
+        if (result.status === "synced" && result.changed) {
+          try {
+            await recordSync({ revision: result.revision, delta: result.delta });
+          } catch (error) {
+            console.error("[psnppp] could not record sync history:", error);
+          }
+        }
       } catch (error) {
         indicator.setState("offline", String(error?.message ?? error));
       } finally {
