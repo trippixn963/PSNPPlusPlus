@@ -207,7 +207,11 @@ export async function start() {
 
   const indicator = createIndicator({
     onSyncNow: () => { void handleSyncNowClick({ loadConfig, openSettings, sync }); },
-    onSettings: async () => { await openSettings(); void sync(); }
+    onSettings: async () => { await openSettings(); void sync(); },
+    // Only ever reached from the `reload` state, i.e. after a cycle that
+    // actually wrote to localStorage behind an already-drawn PSNP+ list view.
+    // Never automatic — the user asks for it by clicking the chip that says so.
+    onReload: () => { window.location.reload(); }
   });
   document.body.appendChild(indicator.element);
 

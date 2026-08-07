@@ -12,17 +12,37 @@
  * Server: discord.gg/syria
  */
 
+/**
+ * `action` is what a LEFT-CLICK does from that state, and it is the whole
+ * reason the chip tracks its own state.
+ *
+ * PSNP+ renders its list view from localStorage at render time and this script
+ * writes behind it, so a cycle that changed something leaves the drawn page
+ * showing stale lists. Forcing a re-render would mean reaching into PSNP+'s
+ * internals, which breaks on their next update — so the reload stays the
+ * user's, and the chip that tells them to reload is the thing that does it.
+ * Running another sync from there is a guaranteed no-op: the merge already
+ * settled, so the second cycle writes nothing and the page stays just as stale.
+ *
+ * There is deliberately no auto-reload. The user may be mid-scroll or mid-edit,
+ * and yanking the page out from under them is worse than the friction.
+ */
 const STATES = {
-  idle:         { label: 'Sync', color: '#6c757d' },
-  syncing:      { label: 'Syncing…', color: '#0d6efd' },
-  synced:       { label: 'Synced', color: '#198754' },
-  reload:       { label: 'Synced — reload page', color: '#198754' },
-  offline:      { label: 'Offline', color: '#fd7e14' },
-  conflict:     { label: 'Conflict', color: '#dc3545' },
-  unconfigured: { label: 'Set up sync', color: '#6f42c1' }
+  idle:         { label: 'Sync', color: '#6c757d', action: 'sync' },
+  syncing:      { label: 'Syncing…', color: '#0d6efd', action: 'sync' },
+  synced:       { label: 'Synced', color: '#198754', action: 'sync' },
+  reload:       { label: 'Synced — reload page', color: '#198754', action: 'reload' },
+  offline:      { label: 'Offline', color: '#fd7e14', action: 'sync' },
+  conflict:     { label: 'Conflict', color: '#dc3545', action: 'sync' },
+  unconfigured: { label: 'Set up sync', color: '#6f42c1', action: 'sync' }
 };
 
-export function createIndicator({ onSyncNow, onSettings }) {
+const CLICK_HINT = {
+  sync: 'click to sync now, right-click for settings.',
+  reload: 'click to reload the page, right-click for settings.'
+};
+
+export function createIndicator({ onSyncNow, onSettings, onReload }) {
   const element = document.createElement('div');
   element.id = 'psnppp-indicator';
   element.style.cssText = [
@@ -35,7 +55,14 @@ export function createIndicator({ onSyncNow, onSettings }) {
   const label = document.createElement('span');
   element.appendChild(label);
 
-  element.addEventListener('click', () => onSyncNow());
+  // The action is read at click time, not bound at wire-up time, so a state
+  // change is enough to change what the chip does.
+  let action = STATES.idle.action;
+
+  element.addEventListener('click', () => {
+    if (action === 'reload') onReload();
+    else onSyncNow();
+  });
   element.addEventListener('contextmenu', event => {
     event.preventDefault();
     onSettings();
@@ -43,11 +70,13 @@ export function createIndicator({ onSyncNow, onSettings }) {
 
   function setState(state, detail = '') {
     const style = STATES[state] ?? STATES.idle;
+    action = style.action;
     element.style.background = style.color;
     label.textContent = style.label;
+    const hint = CLICK_HINT[action];
     element.title = detail
-      ? `PSNP++ — ${detail}\nClick to sync now, right-click for settings.`
-      : 'PSNP++ — click to sync now, right-click for settings.';
+      ? `PSNP++ — ${detail}\n${hint[0].toUpperCase()}${hint.slice(1)}`
+      : `PSNP++ — ${hint}`;
   }
 
   setState('idle');

@@ -294,15 +294,19 @@
 
   // userscript/src/indicator.mjs
   var STATES = {
-    idle: { label: "Sync", color: "#6c757d" },
-    syncing: { label: "Syncing\u2026", color: "#0d6efd" },
-    synced: { label: "Synced", color: "#198754" },
-    reload: { label: "Synced \u2014 reload page", color: "#198754" },
-    offline: { label: "Offline", color: "#fd7e14" },
-    conflict: { label: "Conflict", color: "#dc3545" },
-    unconfigured: { label: "Set up sync", color: "#6f42c1" }
+    idle: { label: "Sync", color: "#6c757d", action: "sync" },
+    syncing: { label: "Syncing\u2026", color: "#0d6efd", action: "sync" },
+    synced: { label: "Synced", color: "#198754", action: "sync" },
+    reload: { label: "Synced \u2014 reload page", color: "#198754", action: "reload" },
+    offline: { label: "Offline", color: "#fd7e14", action: "sync" },
+    conflict: { label: "Conflict", color: "#dc3545", action: "sync" },
+    unconfigured: { label: "Set up sync", color: "#6f42c1", action: "sync" }
   };
-  function createIndicator({ onSyncNow, onSettings }) {
+  var CLICK_HINT = {
+    sync: "click to sync now, right-click for settings.",
+    reload: "click to reload the page, right-click for settings."
+  };
+  function createIndicator({ onSyncNow, onSettings, onReload }) {
     const element = document.createElement("div");
     element.id = "psnppp-indicator";
     element.style.cssText = [
@@ -321,17 +325,23 @@
     ].join(";");
     const label = document.createElement("span");
     element.appendChild(label);
-    element.addEventListener("click", () => onSyncNow());
+    let action = STATES.idle.action;
+    element.addEventListener("click", () => {
+      if (action === "reload") onReload();
+      else onSyncNow();
+    });
     element.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       onSettings();
     });
     function setState(state, detail = "") {
       const style = STATES[state] ?? STATES.idle;
+      action = style.action;
       element.style.background = style.color;
       label.textContent = style.label;
+      const hint = CLICK_HINT[action];
       element.title = detail ? `PSNP++ \u2014 ${detail}
-Click to sync now, right-click for settings.` : "PSNP++ \u2014 click to sync now, right-click for settings.";
+${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
     setState("idle");
     return { element, setState };
@@ -790,6 +800,12 @@ Enter a number:`, "1");
       onSettings: async () => {
         await openSettings();
         void sync();
+      },
+      // Only ever reached from the `reload` state, i.e. after a cycle that
+      // actually wrote to localStorage behind an already-drawn PSNP+ list view.
+      // Never automatic — the user asks for it by clicking the chip that says so.
+      onReload: () => {
+        window.location.reload();
       }
     });
     document.body.appendChild(indicator.element);
