@@ -126,20 +126,62 @@ function latestActivity(node) {
   return latest;
 }
 
+/**
+ * Pick the newer of two records by their own `updatedAt`. On an exact tie (a
+ * same-millisecond concurrent edit) break deterministically by content, so
+ * both devices land on the same answer regardless of which one calls itself
+ * "local" — otherwise each side would keep favoring its own copy forever and
+ * the merge would never converge.
+ */
+function pickNewer(localItem, remoteItem) {
+  const localTs = localItem?.updatedAt ?? 0;
+  const remoteTs = remoteItem?.updatedAt ?? 0;
+  if (localTs !== remoteTs) return localTs > remoteTs ? localItem : remoteItem;
+  return stableStringify(localItem) >= stableStringify(remoteItem) ? localItem : remoteItem;
+}
+
+/**
+ * Pick which side's gameOrder governs the merged list. A still-deleted node
+ * always defers to the other side, regardless of its own orderUpdatedAt —
+ * stampChanges empties a deleted node's gameOrder but leaves its
+ * orderUpdatedAt pointing at base, so treating that stamp as authoritative
+ * would hand order control to an empty array and scramble numeric-string
+ * game ids (which JS enumerates in ascending numeric order, not insertion
+ * order) whenever the surviving side's edit happened not to touch order.
+ * An exact orderUpdatedAt tie between two live nodes breaks by content, for
+ * the same convergence reason as pickNewer.
+ */
+function pickOrderSource(localNode, remoteNode) {
+  if (localNode.deletedAt != null) return remoteNode;
+  if (remoteNode.deletedAt != null) return localNode;
+  const localTs = localNode.orderUpdatedAt ?? 0;
+  const remoteTs = remoteNode.orderUpdatedAt ?? 0;
+  if (localTs !== remoteTs) return localTs > remoteTs ? localNode : remoteNode;
+  return stableStringify(localNode.gameOrder) >= stableStringify(remoteNode.gameOrder)
+    ? localNode : remoteNode;
+}
+
 function mergeList(localNode, remoteNode) {
   if (localNode == null) return clone(remoteNode);
   if (remoteNode == null) return clone(localNode);
 
-  // A deletion only stands if nothing newer happened on the other side.
+  // A deletion only stands if nothing newer happened on the other side. A tie
+  // (activity at exactly the deletion's timestamp) favors the activity, not
+  // the deletion: resurrecting a list that should have stayed deleted is
+  // recoverable (delete it again), but dropping a genuine add is not.
   const deletedAt = Math.max(localNode.deletedAt ?? 0, remoteNode.deletedAt ?? 0);
   if (deletedAt > 0) {
     const survivor = localNode.deletedAt != null ? remoteNode : localNode;
-    if (deletedAt >= latestActivity(survivor)) {
-      const meta = clone((localNode.meta?.updatedAt ?? 0) >= (remoteNode.meta?.updatedAt ?? 0)
-        ? localNode.meta : remoteNode.meta);
+    if (deletedAt > latestActivity(survivor)) {
+      const meta = clone(pickNewer(localNode.meta, remoteNode.meta));
+      // Carry the deleting side's own order stamp, not a max of both — the
+      // surviving side's real orderUpdatedAt has nothing to do with this
+      // now-empty gameOrder and must not be allowed to look authoritative
+      // if the list is ever resurrected later.
+      const deletingNode = localNode.deletedAt != null ? localNode : remoteNode;
       return {
         meta, games: {}, gameOrder: [],
-        orderUpdatedAt: Math.max(localNode.orderUpdatedAt ?? 0, remoteNode.orderUpdatedAt ?? 0),
+        orderUpdatedAt: deletingNode.orderUpdatedAt ?? 0,
         deletedGames: mergeTombstones(localNode.deletedGames, remoteNode.deletedGames),
         deletedAt
       };
@@ -147,8 +189,7 @@ function mergeList(localNode, remoteNode) {
     // Otherwise the list is resurrected by the newer edits and falls through.
   }
 
-  const meta = clone(localNode.meta.updatedAt >= remoteNode.meta.updatedAt
-    ? localNode.meta : remoteNode.meta);
+  const meta = clone(pickNewer(localNode.meta, remoteNode.meta));
   const deletedGames = mergeTombstones(localNode.deletedGames, remoteNode.deletedGames);
 
   const games = {};
@@ -158,7 +199,7 @@ function mergeList(localNode, remoteNode) {
     const remoteGame = remoteNode.games[gameId];
     const winner = localGame == null ? remoteGame
       : remoteGame == null ? localGame
-      : (localGame.updatedAt >= remoteGame.updatedAt ? localGame : remoteGame);
+      : pickNewer(localGame, remoteGame);
 
     const tombstone = deletedGames[gameId];
     if (tombstone != null && tombstone > winner.updatedAt) continue;
@@ -167,8 +208,7 @@ function mergeList(localNode, remoteNode) {
     games[gameId] = clone(winner);
   }
 
-  const orderSource = (localNode.orderUpdatedAt ?? 0) >= (remoteNode.orderUpdatedAt ?? 0)
-    ? localNode : remoteNode;
+  const orderSource = pickOrderSource(localNode, remoteNode);
   const gameOrder = orderSource.gameOrder.filter(id => games[id] != null);
   const seen = new Set(gameOrder);
   for (const gameId of Object.keys(games)) {
