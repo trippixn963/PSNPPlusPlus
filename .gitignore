@@ -1,0 +1,8 @@
+node_modules/
+sidecar/.venv/
+sidecar/state.db
+sidecar/state.db-wal
+sidecar/state.db-shm
+sidecar/.env
+__pycache__/
+.DS_Store
