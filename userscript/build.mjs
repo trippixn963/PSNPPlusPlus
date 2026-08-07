@@ -36,7 +36,7 @@ const banner = template.replaceAll(VERSION_PLACEHOLDER, version);
 
 // The metadata block on its own, served at @updateURL. Tampermonkey polls that
 // URL on a schedule and reads nothing but @version from it, so pointing it at
-// the full ~28 KB bundle would ship the entire script on every poll just to
+// the full ~30 KB bundle would ship the entire script on every poll just to
 // compare one number. Written from the SAME resolved string that is prepended
 // to the bundle, so the two can never disagree about the version — which would
 // otherwise mean an update that offers itself forever or never at all.

@@ -95,7 +95,7 @@ download only when that version is **higher** than the installed one. So the rel
 
 `psnppp.meta.js` is the metadata block on its own, written from the same resolved text prepended
 to the bundle, so the two can never disagree about the version. It exists so an update check
-transfers a few hundred bytes rather than the whole ~28 KB script.
+transfers ~558 bytes rather than the whole ~30 KB script.
 
 `npm test` pins all of this against the committed `dist/`: it fails if the version drifts from
 `package.json`, if the placeholder leaks through, if the two files' metadata blocks diverge, or if
