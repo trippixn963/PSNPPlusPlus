@@ -111,9 +111,22 @@ def _connect() -> sqlite3.Connection:
 
 
 def _require_key(provided: str | None) -> None:
-    """Constant-time secret check. An unset server key locks the API entirely."""
+    """Constant-time secret check. An unset server key locks the API entirely.
+
+    Both sides are encoded to bytes first. `hmac.compare_digest` accepts str
+    arguments only when both are ASCII-only, and raises TypeError otherwise —
+    and uvicorn decodes request headers as latin-1, so any header byte above
+    0x7F produces a str this function cannot compare. Passing that straight to
+    compare_digest turned a bad key into an unauthenticated HTTP 500 with a
+    traceback instead of a 401. Encoding is not a weakening: the transform is
+    applied identically to both operands, compare_digest is still constant-time
+    over bytes, and a non-ASCII header can never encode to the same bytes as an
+    ASCII key, so it still fails closed.
+    """
     expected = _sync_key()
-    if not expected or provided is None or not hmac.compare_digest(provided, expected):
+    if not expected or provided is None:
+        raise HTTPException(status_code=401, detail="Invalid sync key")
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid sync key")
 
 

@@ -15,7 +15,9 @@ BASE = "/api/psnp-sync"
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PSNP_SYNC_KEY", KEY)
     monkeypatch.setenv("PSNP_SYNC_DB", str(tmp_path / "state.db"))
-    return TestClient(app_module.app)
+    # raise_server_exceptions=False so an unhandled exception surfaces as the
+    # HTTP 500 a real client would see, instead of re-raising into the test.
+    return TestClient(app_module.app, raise_server_exceptions=False)
 
 
 def test_health_needs_no_key(client):
@@ -85,3 +87,26 @@ def test_put_rejects_unknown_doc_version(client):
     res = client.put(f"{BASE}/state", headers=AUTH,
                      json={"baseRevision": 0, "doc": {"version": 99, "lists": {}}})
     assert res.status_code == 422
+
+
+def test_non_ascii_key_header_is_401_not_a_500(client):
+    """A header byte above 0x7F must fail closed, not crash the handler.
+
+    uvicorn decodes request headers as latin-1, so a stray high byte reaches
+    `_require_key` as a non-ASCII str. `hmac.compare_digest` raises TypeError
+    for str operands that are not ASCII-only, which FastAPI turns into an
+    unauthenticated HTTP 500 plus a traceback in the journal. Anyone who can
+    reach the endpoint can trigger it, keyless.
+    """
+    for raw in (b"caf\xe9", "café".encode("utf-8"), b"\xff\xfe", KEY.encode() + b"\xe9"):
+        res = client.get(f"{BASE}/state", headers={"X-Sync-Key": raw})
+        assert res.status_code == 401, f"{raw!r} produced {res.status_code}"
+
+        body = {"baseRevision": 0, "doc": {"version": 1, "lists": {}}}
+        res = client.put(f"{BASE}/state", headers={"X-Sync-Key": raw}, json=body)
+        assert res.status_code == 401, f"{raw!r} produced {res.status_code}"
+
+
+def test_the_real_key_still_works_after_encoding(client):
+    """The encode() on both sides must not break the ordinary success path."""
+    assert client.get(f"{BASE}/state", headers=AUTH).status_code == 200
