@@ -53,7 +53,7 @@ function readSnapshot(storage) {
 }
 
 /**
- * Storage holds bytes that are not an empty list array, yet yielded no lists.
+ * Storage does not hold a readable set of lists.
  *
  * `readLists` deliberately swallows a JSON.parse failure and returns `[]` — it
  * must never throw inside a page we do not own, and that is the right call
@@ -63,14 +63,30 @@ function readSnapshot(storage) {
  * mass deletion to every device. A truncated quota write, storage corruption,
  * or any other script writing junk to `psnpp-lists` is enough to trigger it.
  *
- * "No key at all", `[]`, and `""` are genuine empty states and stay syncable;
- * anything else that parses to nothing is corruption and must stop the cycle.
+ * The question asked here is whether the bytes actually PARSED into lists — not
+ * whether they look like some spelling of "empty". Comparing `raw.trim()` against
+ * a whitelist leaked both ways: `""` and `"   "` do not parse but were treated as
+ * empty; a BOM-prefixed `"[]"` trims to `"[]"` (U+FEFF is WhiteSpace) while
+ * JSON.parse rejects it; and `"[ ]"` / `"[\n]"` are perfectly valid empty arrays
+ * that the whitelist rejected, permanently halting a healthy user's sync.
+ *
+ * Only an absent key is a genuine empty state. Everything else has to parse to
+ * an array whose length matches the lists actually recovered — the length check
+ * catches entries `readLists` dropped (`[null]`), and the id check catches ones
+ * it kept but that are not lists (`[{}]`, which `toDoc` would otherwise key
+ * under the literal string "undefined" and push to the server).
  */
 function looksCorrupt(raw, syncable, remote) {
-  if (syncable.length > 0 || remote.length > 0) return false;
   if (raw == null) return false;
-  const trimmed = raw.trim();
-  return trimmed !== '' && trimmed !== '[]';
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return true;
+  }
+  if (!Array.isArray(parsed)) return true;
+  if (parsed.length !== syncable.length + remote.length) return true;
+  return syncable.some(l => l.id == null) || remote.some(l => l.id == null);
 }
 
 export async function runSyncCycle({
@@ -168,12 +184,14 @@ export async function runSyncCycle({
       // nothing is always safe — the server already has the merge, and the
       // write that invalidated us also re-triggers a cycle.
       //
-      // Known, accepted cosmetic cost: if this attempt had adopted, the adopted
-      // ids are now on the server while localStorage still has the old ones, so
-      // the next cycle proposes the same adoption and the user sees the
-      // "Link them?" confirm a second time. Eliminating it would require the
-      // push and the local write to be atomic, which they cannot be; it
-      // converges on the next cycle either way.
+      // Known, ACCEPTED cosmetic cost — not a limitation: if this attempt had
+      // adopted, the adopted ids are now on the server while localStorage still
+      // has the old ones, so the next cycle proposes the same adoption and the
+      // user sees the "Link them?" confirm a second time. This is suppressible
+      // (e.g. a session-scoped memo of already-answered {localId -> remoteId}
+      // pairs in main.mjs); it is left in deliberately because one extra dialog
+      // that converges on the next cycle does not justify another change to
+      // this path.
       if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
         return { status: 'synced', revision: result.revision, changed: false };
       }

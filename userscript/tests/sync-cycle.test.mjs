@@ -507,6 +507,74 @@ test('a list deleted while frozen is deliberately NOT deleted server-wide (accep
   assert.equal(readLists(storage)[0].url, undefined);
 });
 
+// --- Fix round 6: looksCorrupt must ask whether the bytes parsed -----------
+//
+// Round 4's guard byte-compared `raw.trim()` against a whitelist of "empty"
+// spellings, which leaked in both directions. Each case below is a real byte
+// sequence a browser can end up with.
+
+/** A settled two-list world: base and server agree, storage is about to lie. */
+const corruptionHarness = () => {
+  const storage = fakeStorage();
+  const base = toDoc([list('A', 'Wishlist', [game('g1')]), list('C', 'Backlog', [game('g2')])]);
+  const server = fakeServer(base, 1);
+  return { storage, server, h: harness(storage, server, base) };
+};
+
+const assertNothingDestroyed = (server, h, storage, raw) => {
+  assert.equal(server.revision, 1, 'nothing may be pushed');
+  assert.equal(server.doc.lists.A.deletedAt, null);
+  assert.equal(server.doc.lists.C.deletedAt, null);
+  assert.equal(storage.getItem(LISTS_KEY), raw, 'storage left as-is');
+  assert.equal(h.backups.length, 0);
+  assert.deepEqual(Object.keys(h.base.lists).sort(), ['A', 'C'], 'base must not advance');
+};
+
+test('an empty string does not parse and is corruption, not an empty state', async () => {
+  const { storage, server, h } = corruptionHarness();
+  storage.setItem(LISTS_KEY, '');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assertNothingDestroyed(server, h, storage, '');
+});
+
+test('a BOM-contaminated [] does not parse and is corruption', async () => {
+  const { storage, server, h } = corruptionHarness();
+  // U+FEFF is WhiteSpace, so String.prototype.trim removes it — but JSON.parse
+  // rejects it. Any check that trims before comparing lets this straight through.
+  storage.setItem(LISTS_KEY, '﻿[]');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assertNothingDestroyed(server, h, storage, '﻿[]');
+});
+
+test('an array of id-less objects is corruption, not a set of lists', async () => {
+  const { storage, server, h } = corruptionHarness();
+  // readLists only filters null/non-object, so `{}` survives as a "list" and
+  // makes any emptiness test short-circuit. toDoc then keys it by its missing
+  // id, i.e. under the literal string "undefined".
+  storage.setItem(LISTS_KEY, '[{}]');
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'corrupt');
+  assertNothingDestroyed(server, h, storage, '[{}]');
+  assert.equal(server.doc.lists.undefined, undefined, 'no list may be created under id "undefined"');
+});
+
+test('valid JSON spellings of an empty array still sync (no false positive)', async () => {
+  for (const raw of ['[ ]', '[\n]', '[\n\n]']) {
+    const storage = fakeStorage();
+    storage.setItem(LISTS_KEY, raw);
+    const server = fakeServer();
+    const h = harness(storage, server);
+
+    const result = await runSyncCycle(h.args);
+    assert.equal(result.status, 'synced', `${JSON.stringify(raw)} is valid JSON for an empty list set`);
+  }
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {
