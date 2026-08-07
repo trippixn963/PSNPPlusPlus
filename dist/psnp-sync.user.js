@@ -342,9 +342,9 @@ Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync n
       return JSON.stringify(obj);
     }
     if (Array.isArray(obj)) {
-      return "[" + obj.map(stableStringify).join(",") + "]";
+      return "[" + obj.map((v) => v === void 0 ? "null" : stableStringify(v)).join(",") + "]";
     }
-    const sorted = Object.keys(obj).sort().map((k) => `"${k}":${stableStringify(obj[k])}`);
+    const sorted = Object.keys(obj).filter((k) => obj[k] !== void 0).sort().map((k) => `"${k}":${stableStringify(obj[k])}`);
     return "{" + sorted.join(",") + "}";
   }
   function sameRecord(a, b) {
@@ -582,6 +582,9 @@ Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync n
     const adopt = adoptions.length > 0 && await confirmAdoptions2(adoptions);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const snapshot = readSnapshot(storage);
+      if (snapshot.raw == null && Object.keys(base.lists).length > 0) {
+        return { status: "corrupt", revision: remote.revision, changed: false };
+      }
       if (snapshot.corrupt) {
         return { status: "corrupt", revision: remote.revision, changed: false };
       }
@@ -620,11 +623,16 @@ Click to sync now, right-click for settings.` : "PSNPSync \u2014 click to sync n
   var loadBase = async () => {
     const raw = await GM.getValue(BASE_KEY, null);
     if (raw == null) return emptyDoc();
+    let parsed;
     try {
-      return JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
       return emptyDoc();
     }
+    if (parsed == null || typeof parsed.lists !== "object" || parsed.lists === null || Array.isArray(parsed.lists)) {
+      return emptyDoc();
+    }
+    return parsed;
   };
   var saveBase = async (doc) => GM.setValue(BASE_KEY, JSON.stringify(doc));
   async function confirmAdoptions(adoptions) {
