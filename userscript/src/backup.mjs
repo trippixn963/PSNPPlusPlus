@@ -1,9 +1,15 @@
 /**
+ * PSNP++ - Backups
+ * ================
+ *
  * Pre-merge snapshots of the raw lists.
  *
  * The merge writes to the only copy of this data that exists on the device, so
  * every write-back is preceded by a snapshot. Kept in GM storage rather than
  * localStorage so a PSNP+ reset cannot take the backups with it.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 const INDEX_KEY = 'psnppp.backups';

@@ -1,8 +1,14 @@
 /**
+ * PSNP++ - Sync Cycle
+ * ===================
+ *
  * One complete sync: pull, merge, write back, push.
  *
  * Every dependency is injected, so the whole cycle runs in node against fake
  * storage and a fake server — no browser needed for the tests that matter.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 import { toDoc, fromDoc, emptyDoc } from './doc.mjs';

@@ -1,9 +1,15 @@
 /**
+ * PSNP++ - Merger
+ * ===============
+ *
  * Pure 3-way merge for PSNP+ game lists.
  *
  * No DOM, no network, no storage — every function here takes plain objects and
  * returns new ones. All the risk in this project lives in this file, so it is
  * kept isolated and exhaustively unit-tested.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 import { DOC_VERSION } from './doc.mjs';

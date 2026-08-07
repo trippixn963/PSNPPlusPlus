@@ -1,8 +1,14 @@
 /**
+ * PSNP++ - Main Entry Point
+ * =========================
+ *
  * Entry point: wires the cycle to page events and the status chip.
  *
  * Triggers are page load, a debounced local change, tab focus, and the chip
  * itself. There is no idle polling loop.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 import { createSyncClient, gmRequest } from './sync-client.mjs';

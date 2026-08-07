@@ -1,10 +1,16 @@
 /**
+ * PSNP++ - Sync Client
+ * ====================
+ *
  * Transport to the sync sidecar.
  *
  * The `request` function is injected so the client can be tested in node. In the
  * browser it is `gmRequest`, a promise wrapper over GM_xmlhttpRequest — which is
  * used instead of fetch because the sidecar is on a different origin than
  * psnprofiles.com and sends no CORS headers.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 import { DOC_VERSION } from './doc.mjs';

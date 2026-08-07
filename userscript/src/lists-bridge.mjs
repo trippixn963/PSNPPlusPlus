@@ -1,8 +1,14 @@
 /**
+ * PSNP++ - Lists Bridge
+ * =====================
+ *
  * The only module that touches localStorage['psnpp-lists'].
  *
  * Storage is passed in rather than reached for globally, so the logic is
  * testable in node without a DOM.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 import { splitRemote, isRemoteList } from './doc.mjs';

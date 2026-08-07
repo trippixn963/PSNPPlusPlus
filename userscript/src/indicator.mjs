@@ -1,9 +1,15 @@
 /**
+ * PSNP++ - Status Indicator
+ * =========================
+ *
  * A small fixed-position status chip.
  *
  * Deliberately does not splice itself into PSNP+'s DOM: PSNP+ re-renders its
  * list panel freely, and anything injected inside it would be destroyed. A
  * fixed-position element owned entirely by this script survives that.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 const STATES = {

@@ -1,4 +1,7 @@
 /**
+ * PSNP++ - Sync Document
+ * ======================
+ *
  * Conversion between the PSNP+ on-disk shape and the sync document.
  *
  * PSNP+ stores lists as an array, with each list's games as an array. That shape
@@ -6,6 +9,9 @@
  * both of which the merge needs. The sync document keys games by id, adds
  * updatedAt stamps and tombstones, and keeps the display order in a separate
  * gameOrder array so custom sorting survives the round trip.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 export const DOC_VERSION = 1;

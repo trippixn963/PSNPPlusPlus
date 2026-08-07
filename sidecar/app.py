@@ -1,4 +1,8 @@
-"""PSNP++ list sync sidecar — a single-document store with a revision guard.
+"""
+PSNP++ - Sync Sidecar
+=====================
+
+PSNP++ list sync sidecar — a single-document store with a revision guard.
 
 Stores one JSON document (all of one user's PSNP+ game lists) behind a shared
 secret. Concurrency is handled optimistically: a client sends the revision its
@@ -8,6 +12,9 @@ the client can re-merge.
 Bound to loopback only; nginx terminates TLS and proxies /api/psnppp/.
 No CORS middleware — the only client is a userscript using GM_xmlhttpRequest,
 which is not subject to CORS.
+
+Author: Trippixn
+Server: discord.gg/syria
 """
 from __future__ import annotations
 

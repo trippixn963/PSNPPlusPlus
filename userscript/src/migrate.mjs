@@ -1,4 +1,7 @@
 /**
+ * PSNP++ - GM Storage Migration
+ * =============================
+ *
  * One-time move of GM storage from the `psnpsync.*` names to `psnppp.*`.
  *
  * Everything this script owns lives in GM storage under a name prefix, and the
@@ -24,6 +27,9 @@
  * decide it has already run. An interrupted migration therefore either re-runs
  * from the top (nothing was deleted yet) or is already finished; it can never
  * resume into a half-copied state.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 import { DEFAULT_ENDPOINT } from './config.mjs';

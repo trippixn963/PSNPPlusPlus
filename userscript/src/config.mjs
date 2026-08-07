@@ -1,8 +1,14 @@
 /**
+ * PSNP++ - Config
+ * ===============
+ *
  * Endpoint and secret storage.
  *
  * The secret lives in GM storage rather than in the script file, so the script
  * itself can be committed and shared without leaking a credential.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 const ENDPOINT_KEY = 'psnppp.endpoint';

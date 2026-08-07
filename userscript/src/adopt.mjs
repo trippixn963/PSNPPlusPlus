@@ -1,4 +1,7 @@
 /**
+ * PSNP++ - List ID Adoption
+ * =========================
+ *
  * First-run reconciliation of per-device list IDs.
  *
  * PSNP+ mints list IDs with uuidv4 on whichever device created the list, so the
@@ -8,6 +11,9 @@
  *
  * Only unambiguous matches are proposed: the name must occur exactly once on
  * each side, and neither list may already be present on the other side by ID.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
  */
 
 const clone = value => JSON.parse(JSON.stringify(value));

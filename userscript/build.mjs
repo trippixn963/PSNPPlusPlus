@@ -1,4 +1,12 @@
-/** Bundles the ESM sources into a single installable userscript. */
+/**
+ * PSNP++ - Build
+ * ==============
+ *
+ * Bundles the ESM sources into a single installable userscript.
+ *
+ * Author: Trippixn
+ * Server: discord.gg/syria
+ */
 import { build } from 'esbuild';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
