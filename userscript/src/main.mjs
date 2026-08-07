@@ -130,6 +130,61 @@ export async function openSettings() {
   }
 }
 
+/**
+ * What a left-click on the chip does.
+ *
+ * A left-click used to always run sync(), which — with no key configured —
+ * immediately bails out to the same 'unconfigured' label the chip already
+ * showed, so the click looked like it did nothing (the only feedback was a
+ * tooltip that required hovering to notice). So: no key -> open the settings
+ * flow directly; a key -> sync, exactly as before.
+ *
+ * Dependency-injected rather than reaching into closure state, so it can be
+ * pinned by a test without a DOM — the same reason openSettings/loadBase are
+ * already exported for testing.
+ */
+export async function handleSyncNowClick({ loadConfig, openSettings, sync }) {
+  const config = await loadConfig();
+  if (!config.key) {
+    await openSettings();
+    return;
+  }
+  await sync();
+}
+
+/**
+ * Maps a finished sync cycle to the indicator's state + tooltip detail.
+ *
+ * PSNP+ renders its list view from localStorage at render time, and this
+ * script writes to localStorage behind it — an already-drawn page keeps
+ * showing stale data until reload, by design (we do not reach into PSNP+'s
+ * internals to force a re-render). `changed` is runSyncCycle's own truthful
+ * report of whether the cycle actually wrote, so a sync that changed
+ * something gets a state that says so; a sync that changed nothing (the
+ * common case) keeps the plain "Synced" text unchanged.
+ *
+ * Pure and exported so this mapping is pinned directly, without needing a
+ * real sync cycle or a DOM.
+ */
+export function describeSyncResult(result) {
+  if (result.status === 'synced') {
+    return result.changed
+      ? {
+          state: 'reload',
+          detail: `Revision ${result.revision} — reload the page to see your updated lists`
+        }
+      : { state: 'synced', detail: `Revision ${result.revision}` };
+  }
+  if (result.status === 'corrupt') {
+    return {
+      state: 'conflict',
+      detail: 'Your PSNP+ list data looks unreadable — nothing was synced. ' +
+        'Right-click to restore a backup.'
+    };
+  }
+  return { state: 'conflict', detail: 'Could not settle — try again' };
+}
+
 export async function start() {
   // Before anything reads GM storage. An install that predates the PSNP++
   // rename has its endpoint, key, base and backups under the old psnpsync.*
@@ -151,7 +206,7 @@ export async function start() {
   }
 
   const indicator = createIndicator({
-    onSyncNow: () => { void sync(); },
+    onSyncNow: () => { void handleSyncNowClick({ loadConfig, openSettings, sync }); },
     onSettings: async () => { await openSettings(); void sync(); }
   });
   document.body.appendChild(indicator.element);
@@ -184,7 +239,7 @@ export async function start() {
     try {
       const config = await loadConfig();
       if (!config.key) {
-        indicator.setState('unconfigured', 'Right-click to enter your sync key');
+        indicator.setState('unconfigured', 'Click to set up sync (or right-click for settings)');
         return;
       }
       indicator.setState('syncing');
@@ -194,20 +249,8 @@ export async function start() {
         client, loadBase, saveBase, saveBackup, confirmAdoptions,
         now: Date.now()
       });
-      if (result.status === 'synced') {
-        indicator.setState('synced', `Revision ${result.revision}`);
-      } else if (result.status === 'corrupt') {
-        // runSyncCycle refused to act on an unreadable psnpp-lists rather than
-        // read it as "every list was deleted here". Say so plainly and point at
-        // the escape hatch — restoring is the user's decision, never automatic.
-        indicator.setState(
-          'conflict',
-          'Your PSNP+ list data looks unreadable — nothing was synced. ' +
-          'Right-click to restore a backup.'
-        );
-      } else {
-        indicator.setState('conflict', 'Could not settle — try again');
-      }
+      const { state, detail } = describeSyncResult(result);
+      indicator.setState(state, detail);
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown

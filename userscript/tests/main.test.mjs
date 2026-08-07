@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { saveBackup, listBackups } from '../src/backup.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
-import { openSettings, loadBase } from '../src/main.mjs';
+import { openSettings, loadBase, handleSyncNowClick, describeSyncResult } from '../src/main.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
 
@@ -154,4 +154,54 @@ test('a well-shaped base is returned untouched', async () => {
   } finally {
     uninstallFakeGM();
   }
+});
+
+// --- left-click on the chip: setup vs. sync-now -----------------------------
+//
+// A left-click used to always call sync(), which bails out to the same
+// 'unconfigured' label with no visible change when no key is stored — a
+// click that silently does nothing. handleSyncNowClick is the decision that
+// replaced it: no key -> open settings; a key -> sync, unchanged.
+
+test('with no key stored, a chip click opens settings instead of syncing', async () => {
+  let openSettingsCalls = 0;
+  let syncCalls = 0;
+  await handleSyncNowClick({
+    loadConfig: async () => ({ endpoint: 'https://example.test', key: '' }),
+    openSettings: async () => { openSettingsCalls += 1; },
+    sync: async () => { syncCalls += 1; }
+  });
+  assert.equal(openSettingsCalls, 1);
+  assert.equal(syncCalls, 0);
+});
+
+test('with a key stored, a chip click syncs and does not open settings', async () => {
+  let openSettingsCalls = 0;
+  let syncCalls = 0;
+  await handleSyncNowClick({
+    loadConfig: async () => ({ endpoint: 'https://example.test', key: 'sekrit' }),
+    openSettings: async () => { openSettingsCalls += 1; },
+    sync: async () => { syncCalls += 1; }
+  });
+  assert.equal(syncCalls, 1);
+  assert.equal(openSettingsCalls, 0);
+});
+
+// --- a completed sync that changed storage must say "reload" ---------------
+//
+// PSNP+ renders its list view from localStorage at render time; a write
+// behind an already-drawn page is invisible until reload. `changed` is
+// runSyncCycle's own truthful report of whether the cycle wrote, so the chip
+// must say "reload" exactly when changed is true, and must not when it's
+// false (the common, nothing-to-write case).
+
+test('a sync that changed storage puts the chip in a reload-telling state', () => {
+  const { state, detail } = describeSyncResult({ status: 'synced', revision: 7, changed: true });
+  assert.match(state + ' ' + detail, /reload/i);
+});
+
+test('a sync that changed nothing keeps the plain synced text, no reload mention', () => {
+  const { state, detail } = describeSyncResult({ status: 'synced', revision: 7, changed: false });
+  assert.equal(state, 'synced');
+  assert.doesNotMatch(detail, /reload/i);
 });

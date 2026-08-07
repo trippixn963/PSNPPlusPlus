@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      1.1.0
+// @version      1.1.1
 // @description  Two-way cross-device sync for PSNP+ game lists
 // @author       Trippixn
 // @match        https://psnprofiles.com/*
@@ -297,6 +297,7 @@
     idle: { label: "Sync", color: "#6c757d" },
     syncing: { label: "Syncing\u2026", color: "#0d6efd" },
     synced: { label: "Synced", color: "#198754" },
+    reload: { label: "Synced \u2014 reload page", color: "#198754" },
     offline: { label: "Offline", color: "#fd7e14" },
     conflict: { label: "Conflict", color: "#dc3545" },
     unconfigured: { label: "Set up sync", color: "#6f42c1" }
@@ -753,6 +754,29 @@ Enter a number:`, "1");
       window.alert(`PSNP++ \u2014 settings/restore failed: ${String(error?.message ?? error)}`);
     }
   }
+  async function handleSyncNowClick({ loadConfig: loadConfig2, openSettings: openSettings2, sync }) {
+    const config = await loadConfig2();
+    if (!config.key) {
+      await openSettings2();
+      return;
+    }
+    await sync();
+  }
+  function describeSyncResult(result) {
+    if (result.status === "synced") {
+      return result.changed ? {
+        state: "reload",
+        detail: `Revision ${result.revision} \u2014 reload the page to see your updated lists`
+      } : { state: "synced", detail: `Revision ${result.revision}` };
+    }
+    if (result.status === "corrupt") {
+      return {
+        state: "conflict",
+        detail: "Your PSNP+ list data looks unreadable \u2014 nothing was synced. Right-click to restore a backup."
+      };
+    }
+    return { state: "conflict", detail: "Could not settle \u2014 try again" };
+  }
   async function start() {
     try {
       await migrateGmStorage();
@@ -761,7 +785,7 @@ Enter a number:`, "1");
     }
     const indicator = createIndicator({
       onSyncNow: () => {
-        void sync();
+        void handleSyncNowClick({ loadConfig, openSettings, sync });
       },
       onSettings: async () => {
         await openSettings();
@@ -781,7 +805,7 @@ Enter a number:`, "1");
       try {
         const config = await loadConfig();
         if (!config.key) {
-          indicator.setState("unconfigured", "Right-click to enter your sync key");
+          indicator.setState("unconfigured", "Click to set up sync (or right-click for settings)");
           return;
         }
         indicator.setState("syncing");
@@ -795,16 +819,8 @@ Enter a number:`, "1");
           confirmAdoptions,
           now: Date.now()
         });
-        if (result.status === "synced") {
-          indicator.setState("synced", `Revision ${result.revision}`);
-        } else if (result.status === "corrupt") {
-          indicator.setState(
-            "conflict",
-            "Your PSNP+ list data looks unreadable \u2014 nothing was synced. Right-click to restore a backup."
-          );
-        } else {
-          indicator.setState("conflict", "Could not settle \u2014 try again");
-        }
+        const { state, detail } = describeSyncResult(result);
+        indicator.setState(state, detail);
       } catch (error) {
         indicator.setState("offline", String(error?.message ?? error));
       } finally {

@@ -16,6 +16,7 @@ const STATES = {
   idle:         { label: 'Sync', color: '#6c757d' },
   syncing:      { label: 'Syncing…', color: '#0d6efd' },
   synced:       { label: 'Synced', color: '#198754' },
+  reload:       { label: 'Synced — reload page', color: '#198754' },
   offline:      { label: 'Offline', color: '#fd7e14' },
   conflict:     { label: 'Conflict', color: '#dc3545' },
   unconfigured: { label: 'Set up sync', color: '#6f42c1' }
