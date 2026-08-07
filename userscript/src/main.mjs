@@ -194,6 +194,12 @@ export async function start() {
 // globals, the same way sync-cycle.mjs runs against fake storage and a fake
 // server) without a `document` global — nothing above this line touches
 // `document` at module-eval time, only inside functions that run when called.
+//
+// WARNING: this guard is what starts the userscript. esbuild emits the
+// `typeof document` check verbatim into the IIFE bundle, and `document` exists
+// at `@run-at document-start`, so it is true in the browser today — but adding
+// `define: { document: ... }` to build.mjs would fold it to a constant and
+// could silently disable the entire script with no build or test failure.
 if (typeof document !== 'undefined') {
   // start() itself is not expected to reject (its own failure modes are inside
   // sync(), which cannot), but both call sites are fire-and-forget from an

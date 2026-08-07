@@ -316,6 +316,105 @@ test('a confirmed adoption survives a 409 retry instead of being duplicated', as
   assert.deepEqual(readLists(storage)[0].games.map(g => g.id).sort(), ['g1', 'g2']);
 });
 
+// --- Fix round 3: one storage snapshot per attempt --------------------------
+//
+// `confirmAdoptions` is a blocking `window.confirm` in the browser: it can sit
+// open for minutes while a second psnprofiles.com tab edits the same lists.
+// Both tests below simulate that by having `confirmAdoptions` mutate storage
+// before it returns.
+
+test('a list that becomes 📡 while the adoption confirm is open is not tombstoned', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('local-1', 'Wishlist')]);
+  // F was already settled by an earlier sync (it is in base and on the server).
+  const base = toDoc([list('F', 'Frozen', [game('g1')])]);
+  const server = fakeServer(
+    stampChanges(emptyDoc(), toDoc([list('F', 'Frozen', [game('g1')]), list('remote-1', 'Wishlist')]), 500),
+    1
+  );
+  // "Wishlist" exists on both sides under different ids, so an adoption is
+  // proposed and the confirm is actually reached.
+  const h = harness(storage, server, base);
+  h.args.confirmAdoptions = async () => {
+    // Second tab, while the confirm is open: PSNP+'s edit-list dialog assigns
+    // `url` onto F's existing row, so F becomes a 📡 remote list.
+    writeLists(storage, [
+      list('F', 'Frozen', [game('g1')], { url: 'https://x/y.json' }),
+      list('local-1', 'Wishlist')
+    ]);
+    return true;
+  };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  // Freezing a list on one device must never delete it everywhere else.
+  assert.equal(server.doc.lists.F.deletedAt, null);
+  assert.deepEqual(Object.keys(server.doc.lists.F.games), ['g1']);
+  assert.equal(readLists(storage).find(l => l.id === 'F').url, 'https://x/y.json');
+});
+
+test('a list that stops being 📡 while the adoption confirm is open survives locally', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [
+    list('F', 'Frozen', [game('g1')], { url: 'https://x/y.json' }),
+    list('local-1', 'Wishlist')
+  ]);
+  const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('remote-1', 'Wishlist')]), 500), 1);
+  const h = harness(storage, server);
+  h.args.confirmAdoptions = async () => {
+    // Second tab, while the confirm is open: the user clears F's url, so F is a
+    // normal syncable list again.
+    writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('local-1', 'Wishlist')]);
+    return true;
+  };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  assert.ok(readLists(storage).some(l => l.id === 'F'), 'F must not vanish from localStorage');
+
+  // ...and the next cycle must not read "in base, missing from local" and
+  // tombstone it server-wide either.
+  const second = await runSyncCycle(h.args);
+  assert.equal(second.status, 'synced');
+  assert.equal(server.doc.lists.F?.deletedAt ?? null, null);
+  assert.ok(readLists(storage).some(l => l.id === 'F'));
+});
+
+test('a storage write landing during the push is not overwritten by the stale merge', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [
+    list('F', 'Frozen', [game('g1')], { url: 'https://x/y.json' }),
+    list('A', 'Wishlist')
+  ]);
+  // The server holds a list this device has never seen, so the merge is a
+  // genuine change to storage and the write path is actually reached.
+  const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
+  const h = harness(storage, server);
+
+  const realPut = server.putState.bind(server);
+  server.putState = async (baseRevision, doc) => {
+    // Second tab clears F's url while our push is in flight — after the
+    // snapshot this attempt's merge was computed from.
+    writeLists(storage, [list('F', 'Frozen', [game('g1')]), list('A', 'Wishlist')]);
+    return realPut(baseRevision, doc);
+  };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  assert.equal(result.changed, false);
+  assert.ok(readLists(storage).some(l => l.id === 'F'), 'F must not vanish from localStorage');
+  assert.equal(h.backups.length, 0);
+  // base must not advance past a write that never happened, or the next cycle
+  // reads "in base, missing from local" and tombstones the difference.
+  assert.deepEqual(Object.keys(h.base.lists), []);
+
+  // The next cycle sees a consistent world and settles it.
+  const second = await runSyncCycle(h.args);
+  assert.equal(second.status, 'synced');
+  assert.equal(server.doc.lists.F?.deletedAt ?? null, null);
+  assert.deepEqual(readLists(storage).map(l => l.id).sort(), ['A', 'B', 'F']);
+});
+
 // --- Pinned behavior (already correct; guard against regression) -----------
 
 test('pinned: a throwing saveBackup leaves storage untouched', async () => {
