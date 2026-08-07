@@ -19,6 +19,7 @@ const list = (id, name, games = [], over = {}) => ({
   orderBy: 'custom', direction: 'ascending', note: '', timestamp: 100, games, ...over
 });
 const game = id => ({ id, title: `Game ${id}`, platforms: { ps5: true }, tags: [] });
+const gameTitled = (id, title) => ({ id, title, platforms: { ps5: true }, tags: [] });
 
 /** Server stub holding one document. */
 const fakeServer = (doc = emptyDoc(), revision = 0) => ({
@@ -180,4 +181,134 @@ test('the base is advanced to the merged document', async () => {
 
   await runSyncCycle(h.args);
   assert.deepEqual(Object.keys(h.base.lists), ['A']);
+});
+
+// --- Fix round 1: C1, C2, I1, I2 -------------------------------------------
+
+test('a list converted to remote (📡) locally is not tombstoned or deleted from the server', async () => {
+  const storage = fakeStorage();
+  // A prior sync already settled list R onto the server, unmodified.
+  const priorLocal = [list('R', 'Wishlist', [game('g1')])];
+  const base = toDoc(priorLocal);
+  const server = fakeServer(base, 1);
+  const h = harness(storage, server, base);
+
+  // The user opens PSNP+'s edit-list dialog and adds a URL: `updateList`
+  // assigns `url` onto the EXISTING row, keeping the same id. R is now a
+  // 📡 remote list on this device only.
+  writeLists(storage, [list('R', 'Wishlist', [game('g1')], { url: 'https://x/y.json' })]);
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  // R must still exist on the server, alive, with its game intact — not
+  // tombstoned just because this device stopped syncing it.
+  assert.deepEqual(Object.keys(server.doc.lists), ['R']);
+  assert.equal(server.doc.lists.R.deletedAt, null);
+  assert.deepEqual(Object.keys(server.doc.lists.R.games), ['g1']);
+});
+
+test('a 409 retry re-merges against the fresh remote copy, not a stale re-stamp of the first attempt', async () => {
+  const storage = fakeStorage();
+  const baseLocal = [list('A', 'Wishlist', [gameTitled('g1', 'Old')])];
+  const base = stampChanges(emptyDoc(), toDoc(baseLocal), 100);
+  writeLists(storage, baseLocal); // local is unchanged from base
+
+  const r0 = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [gameTitled('g1', 'R0-title')])]), 500);
+  const server = fakeServer(r0, 1);
+  const h = harness(storage, server, base);
+
+  let firstCall = true;
+  const realPut = server.putState.bind(server);
+  server.putState = async (baseRevision, doc) => {
+    if (firstCall) {
+      firstCall = false;
+      // Someone else's edit lands on the server between our pull and our push.
+      server.doc = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [gameTitled('g1', 'R1-title')])]), 700);
+      server.revision = 7;
+      return { ok: false, conflict: true, revision: 7, doc: server.doc };
+    }
+    return realPut(baseRevision, doc);
+  };
+
+  const result = await runSyncCycle(h.args);
+  assert.equal(result.status, 'synced');
+  // A clean single-pass merge of unchanged-local against R1 picks R1's title —
+  // not the R0 value the first (rejected) attempt would have re-stamped with
+  // a fresh `now` and made look newer than R1's real 700.
+  assert.equal(server.doc.lists.A.games.g1.title, 'R1-title');
+  assert.equal(readLists(storage)[0].games[0].title, 'R1-title');
+});
+
+test('exhausted retries leave storage byte-identical and take no backups', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist')]);
+  const before = storage.getItem(LISTS_KEY);
+  // The server holds a second list (B) this device has never seen, so every
+  // attempt's merge genuinely differs from what is on disk — not a no-op.
+  const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
+  server.putState = async () => ({ ok: false, conflict: true, revision: 1, doc: server.doc });
+  const h = harness(storage, server);
+
+  const result = await runSyncCycle({ ...h.args, maxAttempts: 3 });
+  assert.equal(result.status, 'conflict');
+  assert.equal(storage.getItem(LISTS_KEY), before);
+  assert.equal(h.backups.length, 0);
+});
+
+test('changed truthfully reports whether storage bytes actually changed', async () => {
+  const scenarios = [
+    () => {
+      const storage = fakeStorage();
+      writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+      return { storage, args: harness(storage, fakeServer()).args };
+    },
+    () => {
+      const storage = fakeStorage();
+      writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+      const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 500), 1);
+      return { storage, args: harness(storage, server).args };
+    },
+    () => {
+      const storage = fakeStorage();
+      writeLists(storage, [list('A', 'Wishlist')]);
+      const server = fakeServer(toDoc([list('B', 'Backlog', [game('g9')])]), 1);
+      server.putState = async () => ({ ok: false, conflict: true, revision: 1, doc: server.doc });
+      return { storage, args: { ...harness(storage, server).args, maxAttempts: 3 } };
+    }
+  ];
+
+  for (const build of scenarios) {
+    const { storage, args } = build();
+    const before = storage.getItem(LISTS_KEY);
+    const result = await runSyncCycle(args);
+    const after = storage.getItem(LISTS_KEY);
+    assert.equal(result.changed, before !== after,
+      `changed=${result.changed} but storage ${before === after ? 'did not' : 'did'} change`);
+  }
+});
+
+// --- Pinned behavior (already correct; guard against regression) -----------
+
+test('pinned: a throwing saveBackup leaves storage untouched', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const before = storage.getItem(LISTS_KEY);
+  const server = fakeServer(stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 500), 1);
+  const h = harness(storage, server);
+  h.args.saveBackup = async () => { throw new Error('backup failed'); };
+
+  await assert.rejects(() => runSyncCycle(h.args), /backup failed/);
+  assert.equal(storage.getItem(LISTS_KEY), before);
+});
+
+test('pinned: a getState version failure leaves storage untouched', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const before = storage.getItem(LISTS_KEY);
+  const server = fakeServer();
+  server.getState = async () => { throw new Error('Unsupported document version: 2'); };
+  const h = harness(storage, server);
+
+  await assert.rejects(() => runSyncCycle(h.args), /Unsupported document version/);
+  assert.equal(storage.getItem(LISTS_KEY), before);
 });

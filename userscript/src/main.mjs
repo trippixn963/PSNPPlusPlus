@@ -8,7 +8,7 @@
 import { createSyncClient, gmRequest } from './sync-client.mjs';
 import { loadConfig, promptForConfig } from './config.mjs';
 import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
-import { watchLists, writeSyncable } from './lists-bridge.mjs';
+import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
 import { emptyDoc } from './doc.mjs';
@@ -66,7 +66,20 @@ async function openSettings() {
   const index = Number(picked) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= backups.length) return;
 
-  const lists = await restoreBackup(backups[index].id);
+  const chosen = backups[index];
+  const confirmed = window.confirm(
+    `PSNPSync — restore the backup from ${new Date(chosen.at).toLocaleString()} ` +
+    `(${chosen.listCount} lists)? This replaces your current lists.`
+  );
+  if (!confirmed) return;
+
+  // This restore is itself a destructive write to the same storage every other
+  // write in this file backs up first — it is the escape hatch, and an escape
+  // hatch that can destroy the current lists with no way back is not one.
+  const { syncable: currentLists } = readSyncable(window.localStorage);
+  await saveBackup(currentLists);
+
+  const lists = await restoreBackup(chosen.id);
   writeSyncable(window.localStorage, lists);
   window.alert('PSNPSync — backup restored. Reloading.');
   window.location.reload();
@@ -80,6 +93,7 @@ export async function start() {
   document.body.appendChild(indicator.element);
 
   let running = false;
+  let pending = false;
   let timer = null;
 
   // sync() must never reject: the indicator calls it fire-and-forget
@@ -92,7 +106,16 @@ export async function start() {
   // purpose so a single bad cycle fails loudly (visible "Offline" state, retried
   // on the next trigger) rather than being swallowed and silently skipped.
   async function sync() {
-    if (running) return;
+    if (running) {
+      // A trigger arrived mid-cycle — the client allows up to a 15s timeout,
+      // longer than the 3s debounce below, so this is not rare. Remember it and
+      // run once more after the current cycle finishes instead of dropping it:
+      // watchLists's poll only fires on a storage *change*, so a dropped
+      // request would otherwise stay unsynced until the next reload, focus, or
+      // manual click.
+      pending = true;
+      return;
+    }
     running = true;
     try {
       const config = await loadConfig();
@@ -113,10 +136,15 @@ export async function start() {
       );
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
-      // the next load or focus retries.
-      indicator.setState('offline', error.message);
+      // the next load or focus retries. String(), not error.message: a thrown
+      // non-Error (e.g. `throw null`) must not itself make sync() reject.
+      indicator.setState('offline', String(error?.message ?? error));
     } finally {
       running = false;
+      if (pending) {
+        pending = false;
+        void sync();
+      }
     }
   }
 
@@ -141,8 +169,12 @@ export async function start() {
   void sync();
 }
 
+// start() itself is not expected to reject (its own failure modes are inside
+// sync(), which cannot), but both call sites are fire-and-forget from an event
+// callback, so a `.catch()` is cheap insurance against an unhandled rejection.
+const onStartError = error => console.error('[psnpsync] start() failed:', error);
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => { void start(); });
+  document.addEventListener('DOMContentLoaded', () => { start().catch(onStartError); });
 } else {
-  void start();
+  start().catch(onStartError);
 }
