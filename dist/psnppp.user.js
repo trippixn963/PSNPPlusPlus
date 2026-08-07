@@ -617,6 +617,68 @@ Click to sync now, right-click for settings.` : "PSNP++ \u2014 click to sync now
     return { status: "conflict", revision: remote.revision, changed: false };
   }
 
+  // userscript/src/migrate.mjs
+  var OLD_DEFAULT_ENDPOINT = "https://trippixn.com/api/psnp-sync";
+  var OLD_PREFIX = "psnpsync.";
+  var NEW_PREFIX = "psnppp.";
+  var COPIED_SUFFIXES = ["endpoint", "key", "base"];
+  var OLD_BACKUP_PREFIX = `${OLD_PREFIX}backup.`;
+  var NEW_BACKUP_PREFIX = `${NEW_PREFIX}backup.`;
+  var OLD_INDEX_KEY = `${OLD_PREFIX}backups`;
+  var NEW_INDEX_KEY = `${NEW_PREFIX}backups`;
+  var OLD_ENDPOINT_KEY = `${OLD_PREFIX}endpoint`;
+  var NEW_ENDPOINT_KEY = `${NEW_PREFIX}endpoint`;
+  var read = async (key) => GM.getValue(key, null);
+  async function moveKey(oldKey, newKey) {
+    const oldValue = await read(oldKey);
+    if (oldValue == null) return false;
+    if (await read(newKey) == null) await GM.setValue(newKey, oldValue);
+    await GM.deleteValue(oldKey);
+    return true;
+  }
+  async function migrateBackups() {
+    const oldIndex = await read(OLD_INDEX_KEY);
+    if (!Array.isArray(oldIndex)) return 0;
+    if (await read(NEW_INDEX_KEY) != null) return 0;
+    const newIndex = [];
+    const oldBlobKeys = [];
+    let moved = 0;
+    for (const entry of oldIndex) {
+      if (entry == null || typeof entry.id !== "string" || !entry.id.startsWith(OLD_BACKUP_PREFIX)) {
+        newIndex.push(entry);
+        continue;
+      }
+      const newId = NEW_BACKUP_PREFIX + entry.id.slice(OLD_BACKUP_PREFIX.length);
+      const blob = await read(entry.id);
+      if (blob != null) {
+        await GM.setValue(newId, blob);
+        oldBlobKeys.push(entry.id);
+        moved += 1;
+      }
+      newIndex.push({ ...entry, id: newId });
+    }
+    await GM.setValue(NEW_INDEX_KEY, newIndex);
+    for (const key of oldBlobKeys) await GM.deleteValue(key);
+    await GM.deleteValue(OLD_INDEX_KEY);
+    return moved;
+  }
+  async function rewriteDefaultEndpoint() {
+    const current = await read(NEW_ENDPOINT_KEY);
+    if (current == null) return false;
+    if (current !== OLD_DEFAULT_ENDPOINT && current !== `${OLD_DEFAULT_ENDPOINT}/`) return false;
+    await GM.setValue(NEW_ENDPOINT_KEY, DEFAULT_ENDPOINT);
+    return true;
+  }
+  async function migrateGmStorage() {
+    let keys = 0;
+    for (const suffix of COPIED_SUFFIXES) {
+      if (await moveKey(OLD_PREFIX + suffix, NEW_PREFIX + suffix)) keys += 1;
+    }
+    const blobs = await migrateBackups();
+    const endpointRewritten = await rewriteDefaultEndpoint();
+    return { keys, blobs, endpointRewritten };
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var CHANGE_DEBOUNCE_MS = 3e3;
@@ -690,6 +752,11 @@ Enter a number:`, "1");
     }
   }
   async function start() {
+    try {
+      await migrateGmStorage();
+    } catch (error) {
+      console.error("[psnppp] GM storage migration failed:", error);
+    }
     const indicator = createIndicator({
       onSyncNow: () => {
         void sync();

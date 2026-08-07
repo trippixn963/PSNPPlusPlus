@@ -39,7 +39,7 @@ portfolio. Keep the secret from step 1; each browser needs it.
 
 ```bash
 npm install
-npm test          # 130 tests
+npm test          # 148 tests
 npm run build     # writes dist/psnppp.user.js
 ```
 
@@ -60,6 +60,19 @@ right-click also offers `2` to restore a pre-merge backup.
 
 Repeat on every device. The first device to sync uploads its lists; the next one is offered a
 one-time prompt to link same-named lists instead of ending up with two copies of "Wishlist".
+
+### Upgrading from PSNPSync
+
+Nothing to do by hand. Everything this script owns lives in Tampermonkey's storage under a name
+prefix, and the rename changed that prefix from `psnpsync.` to `psnppp.`. On its first run the
+new version moves all of it across — endpoint, sync key, last-synced base, the backup index, and
+every backup blob the index names — then deletes the old names. A stored endpoint that is still
+the old default (`https://trippixn.com/api/psnp-sync`) is repointed at the new one; an endpoint
+you typed yourself is left exactly as it is.
+
+The migration is idempotent, so a second run does nothing, and it is a clean no-op on a fresh
+install. `localStorage['psnpp-lists']` is **not** touched by any of this — that key belongs to
+PSNP+, not to PSNP++, and it holds the only copy of your actual game lists.
 
 ## Vendored PSNP+
 

@@ -11,6 +11,7 @@ import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
+import { migrateGmStorage } from './migrate.mjs';
 import { emptyDoc } from './doc.mjs';
 
 const BASE_KEY = 'psnppp.base';
@@ -124,6 +125,25 @@ export async function openSettings() {
 }
 
 export async function start() {
+  // Before anything reads GM storage. An install that predates the PSNP++
+  // rename has its endpoint, key, base and backups under the old psnpsync.*
+  // names; without this the first read after the update finds nothing and the
+  // device presents as brand new.
+  //
+  // Caught rather than allowed to propagate: start() is called
+  // fire-and-forget, so a throw here would abort start() entirely and the chip
+  // would never be created — leaving the user with no visible sync, no
+  // settings menu, and no restore menu. Continuing is safe because the
+  // migration only ever deletes an old name after the new one is written, so a
+  // failure part-way leaves every value readable under at least one name; the
+  // worst case is a device that asks for its key again and re-derives its base
+  // from one ordinary merge, the same cost a genuinely new device pays.
+  try {
+    await migrateGmStorage();
+  } catch (error) {
+    console.error('[psnppp] GM storage migration failed:', error);
+  }
+
   const indicator = createIndicator({
     onSyncNow: () => { void sync(); },
     onSettings: async () => { await openSettings(); void sync(); }
