@@ -1,113 +1,87 @@
 # PSNP++
 
-Two-way sync for [PSNP+](https://psnp-plus.huskycode.dev) game lists across devices.
+[PSNP+](https://psnp-plus.huskycode.dev) with local patches, plus two-way sync of your game
+lists across devices — in one userscript.
 
-PSNP+ stores its game lists in `localStorage` under `psnpp-lists`, which makes them per-browser —
-a wishlist built on the desktop does not exist on the phone. PSNP++ is a companion userscript
-plus a small VPS sidecar that keeps those lists in sync, without modifying PSNP+ itself.
+PSNP+ keeps its game lists in `localStorage`, so a wishlist built on the desktop does not
+exist on the laptop. PSNP++ syncs them through a small private service on your own server.
 
-See [the design spec](docs/specs/2026-08-07-psnp-list-sync-design.md) for the full
-architecture, merge rules, and failure handling.
+## Install
+
+```
+https://trippixn.com/psnppp.user.js
+```
+
+Paste that into your browser and Tampermonkey will offer to install it. Install from the
+**URL**, not the file — that is what wires up auto-updates.
+
+> ⚠️ **Disable the standalone PSNP+ script.** PSNP++ contains PSNP+. If both are enabled,
+> two copies run and write to the same storage independently, overwriting each other's list
+> edits. The chip warns you if it detects this, but it is easier to just turn the other one
+> off.
+
+Then load any psnprofiles.com page, **right-click the status chip** in the corner, and paste
+your sync key. Repeat on each device.
 
 ## Layout
 
-| Path | Contents |
+| Path | |
 |---|---|
-| `userscript/src/` | Userscript ESM sources — `main.mjs` is the entry point |
-| `userscript/tests/` | Node test-runner suites (`npm test`) |
-| `userscript/banner.txt` | The `==UserScript==` metadata block, prepended at build time |
-| `userscript/build.mjs` | esbuild bundler (`npm run build`) |
-| `dist/psnppp.user.js` | **The built userscript — this is the file you install** |
-| `dist/psnppp.meta.js` | The metadata block alone, served at `@updateURL` for update checks |
-| `sidecar/app.py` | FastAPI sync service (SQLite, one document, revision guard) |
-| `sidecar/tests/` | pytest suite for the sidecar |
-| `sidecar/deploy/` | systemd unit, nginx location block, and the [deployment runbook](sidecar/deploy/README.md) |
-| `docs/specs/` | Design specs |
-| `vendor/psnp-plus.user.js` | Upstream PSNP+ — read-only reference |
+| `vendor/psnp-plus.user.js` | PSNP+ v11.14 by HusKyCode, verbatim. **Never edited.** |
+| `patches/` | Local changes to PSNP+, as find/replace with reasons |
+| `userscript/src/` | PSNP++ itself — `main.mjs` is the entry point |
+| `userscript/tests/` | `npm test` |
+| `sidecar/` | The sync service (FastAPI + SQLite), its tests, and the [deploy runbook](sidecar/deploy/README.md) |
+| `dist/psnppp.user.js` | The built script — this is what you install |
 
-## Setup
+## Patching PSNP+
 
-Target platform: desktop Chrome with Tampermonkey, alongside PSNP+.
+PSNP+ runs in its own userscript realm, so its behaviour cannot be changed from the outside —
+an override installed on the page's `window` is simply never consulted by it. So PSNP++ ships
+PSNP+ and patches it at build time.
 
-### 1. Deploy the sidecar
+`vendor/psnp-plus.user.js` stays byte-identical to what HusKyCode publishes. Every local
+change lives in `patches/` as a find/replace with the reasoning attached, which keeps "what
+did we change on top of upstream?" answerable by reading one directory instead of diffing
+14,000 lines of compiled output.
 
-Follow [`sidecar/deploy/README.md`](sidecar/deploy/README.md) end to end. It generates the shared
-secret, installs the service on the VPS, and adds the nginx location block — including the
-before/after checks that prove the shared nginx config did not break a neighbouring service, a neighbouring service, or the
-portfolio. Keep the secret from step 1; each browser needs it.
+**The trade: PSNP+ no longer auto-updates.** Taking a new release is deliberate:
 
-### 2. Build and install the userscript
+```bash
+# drop the new bundle into vendor/psnp-plus.user.js, then
+npm run build
+```
+
+Every patch that still fits applies silently. The first one that does not **fails the build
+by name**, so an upstream change is a build error at merge time rather than a behaviour that
+quietly stopped working weeks later. Never loosen a patch's match to make the build pass —
+go and read what changed.
+
+## Working on it
 
 ```bash
 npm install
-npm test          # 156 tests
-npm run build     # writes dist/psnppp.user.js and dist/psnppp.meta.js
+npm test                    # userscript suite
+cd sidecar && .venv/bin/python -m pytest tests/ -q
+npm run build               # writes dist/
 ```
 
-Install `dist/psnppp.user.js` in Tampermonkey — open the Tampermonkey dashboard, choose
-**Utilities → File → Import** (or drag the file onto the dashboard), and enable it. `dist/` is
-committed, so it can also be installed straight from the repo without a local build. Rebuild and
-reinstall after any change to `userscript/src/` — the bundle is what actually runs.
+Releases are one command. It refuses a dirty tree, gates on both suites, bumps the version,
+builds, publishes, then verifies the live version and that the neighbouring services on the
+server are unharmed:
 
-### 3. Enter the sync key on each device
-
-Load any `psnprofiles.com` page. A small status chip appears in the bottom-right corner; until it
-is configured it reads **Set up sync**.
-
-**Right-click the chip** to open settings, choose `1`, accept the default endpoint
-(`https://trippixn.com/api/psnppp`), and paste the secret from step 1. The key is stored in
-Tampermonkey's own storage, never in the script file. Left-clicking the chip syncs immediately;
-right-click also offers `2` to restore a pre-merge backup.
-
-Repeat on every device. The first device to sync uploads its lists; the next one is offered a
-one-time prompt to link same-named lists instead of ending up with two copies of "Wishlist".
-
-### Upgrading from PSNPSync
-
-Nothing to do by hand. Everything this script owns lives in Tampermonkey's storage under a name
-prefix, and the rename changed that prefix from `psnpsync.` to `psnppp.`. On its first run the
-new version moves all of it across — endpoint, sync key, last-synced base, the backup index, and
-every backup blob the index names — then deletes the old names. A stored endpoint that is still
-the old default (`https://trippixn.com/api/psnp-sync`) is repointed at the new one; an endpoint
-you typed yourself is left exactly as it is.
-
-The migration is idempotent, so a second run does nothing, and it is a clean no-op on a fresh
-install. `localStorage['psnpp-lists']` is **not** touched by any of this — that key belongs to
-PSNP+, not to PSNP++, and it holds the only copy of your actual game lists.
-
-## Releasing an update
-
-Installed copies update themselves. The script declares:
-
-```
-@downloadURL  https://trippixn.com/psnppp.user.js
-@updateURL    https://trippixn.com/psnppp.meta.js
+```bash
+npm run release             # patch
+npm run release minor
+npm run release patch --dry-run
 ```
 
-Tampermonkey polls `@updateURL` on its own schedule, reads `@version` out of it, and offers the
-download only when that version is **higher** than the installed one. So the release is:
+The version bump is why the script exists: Tampermonkey only updates when `@version`
+increases, and the build reads it from `package.json`. Ship without a bump and every install
+silently keeps running the old code.
 
-1. Bump `version` in `package.json`. **This is the whole release switch** — `@version` is derived
-   from it at build time, never written in `banner.txt`. A hardcoded version would build a
-   perfectly working script that can never update itself, showing "up to date" forever.
-2. `npm test && npm run build`.
-3. Publish both `dist/psnppp.user.js` and `dist/psnppp.meta.js` at the two URLs above.
+## Credit
 
-`psnppp.meta.js` is the metadata block on its own, written from the same resolved text prepended
-to the bundle, so the two can never disagree about the version. It exists so an update check
-transfers ~558 bytes rather than the whole ~30 KB script.
-
-`npm test` pins all of this against the committed `dist/`: it fails if the version drifts from
-`package.json`, if the placeholder leaks through, if the two files' metadata blocks diverge, or if
-any `@grant`/`@connect`/`@run-at` goes missing.
-
-## Vendored PSNP+
-
-`vendor/psnp-plus.user.js` is **PSNP+ v11.14 by HusKyCode**, retrieved from
-`https://psnp-plus.huskycode.dev/psnp-plus.user.js`.
-
-It is committed as a **read-only reference** so the storage format and list behavior this project
-depends on can be checked against a known version. It is a webpack bundle, not source.
-
-**It is never patched.** PSNP++ runs alongside PSNP+ and interacts with it only through
-`localStorage`, so PSNP+ can update freely without breaking the sync.
+PSNP+ is by **HusKyCode** — <https://psnp-plus.huskycode.dev>. This repository vendors it
+unmodified and patches it at build time; all of its functionality, and the work behind it,
+is theirs.
