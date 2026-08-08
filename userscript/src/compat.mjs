@@ -30,6 +30,19 @@
  * and this file says nothing about it, so a truncated quota write is never
  * blamed on HusKyCode. None of looksCorrupt's logic is repeated here.
  *
+ * DELIBERATELY NOT CHECKED HERE: auto-confirm.mjs depends on two more things
+ * about PSNP+ — the exact wording of its "Are you sure you want to remove X?"
+ * dialog, and games carrying a readable `title`. Both are real dependencies and
+ * both will eventually break. Neither belongs in this file, because this file's
+ * only verb is HALT SYNCING: it stops all two-way traffic and tells the user
+ * their lists are frozen until PSNP++ is updated. That is the right price for a
+ * shape change that would otherwise corrupt their data, and a grossly wrong one
+ * for a convenience toggle whose entire failure mode is a confirmation dialog
+ * reappearing. Auto-confirm fails safe on its own (it simply stops matching and
+ * the dialog comes back), so surfacing it here could only ever convert a
+ * harmless annoyance into a halted sync — strictly worse for the user, on both
+ * devices. The dependency is documented at its own call sites instead.
+ *
  * Author: Trippixn
  * Server: discord.gg/syria
  */

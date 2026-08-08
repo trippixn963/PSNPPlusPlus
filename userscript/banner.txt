@@ -11,6 +11,7 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
+// @grant        unsafeWindow
 // @connect      trippixn.com
 // @downloadURL  https://trippixn.com/psnppp.user.js
 // @updateURL    https://trippixn.com/psnppp.meta.js

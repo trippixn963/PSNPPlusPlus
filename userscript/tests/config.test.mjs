@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_ENDPOINT, loadConfig, saveConfig, applyConfig, isAllowedEndpoint,
-  describeStoredKey, INSECURE_ENDPOINT_MESSAGE } from '../src/config.mjs';
+  describeStoredKey, INSECURE_ENDPOINT_MESSAGE, loadAutoConfirmRemove, saveAutoConfirmRemove,
+  AUTO_CONFIRM_REMOVE_DEFAULT } from '../src/config.mjs';
 
 /** A fake GM.* backed by a Map, so config.mjs can be exercised in node. */
 function installFakeGM() {
@@ -205,6 +206,57 @@ test('applyConfig trims the endpoint and survives junk input without throwing', 
     }
     // ...and none of that disturbed what was already stored.
     assert.deepEqual(await loadConfig(), { endpoint: 'https://ok.test/api', key: 'k' });
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+// --- the auto-confirm toggle ------------------------------------------------
+
+test('the auto-confirm toggle defaults ON, because the owner asked for it', async () => {
+  installFakeGM();
+  try {
+    assert.equal(AUTO_CONFIRM_REMOVE_DEFAULT, true);
+    assert.equal(await loadAutoConfirmRemove(), true);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the auto-confirm toggle round-trips, and only an explicit false turns it off', async () => {
+  const store = installFakeGM();
+  try {
+    await saveAutoConfirmRemove(false);
+    assert.equal(await loadAutoConfirmRemove(), false);
+    await saveAutoConfirmRemove(true);
+    assert.equal(await loadAutoConfirmRemove(), true);
+
+    // A value stored by some older/newer build, or corrupted: anything that is
+    // not exactly `false` keeps the feature the owner asked for switched on,
+    // and anything not exactly `true` is stored as off. Never a string.
+    for (const junk of [null, undefined, 0, '', 'false', {}]) {
+      store.set('psnppp.autoConfirmRemove', junk);
+      assert.equal(await loadAutoConfirmRemove(), true, JSON.stringify(junk) ?? String(junk));
+    }
+    for (const truthy of [1, 'yes', {}]) {
+      await saveAutoConfirmRemove(truthy);
+      assert.equal(store.get('psnppp.autoConfirmRemove'), false,
+        'only a real boolean true is stored as on');
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the auto-confirm toggle does not leak into loadConfig/saveConfig', async () => {
+  // The sync path reads loadConfig on every cycle; a cosmetic toggle must not
+  // become part of the credential record it validates and rewrites.
+  installFakeGM();
+  try {
+    await saveAutoConfirmRemove(false);
+    await saveConfig({ endpoint: 'https://ok.test/api', key: 'k' });
+    assert.deepEqual(await loadConfig(), { endpoint: 'https://ok.test/api', key: 'k' });
+    assert.equal(await loadAutoConfirmRemove(), false, 'saving credentials must not reset it');
   } finally {
     uninstallFakeGM();
   }

@@ -28,7 +28,7 @@
  * Server: discord.gg/syria
  */
 
-import { describeStoredKey } from './config.mjs';
+import { describeStoredKey, AUTO_CONFIRM_REMOVE_DEFAULT } from './config.mjs';
 import { clampAxis } from './indicator.mjs';
 import { PANEL_ID, PANEL_WIDTH_PX, EDGE_INSET_PX, CHIP_FALLBACK_SIZE } from './theme.mjs';
 
@@ -82,6 +82,11 @@ export function createSettingsPanel({
   // saved credential or a completed restore.
   onSave = async () => ({ ok: false, message: 'Settings are not wired up.' }),
   onRestore = async () => ({ ok: false, message: 'Restore is not wired up.' }),
+  // Whether PSNP+'s "remove <game>?" dialog answers itself (auto-confirm.mjs).
+  // Imported rather than repeated, so an un-wired panel can never render the box
+  // unticked and imply the feature is off while it is running.
+  autoConfirmRemove = AUTO_CONFIRM_REMOVE_DEFAULT,
+  onToggleAutoConfirm = async () => ({ ok: false, message: 'That setting is not wired up.' }),
   onClose = () => {}
 } = {}) {
   const make = (tag, className, text) => {
@@ -170,6 +175,76 @@ export function createSettingsPanel({
     'keyhint'
   ));
   syncPane.appendChild(keyField);
+
+  // --- the auto-confirm toggle ---------------------------------------------
+  //
+  // Applied the moment it is clicked, NOT on Save. Save belongs to the endpoint
+  // and the key: it validates, it can be rejected, and it closes the panel. A
+  // preference that could only be committed through that button would be lost
+  // by closing with × and could be silently discarded by a rejected endpoint.
+
+  const autoConfirmField = make('div', 'psnppp-field psnppp-check');
+  const autoConfirmBox = tag(make('input', 'psnppp-checkbox'), 'autoconfirm');
+  autoConfirmBox.id = 'psnppp-autoconfirm';
+  autoConfirmBox.setAttribute('type', 'checkbox');
+  autoConfirmBox.checked = autoConfirmRemove !== false;
+  const autoConfirmLabel = make('label', 'psnppp-checklabel', 'Skip the "remove game?" prompt');
+  autoConfirmLabel.setAttribute('for', 'psnppp-autoconfirm');
+  autoConfirmField.appendChild(autoConfirmBox);
+  autoConfirmField.appendChild(autoConfirmLabel);
+  // Names the risk in the same breath as the convenience. With sync running, a
+  // removal reaches the other device — that dialog was the last guard against a
+  // misclick, and the owner should be able to re-read why he turned it off.
+  autoConfirmField.appendChild(tag(make('div', 'psnppp-hint',
+    'Removes games from a list without asking. Only that one PSNP+ prompt — ' +
+    'deleting a list, clearing PSNP+ data and reloading a remote list still ask. ' +
+    'A removal syncs to your other devices.'), 'autoconfirm-hint'));
+
+  // One toggle in flight at a time. The handler writes to GM storage AND to the
+  // live `confirm` override, and two overlapping runs settle in whatever order
+  // their storage writes happen to resolve in — which is not the order they were
+  // clicked in. That can end with the box, storage and the installed override
+  // all disagreeing, and reopening the panel does not heal it because the panel
+  // reads storage, not the override. `disabled` is what actually prevents it in
+  // a browser (a disabled checkbox raises no change events); the flag makes the
+  // rule hold for any caller that dispatches the event directly.
+  let toggling = false;
+  autoConfirmBox.addEventListener('change', () => {
+    // The checkbox is already showing the new state (the browser flipped it),
+    // so every failure has to put it back — a control that shows one thing while
+    // storage holds another is worse than one that refuses.
+    const wanted = autoConfirmBox.checked === true;
+    if (toggling) {
+      autoConfirmBox.checked = !wanted;
+      return;
+    }
+    toggling = true;
+    autoConfirmBox.disabled = true;
+    void (async () => {
+      let failure = null;
+      try {
+        const result = await onToggleAutoConfirm(wanted);
+        if (!result || result.ok !== true) {
+          failure = result?.message ?? 'Could not save that setting.';
+        }
+      } catch (error) {
+        failure = describeFailure(error, 'Could not save that setting');
+      }
+      // Outside the try, so a throw from showMessage/clearMessage can never be
+      // mistaken for a failed save and revert a toggle that actually took —
+      // the same reason the Save button uses `.catch` rather than `void`.
+      toggling = false;
+      autoConfirmBox.disabled = false;
+      if (failure != null) autoConfirmBox.checked = !wanted;
+      try {
+        if (failure != null) showMessage(failure, { error: true });
+        else clearMessage();
+      } catch (error) {
+        console.error('[psnppp] could not report the auto-confirm result:', error);
+      }
+    })();
+  });
+  syncPane.appendChild(autoConfirmField);
 
   const syncActions = make('div', 'psnppp-actions');
   const cancelButton = tag(make('button', 'psnppp-btn', 'Cancel'), 'cancel');

@@ -78,6 +78,12 @@ test('every runtime-critical directive survives the build', () => {
     /@grant\s+GM\.getValue/,
     /@grant\s+GM\.setValue/,
     /@grant\s+GM\.deleteValue/,
+    // Tampermonkey hands unsafeWindow out without a grant, but Violentmonkey
+    // and Greasemonkey require one — and without it `typeof unsafeWindow` is
+    // 'undefined', main.mjs's confirmTarget silently falls back to the sandbox
+    // window, and the remove-prompt override is installed where PSNP+ (which
+    // runs @inject-into page) will never see it.
+    /@grant\s+unsafeWindow/,
     /@match\s+https:\/\/psnprofiles\.com\/\*/,
     /@name\s+PSNP\+\+/,
     /@namespace\s+psnppp\.trippixn/

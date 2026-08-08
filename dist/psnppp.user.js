@@ -11,6 +11,7 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
+// @grant        unsafeWindow
 // @connect      trippixn.com
 // @downloadURL  https://trippixn.com/psnppp.user.js
 // @updateURL    https://trippixn.com/psnppp.meta.js
@@ -162,6 +163,15 @@
     await GM.setValue(ENDPOINT_KEY, endpoint);
     await GM.setValue(SECRET_KEY, key);
   }
+  var AUTO_CONFIRM_REMOVE_KEY = "psnppp.autoConfirmRemove";
+  var AUTO_CONFIRM_REMOVE_DEFAULT = true;
+  async function loadAutoConfirmRemove() {
+    const stored = await GM.getValue(AUTO_CONFIRM_REMOVE_KEY, AUTO_CONFIRM_REMOVE_DEFAULT);
+    return stored !== false;
+  }
+  async function saveAutoConfirmRemove(enabled) {
+    await GM.setValue(AUTO_CONFIRM_REMOVE_KEY, enabled === true);
+  }
   function isAllowedEndpoint(endpoint) {
     let parsed;
     try {
@@ -242,6 +252,19 @@
   function writeLists(storage, lists) {
     storage.setItem(LISTS_KEY, JSON.stringify(lists));
   }
+  function readGameTitles(storage) {
+    const titles = /* @__PURE__ */ new Set();
+    for (const list of readLists(storage)) {
+      const games = list.games;
+      if (!Array.isArray(games)) continue;
+      for (const game of games) {
+        if (game == null || typeof game !== "object") continue;
+        const title = game.title;
+        if (typeof title === "string" && title !== "") titles.add(title);
+      }
+    }
+    return titles;
+  }
   function readSyncable(storage) {
     return splitRemote(readLists(storage));
   }
@@ -320,6 +343,72 @@
       }
       target.removeEventListener?.("storage", onStorageEvent);
       clearInterval(timer);
+    };
+  }
+
+  // userscript/src/auto-confirm.mjs
+  var REMOVE_PREFIX = "Are you sure you want to remove ";
+  var REMOVE_SUFFIX = "?";
+  function extractRemovedTitle(message) {
+    if (typeof message !== "string") return null;
+    if (!message.startsWith(REMOVE_PREFIX)) return null;
+    if (!message.endsWith(REMOVE_SUFFIX)) return null;
+    const title = message.slice(REMOVE_PREFIX.length, -REMOVE_SUFFIX.length);
+    if (title === "") return null;
+    if (title.includes("\n") || title.includes("\r")) return null;
+    return title;
+  }
+  var knows = (titles, title) => titles instanceof Set && titles.has(title);
+  function shouldAutoConfirm(message, knownTitles) {
+    const title = extractRemovedTitle(message);
+    if (title == null) return false;
+    const titles = typeof knownTitles === "function" ? knownTitles() : knownTitles;
+    return knows(titles, title);
+  }
+  var INERT = { installed: false, uninstall() {
+  } };
+  function installAutoConfirm({ target, knownTitles } = {}) {
+    if (target == null || typeof target.confirm !== "function") return INERT;
+    const original = target.confirm;
+    const hadOwn = Object.prototype.hasOwnProperty.call(target, "confirm");
+    const descriptor = hadOwn ? Object.getOwnPropertyDescriptor(target, "confirm") : null;
+    let active = true;
+    function override(...args) {
+      try {
+        if (active && shouldAutoConfirm(args[0], knownTitles)) return true;
+      } catch (error) {
+        try {
+          console.error("[psnppp] auto-confirm check failed; showing the dialog:", error);
+        } catch {
+        }
+      }
+      return Reflect.apply(original, target, args);
+    }
+    try {
+      target.confirm = override;
+    } catch (error) {
+      console.error("[psnppp] could not install the auto-confirm override:", error);
+      return INERT;
+    }
+    if (target.confirm !== override) {
+      console.error("[psnppp] the auto-confirm override did not take; leaving confirm alone.");
+      return INERT;
+    }
+    let removed = false;
+    return {
+      installed: true,
+      uninstall() {
+        if (removed) return;
+        removed = true;
+        active = false;
+        try {
+          if (target.confirm !== override) return;
+          if (descriptor) Object.defineProperty(target, "confirm", descriptor);
+          else delete target.confirm;
+        } catch (error) {
+          console.error("[psnppp] could not restore the original confirm:", error);
+        }
+      }
     };
   }
 
@@ -621,6 +710,45 @@ ${litTiers} {
   font-size: 11px;
   color: ${t.quiet};
 }
+
+/* The one control in this panel that commits the moment it is clicked, so it
+   is set apart from the two fields above it by a rule rather than by wording. */
+#${PANEL_ID} .psnppp-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid ${t.hairline};
+}
+
+#${PANEL_ID} .psnppp-checkbox {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: ${t.gold};
+  cursor: pointer;
+}
+
+#${PANEL_ID} .psnppp-checkbox:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 1px;
+}
+
+#${PANEL_ID} .psnppp-checklabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ${TYPE.body};
+  font-size: 11px;
+  line-height: 1.4;
+  color: ${t.bright};
+  cursor: pointer;
+}
+
+/* The hint drops to its own full-width line under both. */
+#${PANEL_ID} .psnppp-check .psnppp-hint { flex: 1 0 100%; margin-top: 2px; }
 
 #${PANEL_ID} .psnppp-row {
   display: flex;
@@ -1109,6 +1237,11 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     // saved credential or a completed restore.
     onSave = async () => ({ ok: false, message: "Settings are not wired up." }),
     onRestore = async () => ({ ok: false, message: "Restore is not wired up." }),
+    // Whether PSNP+'s "remove <game>?" dialog answers itself (auto-confirm.mjs).
+    // Imported rather than repeated, so an un-wired panel can never render the box
+    // unticked and imply the feature is off while it is running.
+    autoConfirmRemove = AUTO_CONFIRM_REMOVE_DEFAULT,
+    onToggleAutoConfirm = async () => ({ ok: false, message: "That setting is not wired up." }),
     onClose = () => {
     }
   } = {}) {
@@ -1179,6 +1312,51 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       "keyhint"
     ));
     syncPane.appendChild(keyField);
+    const autoConfirmField = make("div", "psnppp-field psnppp-check");
+    const autoConfirmBox = tag(make("input", "psnppp-checkbox"), "autoconfirm");
+    autoConfirmBox.id = "psnppp-autoconfirm";
+    autoConfirmBox.setAttribute("type", "checkbox");
+    autoConfirmBox.checked = autoConfirmRemove !== false;
+    const autoConfirmLabel = make("label", "psnppp-checklabel", 'Skip the "remove game?" prompt');
+    autoConfirmLabel.setAttribute("for", "psnppp-autoconfirm");
+    autoConfirmField.appendChild(autoConfirmBox);
+    autoConfirmField.appendChild(autoConfirmLabel);
+    autoConfirmField.appendChild(tag(make(
+      "div",
+      "psnppp-hint",
+      "Removes games from a list without asking. Only that one PSNP+ prompt \u2014 deleting a list, clearing PSNP+ data and reloading a remote list still ask. A removal syncs to your other devices."
+    ), "autoconfirm-hint"));
+    let toggling = false;
+    autoConfirmBox.addEventListener("change", () => {
+      const wanted = autoConfirmBox.checked === true;
+      if (toggling) {
+        autoConfirmBox.checked = !wanted;
+        return;
+      }
+      toggling = true;
+      autoConfirmBox.disabled = true;
+      void (async () => {
+        let failure = null;
+        try {
+          const result = await onToggleAutoConfirm(wanted);
+          if (!result || result.ok !== true) {
+            failure = result?.message ?? "Could not save that setting.";
+          }
+        } catch (error) {
+          failure = describeFailure(error, "Could not save that setting");
+        }
+        toggling = false;
+        autoConfirmBox.disabled = false;
+        if (failure != null) autoConfirmBox.checked = !wanted;
+        try {
+          if (failure != null) showMessage(failure, { error: true });
+          else clearMessage();
+        } catch (error) {
+          console.error("[psnppp] could not report the auto-confirm result:", error);
+        }
+      })();
+    });
+    syncPane.appendChild(autoConfirmField);
     const syncActions = make("div", "psnppp-actions");
     const cancelButton = tag(make("button", "psnppp-btn", "Cancel"), "cancel");
     cancelButton.setAttribute("type", "button");
@@ -1964,6 +2142,38 @@ ${names}
 Link them so they stay in sync? Choose Cancel to keep them separate.`
     );
   }
+  function confirmTarget() {
+    try {
+      if (typeof unsafeWindow !== "undefined" && unsafeWindow != null && typeof unsafeWindow.confirm === "function") {
+        return unsafeWindow;
+      }
+    } catch (error) {
+      console.error("[psnppp] could not reach unsafeWindow:", error);
+    }
+    return typeof window !== "undefined" ? window : null;
+  }
+  var autoConfirm = null;
+  async function applyAutoConfirm(enabled, { target = confirmTarget() } = {}) {
+    try {
+      autoConfirm?.uninstall();
+    } catch (error) {
+      console.error("[psnppp] could not remove the auto-confirm override:", error);
+    }
+    autoConfirm = null;
+    if (!enabled) return true;
+    try {
+      autoConfirm = installAutoConfirm({
+        target,
+        // Read at click time, not snapshotted here: the user is deleting games,
+        // so a set captured at install would go stale within one click.
+        knownTitles: () => readGameTitles(window.localStorage)
+      });
+      return autoConfirm.installed === true;
+    } catch (error) {
+      console.error("[psnppp] could not install the auto-confirm override:", error);
+      return false;
+    }
+  }
   var activePanel = null;
   var PENDING_PANEL = { close() {
   } };
@@ -1978,7 +2188,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         return;
       }
       activePanel = PENDING_PANEL;
-      const [backups, history, config, loadError] = await loadPanelData();
+      const [backups, history, config, autoConfirmRemove, loadError] = await loadPanelData();
       await new Promise((resolve) => {
         let settled = false;
         const finish = () => {
@@ -1999,6 +2209,32 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           backups,
           history,
           describeDelta,
+          autoConfirmRemove,
+          // Three things have to agree afterwards: the checkbox, GM storage, and
+          // what is actually installed on `confirm`. So switch the override
+          // first, only record it once that worked, and undo it if the record
+          // fails — every early exit reports `{ ok: false }`, which is what makes
+          // the panel put the checkbox back.
+          onToggleAutoConfirm: async (next) => {
+            try {
+              if (!await applyAutoConfirm(next)) {
+                return {
+                  ok: false,
+                  message: "PSNP++ could not take over that PSNP+ prompt on this page, so it will keep asking. Nothing was changed."
+                };
+              }
+              try {
+                await saveAutoConfirmRemove(next);
+              } catch (error) {
+                await applyAutoConfirm(!next);
+                throw error;
+              }
+              return { ok: true };
+            } catch (error) {
+              console.error("[psnppp] could not save the auto-confirm setting:", error);
+              return { ok: false, message: describeFailure(error, "Could not save that setting") };
+            }
+          },
           onSave: async ({ endpoint, key }) => {
             try {
               return await applyConfig({ endpoint, key });
@@ -2040,16 +2276,20 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     }
   }
   async function loadPanelData() {
-    const [backups, history, config] = await Promise.allSettled([
+    const [backups, history, config, autoConfirmRemove] = await Promise.allSettled([
       listBackups(),
       listSyncHistory(),
-      loadConfig()
+      loadConfig(),
+      loadAutoConfirmRemove()
     ]);
-    const failures = [backups, history, config].filter((result) => result.status === "rejected").map((result) => describeFailure(result.reason, "Could not read your saved settings"));
+    const failures = [backups, history, config, autoConfirmRemove].filter((result) => result.status === "rejected").map((result) => describeFailure(result.reason, "Could not read your saved settings"));
     return [
       backups.status === "fulfilled" ? backups.value : [],
       history.status === "fulfilled" ? history.value : [],
       config.status === "fulfilled" ? config.value : { endpoint: DEFAULT_ENDPOINT, key: "" },
+      // Falls back to the DEFAULT, not to `false`: an unreadable toggle must not
+      // render a box that says the feature is off while it is actually running.
+      autoConfirmRemove.status === "fulfilled" ? autoConfirmRemove.value : AUTO_CONFIRM_REMOVE_DEFAULT,
       failures[0] ?? ""
     ];
   }
@@ -2123,6 +2363,11 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
       await migrateGmStorage();
     } catch (error) {
       console.error("[psnppp] GM storage migration failed:", error);
+    }
+    try {
+      await applyAutoConfirm(await loadAutoConfirmRemove());
+    } catch (error) {
+      console.error("[psnppp] could not set up the remove-prompt setting:", error);
     }
     let indicator;
     const settings = () => openSettings({ chip: indicator });

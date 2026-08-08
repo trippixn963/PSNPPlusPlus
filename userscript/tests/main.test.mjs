@@ -5,7 +5,8 @@ import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
 import { loadConfig, saveConfig } from '../src/config.mjs';
 import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta,
-  createIndicatorPainter, decorateDetail, currentScriptVersion } from '../src/main.mjs';
+  createIndicatorPainter, decorateDetail, currentScriptVersion, confirmTarget,
+  applyAutoConfirm } from '../src/main.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
 import { describeFailure, createSettingsPanel } from '../src/panel.mjs';
@@ -1038,6 +1039,213 @@ test('the restore flow still works with the panel\'s three tabs', async () => {
       ui.teardown();
     }
   } finally {
+    uninstallFakeGM();
+  }
+});
+
+// --- the remove-prompt override, wired end to end ---------------------------
+
+/**
+ * These pin the WIRING, which is the part auto-confirm.test.mjs cannot see: it
+ * proves the override behaves, but not that the setting reaches it, that the
+ * page's window is what gets patched, or that switching it off really unwinds.
+ */
+
+test('confirmTarget prefers the page window over our sandboxed one', () => {
+  // PSNP+ runs @inject-into page: its bare `confirm(...)` reads the PAGE's
+  // global. Patching our sandbox's `window.confirm` would be invisible to it.
+  installFakeWindow();
+  const pageWindow = { confirm: () => true };
+  globalThis.unsafeWindow = pageWindow;
+  try {
+    assert.equal(confirmTarget(), pageWindow);
+  } finally {
+    delete globalThis.unsafeWindow;
+    uninstallFakeWindow();
+  }
+});
+
+test('confirmTarget falls back to our own window when there is no unsafeWindow', () => {
+  // A manager without a sandbox, or without the grant. The fallback is inert
+  // rather than wrong: the dialog keeps appearing, which is the safe direction.
+  installFakeWindow();
+  try {
+    assert.equal(confirmTarget(), globalThis.window);
+  } finally {
+    uninstallFakeWindow();
+  }
+});
+
+test('confirmTarget ignores an unsafeWindow that carries no usable confirm', () => {
+  installFakeWindow();
+  for (const junk of [null, {}, { confirm: 'nope' }]) {
+    globalThis.unsafeWindow = junk;
+    assert.equal(confirmTarget(), globalThis.window, JSON.stringify(junk) ?? String(junk));
+  }
+  delete globalThis.unsafeWindow;
+  uninstallFakeWindow();
+});
+
+test('applyAutoConfirm(true) answers the remove prompt for a game that is really in a list', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('a', 'Backlog', [{ id: 1, title: 'Bloodborne' }])]);
+  installFakeDocument();
+  const fake = installFakeWindow({ localStorage: storage });
+  try {
+    await applyAutoConfirm(true, { target: globalThis.window });
+    assert.equal(globalThis.window.confirm('Are you sure you want to remove Bloodborne?'), true);
+    assert.equal(fake.confirms.length, 0, 'the real dialog must not have been reached');
+
+    // A game that is NOT in the lists, and PSNP+'s list-deletion prompt, both
+    // still ask — and get the real answer.
+    assert.equal(globalThis.window.confirm('Are you sure you want to remove Portal 2?'), false);
+    assert.equal(globalThis.window.confirm('Are you sure you want to delete this list?'), false);
+    assert.equal(fake.confirms.length, 2);
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('applyAutoConfirm(false) puts confirm back exactly as it found it', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('a', 'Backlog', [{ id: 1, title: 'Bloodborne' }])]);
+  installFakeDocument();
+  const fake = installFakeWindow({ localStorage: storage });
+  try {
+    const before = globalThis.window.confirm;
+    await applyAutoConfirm(true, { target: globalThis.window });
+    assert.notEqual(globalThis.window.confirm, before);
+    await applyAutoConfirm(false, { target: globalThis.window });
+    assert.equal(globalThis.window.confirm, before, 'off must be uninstalled, not merely quiet');
+    assert.equal(globalThis.window.confirm('Are you sure you want to remove Bloodborne?'), false);
+    assert.equal(fake.confirms.length, 1);
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('applyAutoConfirm never double-installs, so switching it off always fully unwinds', async () => {
+  const storage = fakeStorage();
+  installFakeDocument();
+  installFakeWindow({ localStorage: storage });
+  try {
+    const before = globalThis.window.confirm;
+    await applyAutoConfirm(true, { target: globalThis.window });
+    await applyAutoConfirm(true, { target: globalThis.window });
+    await applyAutoConfirm(false, { target: globalThis.window });
+    assert.equal(globalThis.window.confirm, before);
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the settings toggle persists and switches the live override, without a Save', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('a', 'Backlog', [{ id: 1, title: 'Bloodborne' }])]);
+  const store = installFakeGM();
+  const panel = await openPanel(storage);
+  try {
+    const box = panel.node('autoconfirm');
+    assert.ok(box, 'the toggle must be on the Sync tab');
+    assert.equal(box.checked, true, 'it defaults on, because the owner asked for it');
+
+    // Off: stored as a real false, and the override is gone from `confirm`.
+    const original = globalThis.window.confirm;
+    box.checked = false;
+    box.dispatch('change', {});
+    await settle();
+    assert.equal(store.get('psnppp.autoConfirmRemove'), false);
+    assert.equal(globalThis.window.confirm, original);
+    assert.equal(globalThis.window.confirm('Are you sure you want to remove Bloodborne?'), false);
+    assert.deepEqual(panel.fake.confirms, ['Are you sure you want to remove Bloodborne?']);
+
+    // Back on: stored as true, and answering again without the dialog.
+    box.checked = true;
+    box.dispatch('change', {});
+    await settle();
+    assert.equal(store.get('psnppp.autoConfirmRemove'), true);
+    assert.equal(globalThis.window.confirm('Are you sure you want to remove Bloodborne?'), true);
+    assert.equal(panel.fake.confirms.length, 1, 'still just the one from while it was off');
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    panel.teardown();
+    uninstallFakeGM();
+  }
+});
+
+test('a stored "off" is honoured when the panel next opens', async () => {
+  const storage = fakeStorage();
+  const store = installFakeGM();
+  store.set('psnppp.autoConfirmRemove', false);
+  const panel = await openPanel(storage);
+  try {
+    assert.equal(panel.node('autoconfirm').checked, false);
+  } finally {
+    panel.teardown();
+    uninstallFakeGM();
+  }
+});
+
+test('a confirm that cannot be replaced is reported, not ticked', async () => {
+  // The box must never claim a feature is running when it is not.
+  const storage = fakeStorage();
+  const store = installFakeGM();
+  const panel = await openPanel(storage);
+  try {
+    const box = panel.node('autoconfirm');
+    box.checked = false;
+    box.dispatch('change', {});
+    await settle();
+    assert.equal(store.get('psnppp.autoConfirmRemove'), false);
+
+    // Now make the page refuse the override, and try to switch it back on.
+    Object.defineProperty(globalThis.window, 'confirm', {
+      value: globalThis.window.confirm, writable: false, configurable: false
+    });
+    box.checked = true;
+    box.dispatch('change', {});
+    await settle();
+    assert.equal(box.checked, false, 'the box must go back');
+    assert.equal(store.get('psnppp.autoConfirmRemove'), false,
+      'and nothing must have been stored for a feature that is not running');
+    assert.match(panel.node('message').textContent, /could not take over/i);
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    panel.teardown();
+    uninstallFakeGM();
+  }
+});
+
+test('a toggle whose write fails rolls the live override back', async () => {
+  // Otherwise this page behaves one way and every future page the other, with
+  // nothing on screen to say so.
+  const storage = fakeStorage();
+  writeLists(storage, [list('a', 'Backlog', [{ id: 1, title: 'Bloodborne' }])]);
+  installFakeGM();
+  const panel = await openPanel(storage);
+  try {
+    // The state start() would have left: the setting is on and the override is
+    // installed, which is what the toggle is about to try to undo.
+    await applyAutoConfirm(true, { target: globalThis.window });
+    globalThis.GM.setValue = async () => { throw new Error('GM storage is full'); };
+    const box = panel.node('autoconfirm');
+    box.checked = false;
+    box.dispatch('change', {});
+    await settle();
+    assert.equal(box.checked, true, 'the box must go back');
+    assert.equal(globalThis.window.confirm('Are you sure you want to remove Bloodborne?'), true,
+      'and the override must be back on, matching the box and the unchanged storage');
+    assert.deepEqual(panel.fake.confirms, [], 'so the real dialog is still not reached');
+    assert.match(panel.node('message').textContent, /GM storage is full/);
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    panel.teardown();
     uninstallFakeGM();
   }
 });

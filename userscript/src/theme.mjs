@@ -391,6 +391,45 @@ ${litTiers} {
   color: ${t.quiet};
 }
 
+/* The one control in this panel that commits the moment it is clicked, so it
+   is set apart from the two fields above it by a rule rather than by wording. */
+#${PANEL_ID} .psnppp-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid ${t.hairline};
+}
+
+#${PANEL_ID} .psnppp-checkbox {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: ${t.gold};
+  cursor: pointer;
+}
+
+#${PANEL_ID} .psnppp-checkbox:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 1px;
+}
+
+#${PANEL_ID} .psnppp-checklabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ${TYPE.body};
+  font-size: 11px;
+  line-height: 1.4;
+  color: ${t.bright};
+  cursor: pointer;
+}
+
+/* The hint drops to its own full-width line under both. */
+#${PANEL_ID} .psnppp-check .psnppp-hint { flex: 1 0 100%; margin-top: 2px; }
+
 #${PANEL_ID} .psnppp-row {
   display: flex;
   flex-wrap: wrap;
