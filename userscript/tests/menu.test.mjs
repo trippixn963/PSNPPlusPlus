@@ -1,109 +1,74 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MENU_SELECTOR, ENTRY_ID, attachMenuEntry, attachMenuEntryWhenReady } from '../src/menu.mjs';
+import { MENU_SELECTOR, findMenu, findMenuWhenReady } from '../src/menu.mjs';
 
-/** Enough of a DOM for appendChild/querySelector/getElementById and one listener. */
+/** Just enough document to answer querySelector and hold a body for the observer. */
 const fakeDoc = ({ withMenu = true } = {}) => {
-  const nodes = new Map();
-  const makeEl = () => ({
-    id: '', textContent: '', style: { cssText: '' }, children: [],
-    listeners: {},
-    addEventListener(type, fn) { this.listeners[type] = fn; },
-    appendChild(child) { this.children.push(child); if (child.id) nodes.set(child.id, child); }
-  });
-  const menu = withMenu ? makeEl() : null;
+  const menu = withMenu ? { id: 'the-menu' } : null;
   return {
-    body: makeEl(),
-    createElement: () => makeEl(),
+    body: {},
     querySelector: sel => (sel === MENU_SELECTOR ? menu : null),
-    getElementById: id => nodes.get(id) ?? null,
     menu
   };
 };
 
-const clickEvent = () => {
-  const e = { defaultPrevented: false, propagationStopped: false };
-  e.preventDefault = () => { e.defaultPrevented = true; };
-  e.stopPropagation = () => { e.propagationStopped = true; };
-  return e;
-};
-
-test('the row is appended to PSNP+ menu', () => {
+test('the menu is found by its PSNP+ class', () => {
   const doc = fakeDoc();
-  const handle = attachMenuEntry(doc, { onClick() {} });
-  assert.notEqual(handle, null);
-  assert.equal(doc.menu.children.length, 1);
-  assert.equal(doc.menu.children[0].id, ENTRY_ID);
-  assert.equal(doc.menu.children[0].textContent, 'Sync now');
+  assert.equal(findMenu(doc), doc.menu);
 });
 
-test('no menu means no row, and no throw', () => {
+test('no menu means null, and no throw', () => {
   // PSNP+ hides the menu entirely when its own hideFloatingMenus setting is on.
-  const doc = fakeDoc({ withMenu: false });
-  assert.equal(attachMenuEntry(doc, { onClick() {} }), null);
-});
-
-test('attaching twice does not add a second row', () => {
-  const doc = fakeDoc();
-  attachMenuEntry(doc, { onClick() {} });
-  const second = attachMenuEntry(doc, { onClick() {} });
-  assert.equal(doc.menu.children.length, 1);
-  assert.notEqual(second, null, 'and it still hands back a usable handle');
-});
-
-test('clicking runs the action and does not leak to the page beneath', () => {
-  const doc = fakeDoc();
-  let ran = 0;
-  attachMenuEntry(doc, { onClick() { ran += 1; } });
-  const event = clickEvent();
-  doc.menu.children[0].listeners.click(event);
-  assert.equal(ran, 1);
-  assert.equal(event.defaultPrevented, true);
-  assert.equal(event.propagationStopped, true);
-});
-
-test('an action that throws does not escape the click handler', () => {
-  const doc = fakeDoc();
-  attachMenuEntry(doc, { onClick() { throw new Error('boom'); } });
-  assert.doesNotThrow(() => doc.menu.children[0].listeners.click(clickEvent()));
-});
-
-test('setLabel updates the row', () => {
-  const doc = fakeDoc();
-  const handle = attachMenuEntry(doc, { onClick() {} });
-  handle.setLabel('Syncing…');
-  assert.equal(doc.menu.children[0].textContent, 'Syncing…');
+  assert.equal(findMenu(fakeDoc({ withMenu: false })), null);
 });
 
 test('a hostile document yields null rather than throwing', () => {
-  assert.equal(attachMenuEntry(null, {}), null);
-  assert.equal(attachMenuEntry({ querySelector() { throw new Error('nope'); } }, {}), null);
+  assert.equal(findMenu(null), null);
+  assert.equal(findMenu({}), null);
+  assert.equal(findMenu({ querySelector() { throw new Error('nope'); } }), null);
 });
 
 test('waiting resolves immediately when the menu is already there', async () => {
   const doc = fakeDoc();
-  const handle = await attachMenuEntryWhenReady(doc, { onClick() {} }, { waitMs: 50 });
-  assert.notEqual(handle, null);
+  assert.equal(await findMenuWhenReady(doc, { waitMs: 50 }), doc.menu);
 });
 
-test('waiting gives up rather than holding an observer open forever', async () => {
-  // PSNP+ inserts the menu in its DOMContentLoaded pass. If it never arrives,
-  // the menu is switched off or PSNP+ did not load — neither is worth watching
-  // for the life of the page.
-  const doc = fakeDoc({ withMenu: false });
+test('waiting resolves with the menu once it appears', async () => {
+  // The real timing: PSNP+ inserts the menu in its DOMContentLoaded pass, which
+  // runs after ours, so it is absent at the moment this is first called.
+  let menu = null;
+  const doc = { body: {}, querySelector: sel => (sel === MENU_SELECTOR ? menu : null) };
+  let fire = () => {};
   globalThis.MutationObserver = class {
+    constructor(cb) { fire = cb; }
     observe() {} disconnect() {}
   };
   try {
-    const handle = await attachMenuEntryWhenReady(doc, { onClick() {} }, { waitMs: 20 });
-    assert.equal(handle, null);
+    const pending = findMenuWhenReady(doc, { waitMs: 500 });
+    menu = { id: 'late' };
+    fire();
+    assert.equal(await pending, menu);
+  } finally {
+    delete globalThis.MutationObserver;
+  }
+});
+
+test('waiting gives up rather than holding an observer open forever', async () => {
+  // If the menu never arrives, it is switched off or PSNP+ did not load —
+  // neither is worth watching for the life of the page.
+  const doc = fakeDoc({ withMenu: false });
+  let disconnected = 0;
+  globalThis.MutationObserver = class {
+    observe() {} disconnect() { disconnected += 1; }
+  };
+  try {
+    assert.equal(await findMenuWhenReady(doc, { waitMs: 20 }), null);
+    assert.equal(disconnected, 1, 'and the observer is released');
   } finally {
     delete globalThis.MutationObserver;
   }
 });
 
 test('without MutationObserver it resolves null instead of hanging', async () => {
-  const doc = fakeDoc({ withMenu: false });
-  const handle = await attachMenuEntryWhenReady(doc, { onClick() {} }, { waitMs: 20 });
-  assert.equal(handle, null);
+  assert.equal(await findMenuWhenReady(fakeDoc({ withMenu: false }), { waitMs: 20 }), null);
 });

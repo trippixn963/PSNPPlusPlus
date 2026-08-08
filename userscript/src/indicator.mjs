@@ -83,6 +83,17 @@ export const EDGE_MARGIN = 8;
  */
 export const DRAG_THRESHOLD_PX = 4;
 
+/**
+ * How long the host stays lifted out of its resting fade for an offer.
+ *
+ * Long enough to be read without being looked for, short enough that an offer
+ * the user has chosen to ignore stops sitting at full opacity over their page.
+ */
+export const ATTENTION_LIFT_MS = 12000;
+
+/** How long the resize stream must be quiet before the surface is re-docked. */
+export const RESIZE_SETTLE_MS = 120;
+
 /** Used only when the element cannot be measured yet (never rendered). */
 const FALLBACK_SIZE = CHIP_FALLBACK_SIZE;
 
@@ -290,11 +301,37 @@ export function createIndicator({
     // Also while the panel is open: the panel is opened FROM the menu, and a
     // host that faded back to .2 the moment the pointer moved into the panel
     // would leave the settings hanging off something half-gone.
-    if (hosted) {
-      const lift = current.pops || panelOpen;
-      surface.classList?.[lift ? 'add' : 'remove']('psnppp-attention');
-    }
+    if (hosted) liftHost(current.pops || panelOpen);
   };
+
+  // Cleared when the lift is renewed or dropped, so a settle that lands mid-way
+  // through an earlier lift cannot be undone by that lift's own expiry.
+  let attentionTimer = null;
+
+  /**
+   * Raise or drop the host's fade.
+   *
+   * The lift EXPIRES. An offer the user has decided not to take yet — an update
+   * they will install later — should not hold PSNP+'s menu at full opacity over
+   * their page for the rest of the session; that stops being a signal and starts
+   * being clutter. It recedes after ATTENTION_LIFT_MS and the state itself is
+   * unchanged, so the tier colour and the label are still there on hover, and
+   * arriving in the state again re-lifts it.
+   *
+   * The panel is the exception: while it is open the menu is being used, so the
+   * lift is held for as long as it stays open rather than timed out from under
+   * the user mid-interaction.
+   */
+  function liftHost(lift) {
+    clearTimeout(attentionTimer);
+    attentionTimer = null;
+    surface.classList?.[lift ? 'add' : 'remove']('psnppp-attention');
+    if (!lift || panelOpen) return;
+    attentionTimer = setTimeout(() => {
+      attentionTimer = null;
+      surface.classList?.remove('psnppp-attention');
+    }, ATTENTION_LIFT_MS);
+  }
 
   // --- position ------------------------------------------------------------
 
@@ -438,7 +475,24 @@ export function createIndicator({
     if (position.left !== before.left || position.top !== before.top) persist();
   }
 
-  globalThis.window?.addEventListener?.('resize', handleResize);
+  /**
+   * Resize fires in a continuous stream while a window is being dragged by its
+   * corner — tens of events a second, each one measuring the surface and
+   * writing to its style. Coalesced to one re-dock after the stream settles.
+   *
+   * A trailing timer rather than a leading one: the useful moment is the size
+   * the window ENDS at, not the first size it passed through.
+   */
+  let resizeTimer = null;
+  const onResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      handleResize();
+    }, RESIZE_SETTLE_MS);
+  };
+
+  globalThis.window?.addEventListener?.('resize', onResize);
 
   // --- drag ----------------------------------------------------------------
 
@@ -585,17 +639,35 @@ export function createIndicator({
   const onPointerUp = endDrag;
   const onPointerCancel = event => endDrag(event, { commit: false });
 
+  /**
+   * Right-click anywhere on the surface opens the settings.
+   *
+   * On the surface rather than on the chip, for the same reason the drag is:
+   * hosted, the chip is one row and the menu is the object. A menu you can drag
+   * from anywhere but can only right-click on one strip of is a menu with an
+   * invisible seam down it.
+   */
+  const onContextMenu = event => {
+    event.preventDefault?.();
+    onSettings();
+  };
+
+  // Every listener that belongs to the SURFACE, in one list, so binding and
+  // unbinding cannot fall out of step — the previous pair was written out twice
+  // and a fifth listener would have had to be remembered in both.
+  const SURFACE_EVENTS = [
+    ['pointerdown', onPointerDown],
+    ['pointermove', onPointerMove],
+    ['pointerup', onPointerUp],
+    ['pointercancel', onPointerCancel],
+    ['contextmenu', onContextMenu]
+  ];
+
   const bindDrag = target => {
-    target.addEventListener?.('pointerdown', onPointerDown);
-    target.addEventListener?.('pointermove', onPointerMove);
-    target.addEventListener?.('pointerup', onPointerUp);
-    target.addEventListener?.('pointercancel', onPointerCancel);
+    for (const [type, handler] of SURFACE_EVENTS) target.addEventListener?.(type, handler);
   };
   const unbindDrag = target => {
-    target.removeEventListener?.('pointerdown', onPointerDown);
-    target.removeEventListener?.('pointermove', onPointerMove);
-    target.removeEventListener?.('pointerup', onPointerUp);
-    target.removeEventListener?.('pointercancel', onPointerCancel);
+    for (const [type, handler] of SURFACE_EVENTS) target.removeEventListener?.(type, handler);
   };
 
   bindDrag(surface);
@@ -629,11 +701,6 @@ export function createIndicator({
     if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
     event.preventDefault?.();
     activate();
-  });
-
-  element.addEventListener('contextmenu', event => {
-    event.preventDefault();
-    onSettings();
   });
 
   // --- state ---------------------------------------------------------------
@@ -765,6 +832,27 @@ export function createIndicator({
      * the panel the row's box and the panel hung off a slice of the menu instead
      * of off the menu.
      */
+    /**
+     * Release every listener and timer this installed.
+     *
+     * Nothing in the userscript calls this today — the chip lives as long as the
+     * page does. It exists because the resize listener is on `window`, which
+     * outlives the chip: a test that builds a chip per case was leaving one
+     * behind on every one of them, all still firing, all still measuring
+     * detached elements. A widget that cannot be taken down is a leak waiting
+     * for a caller.
+     */
+    destroy() {
+      try {
+        globalThis.window?.removeEventListener?.('resize', onResize);
+        unbindDrag(surface);
+        clearTimeout(resizeTimer);
+        clearTimeout(snapTimer);
+        clearTimeout(attentionTimer);
+      } catch (error) {
+        onPositionError(error);
+      }
+    },
     getSurface: () => surface,
     /** Where the chip is, or null while it still sits in its default corner. */
     getPosition: () => (position == null ? null : { ...position }),

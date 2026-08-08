@@ -23,7 +23,7 @@
 
 
 /* ====================================================================
-   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 4 local patch(es): rename-floating-menu, skip-remove-confirm, theme-floating-menu, theme-psnp-plus-accent
+   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 5 local patch(es): menu-hover-in-css, rename-floating-menu, skip-remove-confirm, theme-floating-menu, theme-psnp-plus-accent
    ==================================================================== */
 
 /******/ (() => { // webpackBootstrap
@@ -5251,15 +5251,6 @@ class FloatingMenu extends _util_J__WEBPACK_IMPORTED_MODULE_0__.JC {
             'top: 20px;',
             'left: 20px;',
             'z-index: 2147483647;',
-            'background-color: #1b1d1f;',
-            'padding: 8px 10px;',
-            'border: 1px solid #26292b;',
-            'opacity: 0.55;',
-            'color: #cfd2d5;',
-            'border-radius: 6px;',
-            'font-size: 12px;',
-            'letter-spacing: 0.04em;',
-            'box-shadow: 0 2px 10px rgba(0,0,0,.45);'
         ].join(' ');
         this._content = content;
         this._onShow = onShow;
@@ -5269,12 +5260,10 @@ class FloatingMenu extends _util_J__WEBPACK_IMPORTED_MODULE_0__.JC {
     _build() {
         this
             .setAttribute('style', this._baseStyle)
-            .mouseenter((_, el) => {
-            el.setCss('opacity', '1');
+            .mouseenter(() => {
             this._onShow();
         })
-            .mouseleave((_, el) => {
-            el.setCss('opacity', '0.2');
+            .mouseleave(() => {
             this._onHide();
         })
             .append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('div').append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('b').setText('PSNP++ Menu')));
@@ -14653,6 +14642,50 @@ else {
     };
   }
 
+  // userscript/src/menu.mjs
+  var MENU_SELECTOR = ".psnpp-floating-menu";
+  var WAIT_MS = 8e3;
+  function findMenu(doc) {
+    try {
+      return doc?.querySelector?.(MENU_SELECTOR) ?? null;
+    } catch (error) {
+      console.error("[psnppp] could not look for the menu:", error);
+      return null;
+    }
+  }
+  function findMenuWhenReady(doc, { waitMs = WAIT_MS } = {}) {
+    return new Promise((resolve) => {
+      try {
+        const immediate = findMenu(doc);
+        if (immediate != null) {
+          resolve(immediate);
+          return;
+        }
+        if (typeof MutationObserver !== "function" || doc?.body == null) {
+          resolve(null);
+          return;
+        }
+        let settled = false;
+        const finish = (menu) => {
+          if (settled) return;
+          settled = true;
+          observer.disconnect();
+          clearTimeout(timer);
+          resolve(menu);
+        };
+        const observer = new MutationObserver(() => {
+          const menu = findMenu(doc);
+          if (menu != null) finish(menu);
+        });
+        observer.observe(doc.body, { childList: true, subtree: true });
+        const timer = setTimeout(() => finish(null), waitMs);
+      } catch (error) {
+        console.error("[psnppp] could not watch for the menu:", error);
+        resolve(null);
+      }
+    });
+  }
+
   // userscript/src/theme.mjs
   var TOKENS = {
     plate: "#1b1d1f",
@@ -14869,13 +14902,124 @@ ${litTiers} {
   opacity: 1;
 }
 
-/* Lifts PSNP+'s resting fade off the whole menu while the chip is asking for
-   something (see the pops flag in indicator.mjs). Marked important because
-   their mouseleave handler writes opacity 0.2 as an INLINE style, which no plain
-   rule of ours can outrank. Scoped to the class we add and remove, so the menu
-   is left entirely alone the rest of the time. */
-.psnppp-attention {
-  opacity: 1 !important;
+/* ---- PSNP+'s floating menu, reskinned ----------------------------------- */
+
+/*
+ * The menu is the surface now \u2014 the chip is a row inside it \u2014 so it has to read
+ * as one object with the chip and the panel rather than as a grey box one of
+ * them happens to live in.
+ *
+ * Owned here rather than in the patch that used to rewrite PSNP+'s inline
+ * style attribute. Two patches clear the way: theme-floating-menu strips the
+ * visual half of that attribute, and menu-hover-in-css removes the handlers
+ * that wrote opacity inline. What is left below is ordinary CSS, in the same
+ * tokens as everything else, with no !important except where third-party
+ * inline styles genuinely have to be outranked (marked, each time).
+ */
+${MENU_SELECTOR} {
+  padding: 9px 10px 10px;
+  border: 1px solid ${t.hairline};
+  border-radius: 3px;
+  background: ${t.plate};
+  box-shadow: ${PLATE_SHADOW};
+  color: ${t.data};
+  font-family: ${TYPE.body};
+  font-size: 12px;
+  line-height: 1.45;
+  min-width: 148px;
+  /* The whole menu drags, so the whole menu must not be selectable: a drag
+     across the title used to paint it blue and leave a selection behind. */
+  user-select: none;
+  cursor: grab;
+  opacity: .55;
+  transition: opacity .18s ease, border-color .18s ease;
+}
+
+${MENU_SELECTOR}:hover {
+  opacity: 1;
+  border-color: ${t.edge};
+}
+
+/* Raised by indicator.mjs for exactly the states that ask the user to act, and
+   dropped again when the chip settles. Without it an update offer sat at the
+   resting fade and went unread. */
+${MENU_SELECTOR}.psnppp-attention {
+  opacity: 1;
+  border-color: ${t.bronzeDim};
+}
+
+/* Held down: the cursor is the only feedback that the grab took. */
+${MENU_SELECTOR}:active {
+  cursor: grabbing;
+}
+
+/* The title. PSNP+ emits a bare <b> inside a wrapper div. */
+${MENU_SELECTOR} > div:first-child > b {
+  display: block;
+  margin-bottom: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid ${t.hairline};
+  color: ${t.engrave};
+  font-family: ${TYPE.display};
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+/*
+ * PSNP+ separates its buttons with <br> and lays them out inline. Stacking them
+ * as blocks and dropping the breaks gives one rhythm instead of two competing
+ * ones \u2014 and means the spacing is a margin that can be reasoned about rather
+ * than the height of a line box.
+ */
+${MENU_SELECTOR} br {
+  display: none;
+}
+
+${MENU_SELECTOR} .button {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  /* Their own margin-top: 5px is set INLINE on each button, so this is one of
+     the two places that has to outrank an inline style. */
+  margin: 0 0 5px !important;
+  padding: 6px 9px;
+  border: 1px solid ${t.hairline};
+  border-radius: 2px;
+  background: ${t.control};
+  color: ${t.data};
+  font-family: ${TYPE.body};
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+  text-decoration: none;
+  text-shadow: none;
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+
+/* .button.grey is PSNP+'s own rule (background: #646464) and it is the class
+   every one of these buttons carries, so it has to be answered directly. */
+${MENU_SELECTOR} .button.grey {
+  background: ${t.control};
+}
+
+${MENU_SELECTOR} .button:last-of-type {
+  margin-bottom: 0 !important;
+}
+
+${MENU_SELECTOR} .button:hover,
+${MENU_SELECTOR} .button.grey:hover {
+  border-color: ${t.bronzeDim};
+  background: ${t.sunken};
+  color: ${t.bright};
+}
+
+${MENU_SELECTOR} .button:focus-visible {
+  outline: 2px solid ${t.platinum};
+  outline-offset: 1px;
 }
 
 /* ---- the panel --------------------------------------------------------- */
@@ -15202,6 +15346,8 @@ ${litTiers} {
   var POSITION_KEY = "psnppp.chipPosition";
   var EDGE_MARGIN = 8;
   var DRAG_THRESHOLD_PX = 4;
+  var ATTENTION_LIFT_MS = 12e3;
+  var RESIZE_SETTLE_MS = 120;
   var FALLBACK_SIZE = CHIP_FALLBACK_SIZE;
   var finiteOr = (value, fallback) => Number.isFinite(value) ? value : fallback;
   function clampAxis(value, size, view, margin = EDGE_MARGIN) {
@@ -15302,11 +15448,19 @@ ${litTiers} {
         snapping ? "psnppp-dock-snap" : "",
         hosted ? "psnppp-hosted" : ""
       ].filter(Boolean).join(" ");
-      if (hosted) {
-        const lift = current.pops || panelOpen;
-        surface.classList?.[lift ? "add" : "remove"]("psnppp-attention");
-      }
+      if (hosted) liftHost(current.pops || panelOpen);
     };
+    let attentionTimer = null;
+    function liftHost(lift) {
+      clearTimeout(attentionTimer);
+      attentionTimer = null;
+      surface.classList?.[lift ? "add" : "remove"]("psnppp-attention");
+      if (!lift || panelOpen) return;
+      attentionTimer = setTimeout(() => {
+        attentionTimer = null;
+        surface.classList?.remove("psnppp-attention");
+      }, ATTENTION_LIFT_MS);
+    }
     const viewport = () => ({
       width: globalThis.window?.innerWidth ?? 0,
       height: globalThis.window?.innerHeight ?? 0
@@ -15370,7 +15524,15 @@ ${litTiers} {
       applyDocked(dockSide, position.top);
       if (position.left !== before.left || position.top !== before.top) persist();
     }
-    globalThis.window?.addEventListener?.("resize", handleResize);
+    let resizeTimer = null;
+    const onResize = () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        handleResize();
+      }, RESIZE_SETTLE_MS);
+    };
+    globalThis.window?.addEventListener?.("resize", onResize);
     let drag = null;
     let suppressClick = false;
     const onPointerDown = (event) => {
@@ -15439,17 +15601,22 @@ ${litTiers} {
     };
     const onPointerUp = endDrag;
     const onPointerCancel = (event) => endDrag(event, { commit: false });
+    const onContextMenu = (event) => {
+      event.preventDefault?.();
+      onSettings();
+    };
+    const SURFACE_EVENTS = [
+      ["pointerdown", onPointerDown],
+      ["pointermove", onPointerMove],
+      ["pointerup", onPointerUp],
+      ["pointercancel", onPointerCancel],
+      ["contextmenu", onContextMenu]
+    ];
     const bindDrag = (target) => {
-      target.addEventListener?.("pointerdown", onPointerDown);
-      target.addEventListener?.("pointermove", onPointerMove);
-      target.addEventListener?.("pointerup", onPointerUp);
-      target.addEventListener?.("pointercancel", onPointerCancel);
+      for (const [type, handler] of SURFACE_EVENTS) target.addEventListener?.(type, handler);
     };
     const unbindDrag = (target) => {
-      target.removeEventListener?.("pointerdown", onPointerDown);
-      target.removeEventListener?.("pointermove", onPointerMove);
-      target.removeEventListener?.("pointerup", onPointerUp);
-      target.removeEventListener?.("pointercancel", onPointerCancel);
+      for (const [type, handler] of SURFACE_EVENTS) target.removeEventListener?.(type, handler);
     };
     bindDrag(surface);
     const activate = () => {
@@ -15468,10 +15635,6 @@ ${litTiers} {
       if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
       event.preventDefault?.();
       activate();
-    });
-    element.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      onSettings();
     });
     function setState(state, detail = "") {
       const name = typeof state === "string" ? state : "";
@@ -15549,6 +15712,27 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
        * the panel the row's box and the panel hung off a slice of the menu instead
        * of off the menu.
        */
+      /**
+       * Release every listener and timer this installed.
+       *
+       * Nothing in the userscript calls this today — the chip lives as long as the
+       * page does. It exists because the resize listener is on `window`, which
+       * outlives the chip: a test that builds a chip per case was leaving one
+       * behind on every one of them, all still firing, all still measuring
+       * detached elements. A widget that cannot be taken down is a leak waiting
+       * for a caller.
+       */
+      destroy() {
+        try {
+          globalThis.window?.removeEventListener?.("resize", onResize);
+          unbindDrag(surface);
+          clearTimeout(resizeTimer);
+          clearTimeout(snapTimer);
+          clearTimeout(attentionTimer);
+        } catch (error) {
+          onPositionError(error);
+        }
+      },
       getSurface: () => surface,
       /** Where the chip is, or null while it still sits in its default corner. */
       getPosition: () => position == null ? null : { ...position },
@@ -16306,6 +16490,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
 
   // userscript/src/update-check.mjs
   var THROTTLE_MS = 30 * 60 * 1e3;
+  var REQUEST_TIMEOUT_MS = 8e3;
   function parseVersion(metaText) {
     if (typeof metaText !== "string") return null;
     const match = metaText.match(/@version\s+(\S+)/);
@@ -16348,7 +16533,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
     let result = { available: false, latest: null };
     try {
-      const response = await request({ method: "GET", url: metaUrl });
+      const response = await request({ method: "GET", url: metaUrl, timeout: REQUEST_TIMEOUT_MS });
       if (response && response.status === 200) {
         const latest = parseVersion(response.responseText);
         if (latest != null) {
@@ -16881,82 +17066,6 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return `${next.title || "A game"} in your lists shuts down ${when}${rest}.`;
   }
 
-  // userscript/src/menu.mjs
-  var MENU_SELECTOR = ".psnpp-floating-menu";
-  var ENTRY_ID = "psnppp-menu-entry";
-  var WAIT_MS = 8e3;
-  function attachMenuEntry(doc, { onClick, label = "Sync now" } = {}) {
-    try {
-      const menu = doc?.querySelector?.(MENU_SELECTOR);
-      if (menu == null) return null;
-      const existing = doc.getElementById?.(ENTRY_ID);
-      if (existing != null) {
-        return { element: existing, setLabel: (text) => {
-          existing.textContent = text;
-        } };
-      }
-      const row = doc.createElement("div");
-      row.id = ENTRY_ID;
-      row.textContent = label;
-      row.style.cssText = [
-        "margin-top:6px",
-        `border-top:1px solid ${TOKENS.hairline}`,
-        "padding-top:6px",
-        "cursor:pointer",
-        `color:${TOKENS.gold}`,
-        "user-select:none"
-      ].join(";");
-      row.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        try {
-          onClick?.();
-        } catch (error) {
-          console.error("[psnppp] menu action failed:", error);
-        }
-      });
-      menu.appendChild(row);
-      return { element: row, setLabel: (text) => {
-        row.textContent = text;
-      } };
-    } catch (error) {
-      console.error("[psnppp] could not add the menu entry:", error);
-      return null;
-    }
-  }
-  function attachMenuEntryWhenReady(doc, options = {}, { waitMs = WAIT_MS } = {}) {
-    return new Promise((resolve) => {
-      try {
-        const immediate = attachMenuEntry(doc, options);
-        if (immediate != null) {
-          resolve(immediate);
-          return;
-        }
-        if (typeof MutationObserver !== "function" || doc?.body == null) {
-          resolve(null);
-          return;
-        }
-        let settled = false;
-        const finish = (handle) => {
-          if (settled) return;
-          settled = true;
-          observer.disconnect();
-          clearTimeout(timer);
-          resolve(handle);
-        };
-        const observer = new MutationObserver(() => {
-          const handle = attachMenuEntry(doc, options);
-          if (handle != null) finish(handle);
-        });
-        observer.observe(doc.body, { childList: true, subtree: true });
-        const timer = setTimeout(() => finish(null), waitMs);
-      } catch (error) {
-        console.error("[psnppp] could not watch for the menu:", error);
-        resolve(null);
-      }
-    });
-  }
-
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
@@ -17386,10 +17495,8 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
       }
     }
-    void attachMenuEntryWhenReady(document, {}).then((handle) => {
-      const menu = handle?.element?.parentElement;
+    void findMenuWhenReady(document).then((menu) => {
       if (menu == null || indicator?.element == null) return;
-      handle.element.remove();
       indicator.rehost(menu);
     });
     watchLists(window.localStorage, () => {

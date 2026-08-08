@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIndicator, clampToViewport, isUsablePosition, isDockSide, sideFor, dockedLeft,
-  POSITION_KEY, EDGE_MARGIN } from '../src/indicator.mjs';
+  POSITION_KEY, EDGE_MARGIN, RESIZE_SETTLE_MS } from '../src/indicator.mjs';
 import { EDGE_INSET_PX, DOCK_SNAP_MS } from '../src/theme.mjs';
 import { installFakeDocument, uninstallFakeDocument, installFakeWindow, uninstallFakeWindow,
   installFakeGM, uninstallFakeGM } from './fake-dom.mjs';
@@ -24,6 +24,9 @@ const spies = () => {
     }
   };
 };
+
+/** Wait past the resize debounce, plus a turn for the persist promise. */
+const settled = () => new Promise(resolve => setTimeout(resolve, RESIZE_SETTLE_MS + 20));
 
 /** A chip wired to spies, with position storage stubbed out unless overridden. */
 function build(extra = {}) {
@@ -751,6 +754,10 @@ test('a resize to a narrower viewport keeps a right-docked chip docked right and
       assert.deepEqual(indicator.getPosition(), { left: 1920 - 120 - EDGE_INSET_PX, top: 1030 });
 
       fake.resize(1024, 640);
+      // The re-dock is debounced now: a window dragged by its corner fires a
+      // continuous stream of resize events, and each one measured and wrote to
+      // the surface. Waiting for the stream to settle is part of the behaviour.
+      await settled();
 
       // STILL docked right — not re-derived from the old absolute left, which
       // on a 1024-wide screen would be nowhere near the right edge any more.
@@ -781,6 +788,7 @@ test('a resize to a narrower viewport keeps a left-docked chip docked left and f
       assert.deepEqual(indicator.getPosition(), { left: EDGE_INSET_PX, top: 930 });
 
       fake.resize(320, 480);
+      await settled();
 
       assert.equal(indicator.getSide(), 'left');
       const after = indicator.getPosition();
@@ -1115,5 +1123,67 @@ test('a plain press takes no pointer capture, so the click lands on the chip', (
   } finally {
     uninstallFakeDocument();
     uninstallFakeWindow();
+  }
+});
+
+test('the attention lift expires instead of holding the menu open forever', async () => {
+  // An update the user has decided not to install yet must not pin PSNP+'s menu
+  // at full opacity over their page for the rest of the session.
+  installFakeWindow({ innerWidth: 1200, innerHeight: 800 });
+  installFakeDocument();
+  try {
+    const { indicator } = build();
+    const menu = globalThis.document.createElement('div');
+    menu.rect = { left: 20, top: 20, width: 220, height: 120, right: 240, bottom: 140 };
+    const classes = new Set();
+    menu.classList = { add: c => classes.add(c), remove: c => classes.delete(c) };
+    indicator.rehost(menu);
+
+    indicator.setState('update', 'Version 9.9.9 is available');
+    assert.equal(classes.has('psnppp-attention'), true, 'lifted on arrival');
+
+    // Not a wait on the real 12s: the constant is the contract, so the test
+    // reaches for the timer the same way the code set it.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(classes.has('psnppp-attention'), true, 'still lifted a moment later');
+
+    indicator.destroy();
+  } finally {
+    uninstallFakeDocument();
+    uninstallFakeWindow();
+  }
+});
+
+test('right-click opens settings from anywhere on the menu, not just the chip', () => {
+  // The drag takes the whole menu; right-click used to take one row of it.
+  installFakeWindow({ innerWidth: 1200, innerHeight: 800 });
+  installFakeDocument();
+  try {
+    const { calls, indicator } = build();
+    const menu = globalThis.document.createElement('div');
+    menu.rect = { left: 20, top: 20, width: 220, height: 120, right: 240, bottom: 140 };
+    indicator.rehost(menu);
+    let prevented = false;
+    menu.dispatch('contextmenu', { preventDefault() { prevented = true; } });
+    assert.equal(calls.settings, 1, 'the menu opens settings');
+    assert.equal(prevented, true, 'and suppresses the browser menu');
+  } finally {
+    uninstallFakeDocument();
+    uninstallFakeWindow();
+  }
+});
+
+test('destroy releases the window resize listener', () => {
+  // It is installed on `window`, which outlives the chip.
+  installFakeDocument();
+  const fake = installFakeWindow({ width: 1920, height: 1080 });
+  try {
+    const { indicator } = build();
+    assert.equal(fake.resizeListenerCount(), 1, 'the chip installed one');
+    indicator.destroy();
+    assert.equal(fake.resizeListenerCount(), 0, 'and destroy took it back off');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
   }
 });

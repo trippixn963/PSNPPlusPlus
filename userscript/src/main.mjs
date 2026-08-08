@@ -29,7 +29,7 @@ import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sy
 import { checkHealth, describeHealth } from './health.mjs';
 import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-history.mjs';
 import { checkWatch, describeWatch } from './watch.mjs';
-import { attachMenuEntryWhenReady } from './menu.mjs';
+import { findMenuWhenReady } from './menu.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
@@ -904,21 +904,15 @@ export async function start() {
   // (changed === false) and writes nothing. Net cost is one extra network
   // round-trip per user edit — bounded, not free, and not worth "fixing" by
   // e.g. reaching into watchLists's absorb state from here.
-  // A shortcut into PSNP+'s own menu. Fire-and-forget and never awaited: it
-  // resolves null when the menu is switched off in PSNP+'s settings or PSNP+
-  // did not load, and neither is a reason to delay the chip. The chip remains
-  // the thing that actually reports state.
   // Move the chip INTO PSNP+'s menu once it exists, so there is one floating
   // surface on the page instead of two. Best-effort and never awaited: when the
   // menu is switched off in PSNP+'s settings, or PSNP+ did not load at all, the
   // chip simply stays where it is — which is the whole reason the standalone
   // path is kept rather than replaced.
-  void attachMenuEntryWhenReady(document, {}).then(handle => {
-    const menu = handle?.element?.parentElement;
+  void findMenuWhenReady(document).then(menu => {
     if (menu == null || indicator?.element == null) return;
-    handle.element.remove();
-    // rehost, not appendChild: the chip has to hand its dragging over to the
-    // menu as well as its position, or the menu becomes an undraggable box
+    // rehost, not appendChild: the chip has to hand its dragging, its dock side
+    // and its position over to the menu, or the menu becomes an undraggable box
     // containing a chip that thinks it is still floating.
     indicator.rehost(menu);
   });

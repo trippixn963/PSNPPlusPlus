@@ -30,6 +30,19 @@ import { gmRequest } from './sync-client.mjs';
 const THROTTLE_MS = 30 * 60 * 1000;
 
 /**
+ * How long to wait for the metadata file before giving up.
+ *
+ * Without one, `gmRequest` has no `timeout` to hand GM_xmlhttpRequest and the
+ * promise rests on the manager's own default — which for a host that accepts a
+ * connection and then says nothing can be minutes, or never. Nothing here is
+ * awaited by the sync cycle, so a hung check cost no correctness; it left a
+ * request open for the life of the page for a version number. Shorter than the
+ * sync client's 15s because this is a 700-byte file and a check nobody is
+ * waiting for: it re-runs on the next page load either way.
+ */
+const REQUEST_TIMEOUT_MS = 8000;
+
+/**
  * Pull `@version` out of a userscript metadata block.
  *
  * Returns null rather than throwing on anything that is not a clean dotted
@@ -109,7 +122,7 @@ export async function checkForUpdate({
 
   let result = { available: false, latest: null };
   try {
-    const response = await request({ method: 'GET', url: metaUrl });
+    const response = await request({ method: 'GET', url: metaUrl, timeout: REQUEST_TIMEOUT_MS });
     if (response && response.status === 200) {
       const latest = parseVersion(response.responseText);
       if (latest != null) {

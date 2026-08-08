@@ -179,6 +179,16 @@ export function installFakeWindow({ width = 1280, height = 800, localStorage = n
     addEventListener(type, handler) {
       if (type === 'resize') resizeHandlers.push(handler);
     },
+    /**
+     * Real, not a stub — the chip's destroy() has to be able to let go of a
+     * listener installed on something that outlives it, and a missing method
+     * here optional-chains into a no-op that looks exactly like success.
+     */
+    removeEventListener(type, handler) {
+      if (type !== 'resize') return;
+      const at = resizeHandlers.indexOf(handler);
+      if (at !== -1) resizeHandlers.splice(at, 1);
+    },
     alert: message => { alerts.push(message); },
     prompt: (message, initial) => { prompts.push({ message, initial }); return null; },
     confirm: message => { confirms.push(message); return false; },
@@ -190,6 +200,8 @@ export function installFakeWindow({ width = 1280, height = 800, localStorage = n
     prompts,
     confirms,
     wasReloaded: () => reloaded,
+    /** How many resize listeners are currently installed. */
+    resizeListenerCount: () => resizeHandlers.length,
     /** Change the viewport and fire the resize listeners, as a browser would. */
     resize(nextWidth, nextHeight) {
       globalThis.window.innerWidth = nextWidth;
