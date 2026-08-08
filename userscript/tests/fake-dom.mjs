@@ -70,6 +70,18 @@ class FakeNode {
     this.listeners.get(type).push(handler);
   }
 
+  /**
+   * Real, not a stub. Its absence meant every `removeEventListener?.()` in the
+   * source was optional-chained into a no-op here, so a handler that was never
+   * unbound looked identical to one that was — and a chip rehosted into the
+   * menu kept its old listeners with nothing able to notice.
+   */
+  removeEventListener(type, handler) {
+    const handlers = this.listeners.get(type);
+    if (!handlers) return;
+    this.listeners.set(type, handlers.filter(fn => fn !== handler));
+  }
+
   /** Fire every handler registered for `type`. Returns how many ran. */
   dispatch(type, event = {}) {
     const handlers = this.listeners.get(type) ?? [];

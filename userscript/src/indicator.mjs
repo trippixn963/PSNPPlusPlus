@@ -254,6 +254,12 @@ export function createIndicator({
   // on paintClasses itself: a second place that rebuilds className is a second
   // place that can erase this the moment anything else repaints the chip.
   let snapping = false;
+  // The sheen, tracked like every other class input rather than read back out
+  // of `element.className`. Three call sites used to re-derive it with
+  // `.includes('psnppp-pop')` — a substring test against a live DOM string,
+  // which is both a read of state we already own and a match that any future
+  // class merely STARTING with `psnppp-pop` would satisfy.
+  let popping = false;
 
   /**
    * The chip's class list, composed in ONE place.
@@ -263,10 +269,11 @@ export function createIndicator({
    * open dropped `psnppp-open` and faded the chip to .55 underneath its own
    * panel, and opening the panel wiped a running `psnppp-pop`.
    */
-  const paintClasses = (pop = false) => {
+  const paintClasses = (pop = popping) => {
+    popping = pop;
     element.className = [
       `psnppp-tier-${current.tier}`,
-      pop ? 'psnppp-pop' : '',
+      popping ? 'psnppp-pop' : '',
       panelOpen ? 'psnppp-open' : '',
       snapping ? 'psnppp-dock-snap' : '',
       hosted ? 'psnppp-hosted' : ''
@@ -439,6 +446,13 @@ export function createIndicator({
   // Read and cleared by the click handler. A drag that ends over the chip fires
   // a click too, and a chip in the `reload` state would reload the page the
   // instant you finished moving it.
+  //
+  // Cleared again at the START of every gesture, and that is not belt-and-braces
+  // — it is the whole reason this survives being hosted. The flag is set on
+  // pointerup anywhere on the surface, but only the CHIP has a click listener to
+  // consume it. Drag the menu by its title and the click never lands on the
+  // chip, so the flag used to sit there armed and eat the next real click: one
+  // dead press on Sync after every time you moved the menu.
   let suppressClick = false;
 
   /**
@@ -458,6 +472,9 @@ export function createIndicator({
     // Left button / touch / pen only. `button` is undefined on synthetic events
     // in the tests, which is treated as the primary button.
     if ((event.button ?? 0) !== 0) return;
+    // A new press is a clean slate: whatever the last gesture armed, it did not
+    // get consumed, and it must not be spent on this one.
+    suppressClick = false;
     const size = measure();
     // Never placed by hand: derive the current corner from the live rect so the
     // first drag does not teleport the chip to the top-left.
@@ -519,13 +536,13 @@ export function createIndicator({
     const side = sideFor(position?.left ?? 0,
       finiteOr(size?.width, FALLBACK_SIZE.width), viewport().width);
     snapping = true;
-    paintClasses(element.className.includes('psnppp-pop'));
+    paintClasses();
     applyDocked(side, position?.top ?? 0, size);
     persist();
     clearTimeout(snapTimer);
     snapTimer = setTimeout(() => {
       snapping = false;
-      paintClasses(element.className.includes('psnppp-pop'));
+      paintClasses();
     }, DOCK_SNAP_MS);
   }
 
@@ -650,7 +667,7 @@ export function createIndicator({
   /** Lets the panel mark the chip as open so it stops receding underneath it. */
   function setPanelOpen(open) {
     panelOpen = Boolean(open);
-    paintClasses(element.className.includes('psnppp-pop'));
+    paintClasses();
   }
 
   setState('idle');
@@ -696,13 +713,41 @@ export function createIndicator({
         hosted = true;
         surface = newHost;
         paintClasses();
-        if (position != null) place(position);
+        // Re-derive which edge we are actually near, and re-dock onto it.
+        //
+        // `dockSide` started as 'right' because that is the corner the CSS parks
+        // the standalone chip in. PSNP+ parks its menu at top-LEFT, so the
+        // moment the menu becomes the surface that default is simply false — and
+        // the settings panel opens on the side away from `dockSide`, so it was
+        // being flung to the opposite edge of the screen from the menu it
+        // belongs to. Measured from the live rect rather than assumed.
+        //
+        // applyDocked, not place: a `left` saved for a ~90px chip does not put a
+        // ~220px menu flush against anything. Docking recomputes it from the
+        // menu's own width, so it lands on the edge instead of near it.
+        const rect = rectOf();
+        const size = measure();
+        const view = viewport();
+        const side = rect != null
+          ? sideFor(rect.left, size.width, view.width)
+          : dockSide;
+        applyDocked(side, position?.top ?? rect?.top ?? EDGE_INSET_PX, size);
         return true;
       } catch (error) {
         onPositionError(error);
         return false;
       }
     },
+    /**
+     * What actually floats on the page — the menu when hosted, the chip itself
+     * otherwise.
+     *
+     * The settings panel anchors to this rather than to `element`. Hosted, the
+     * chip is one full-width row somewhere inside the menu, so measuring it gave
+     * the panel the row's box and the panel hung off a slice of the menu instead
+     * of off the menu.
+     */
+    getSurface: () => surface,
     /** Where the chip is, or null while it still sits in its default corner. */
     getPosition: () => (position == null ? null : { ...position }),
     /**

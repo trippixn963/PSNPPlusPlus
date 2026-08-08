@@ -353,7 +353,10 @@ export async function openSettings({ chip = null } = {}) {
       };
 
       panel = createSettingsPanel({
-        anchor: chip?.element ?? null,
+        // The surface, not the chip row: hosted, the chip is one row inside
+        // PSNP+'s menu, and anchoring to it hung the panel off that row rather
+        // than off the menu the user actually opened it from.
+        anchor: chip?.getSurface?.() ?? chip?.element ?? null,
         side: chip?.getSide?.() ?? 'right',
         config,
         backups,

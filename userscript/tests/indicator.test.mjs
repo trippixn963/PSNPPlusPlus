@@ -969,16 +969,14 @@ test('rehost moves the drag listeners onto the new host', () => {
   try {
     const chip = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
     const menu = globalThis.document.createElement('div');
-    const bound = [];
-    const unbound = [];
-    menu.addEventListener = (type) => bound.push(type);
-    chip.element.removeEventListener = (type) => unbound.push(type);
-
     chip.rehost(menu);
 
+    // Asserted against the harness's real listener maps, not against spies: the
+    // point is that the chip no longer HOLDS them, which a spy cannot show.
     for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
-      assert.equal(bound.includes(type), true, `${type} moved to the host`);
-      assert.equal(unbound.includes(type), true, `${type} released from the chip`);
+      assert.equal((menu.listeners.get(type) ?? []).length, 1, `${type} moved to the host`);
+      assert.equal((chip.element.listeners.get(type) ?? []).length, 0,
+        `${type} released from the chip`);
     }
   } finally {
     uninstallFakeDocument();
@@ -1003,5 +1001,85 @@ test('an actionable state lifts the host fade, a settled one drops it again', ()
     assert.equal(classes.has('psnppp-attention'), false, 'settled lets it recede');
   } finally {
     uninstallFakeDocument();
+  }
+});
+
+/**
+ * Hosted, the drag listens on the menu but only the chip has a click listener,
+ * so the two halves of the click/drag handshake sit on different elements. The
+ * fake DOM does not bubble, so bubbling is modelled by hand: a press on the chip
+ * also reaches the menu, exactly as it would in a browser.
+ */
+const hostedChip = () => {
+  const { calls, indicator } = build();
+  const menu = globalThis.document.createElement('div');
+  menu.rect = { left: 20, top: 20, width: 220, height: 120, right: 240, bottom: 140 };
+  indicator.rehost(menu);
+  const drag = (from, to, id) => {
+    menu.dispatch('pointerdown', { button: 0, pointerId: id, clientX: from, clientY: from });
+    menu.dispatch('pointermove', { pointerId: id, clientX: to, clientY: to });
+    menu.dispatch('pointerup', { pointerId: id, clientX: to, clientY: to });
+  };
+  const press = () => {
+    menu.dispatch('pointerdown', { button: 0, pointerId: 9, clientX: 50, clientY: 50 });
+    menu.dispatch('pointerup', { pointerId: 9, clientX: 50, clientY: 50 });
+    indicator.element.dispatch('click');
+  };
+  return { calls, indicator, menu, drag, press };
+};
+
+test('dragging the menu by its title does not eat the next click on the chip', () => {
+  // The drag arms suppressClick on pointerup, but only the chip can consume it.
+  // Drag the menu anywhere other than the chip row and the flag used to survive,
+  // spending itself on the next real press: one dead click on Sync every time.
+  installFakeWindow({ innerWidth: 1200, innerHeight: 800 });
+  installFakeDocument();
+  try {
+    const { calls, drag, press } = hostedChip();
+    drag(100, 300, 1);
+    press();
+    assert.equal(calls.sync, 1, 'the click after a drag-by-title still syncs');
+  } finally {
+    uninstallFakeDocument();
+    uninstallFakeWindow();
+  }
+});
+
+test('a drag that ends on the chip still swallows its click', () => {
+  // The other side of the same flag — clearing it too eagerly would mean every
+  // drop on the chip fired the action underneath it.
+  installFakeWindow({ innerWidth: 1200, innerHeight: 800 });
+  installFakeDocument();
+  try {
+    const { calls, menu, indicator } = hostedChip();
+    menu.dispatch('pointerdown', { button: 0, pointerId: 2, clientX: 300, clientY: 300 });
+    menu.dispatch('pointermove', { pointerId: 2, clientX: 500, clientY: 500 });
+    menu.dispatch('pointerup', { pointerId: 2, clientX: 500, clientY: 500 });
+    indicator.element.dispatch('click');
+    assert.equal(calls.sync, 0, 'the drop did not fire the action under it');
+  } finally {
+    uninstallFakeDocument();
+    uninstallFakeWindow();
+  }
+});
+
+test('rehosting re-derives the dock side from where the menu actually is', () => {
+  // dockSide started 'right' because that is the standalone chip's CSS corner.
+  // PSNP+ parks its menu at top-LEFT, and the settings panel opens on the side
+  // away from dockSide — so a stale 'right' threw the panel at the far edge of
+  // the screen, away from the menu it belongs to.
+  installFakeWindow({ innerWidth: 1200, innerHeight: 800 });
+  installFakeDocument();
+  try {
+    const { indicator } = build();
+    assert.equal(indicator.getSide(), 'right', 'the standalone chip starts docked right');
+    const menu = globalThis.document.createElement('div');
+    menu.rect = { left: 20, top: 20, width: 220, height: 120, right: 240, bottom: 140 };
+    indicator.rehost(menu);
+    assert.equal(indicator.getSide(), 'left', 'a menu at x=20 is docked left');
+    assert.equal(indicator.getSurface(), menu, 'and the surface is the menu');
+  } finally {
+    uninstallFakeDocument();
+    uninstallFakeWindow();
   }
 });

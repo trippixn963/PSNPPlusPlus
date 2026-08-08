@@ -15292,10 +15292,12 @@ ${litTiers} {
     let current = STATES.idle;
     let panelOpen = false;
     let snapping = false;
-    const paintClasses = (pop = false) => {
+    let popping = false;
+    const paintClasses = (pop = popping) => {
+      popping = pop;
       element.className = [
         `psnppp-tier-${current.tier}`,
-        pop ? "psnppp-pop" : "",
+        popping ? "psnppp-pop" : "",
         panelOpen ? "psnppp-open" : "",
         snapping ? "psnppp-dock-snap" : "",
         hosted ? "psnppp-hosted" : ""
@@ -15373,6 +15375,7 @@ ${litTiers} {
     let suppressClick = false;
     const onPointerDown = (event) => {
       if ((event.button ?? 0) !== 0) return;
+      suppressClick = false;
       const size = measure();
       const rect = rectOf();
       const start2 = position ?? clampToViewport({ left: rect?.left ?? 0, top: rect?.top ?? 0 }, size, viewport());
@@ -15410,13 +15413,13 @@ ${litTiers} {
         viewport().width
       );
       snapping = true;
-      paintClasses(element.className.includes("psnppp-pop"));
+      paintClasses();
       applyDocked(side, position?.top ?? 0, size);
       persist();
       clearTimeout(snapTimer);
       snapTimer = setTimeout(() => {
         snapping = false;
-        paintClasses(element.className.includes("psnppp-pop"));
+        paintClasses();
       }, DOCK_SNAP_MS);
     }
     const endDrag = (event, { commit = true } = {}) => {
@@ -15488,7 +15491,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
     function setPanelOpen(open) {
       panelOpen = Boolean(open);
-      paintClasses(element.className.includes("psnppp-pop"));
+      paintClasses();
     }
     setState("idle");
     return {
@@ -15523,13 +15526,27 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
           hosted = true;
           surface = newHost;
           paintClasses();
-          if (position != null) place(position);
+          const rect = rectOf();
+          const size = measure();
+          const view = viewport();
+          const side = rect != null ? sideFor(rect.left, size.width, view.width) : dockSide;
+          applyDocked(side, position?.top ?? rect?.top ?? EDGE_INSET_PX, size);
           return true;
         } catch (error) {
           onPositionError(error);
           return false;
         }
       },
+      /**
+       * What actually floats on the page — the menu when hosted, the chip itself
+       * otherwise.
+       *
+       * The settings panel anchors to this rather than to `element`. Hosted, the
+       * chip is one full-width row somewhere inside the menu, so measuring it gave
+       * the panel the row's box and the panel hung off a slice of the menu instead
+       * of off the menu.
+       */
+      getSurface: () => surface,
       /** Where the chip is, or null while it still sits in its default corner. */
       getPosition: () => position == null ? null : { ...position },
       /**
@@ -17079,7 +17096,10 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           resolve();
         };
         panel = createSettingsPanel({
-          anchor: chip?.element ?? null,
+          // The surface, not the chip row: hosted, the chip is one row inside
+          // PSNP+'s menu, and anchoring to it hung the panel off that row rather
+          // than off the menu the user actually opened it from.
+          anchor: chip?.getSurface?.() ?? chip?.element ?? null,
           side: chip?.getSide?.() ?? "right",
           config,
           backups,
