@@ -59,7 +59,14 @@ const STATES = {
   // check re-runs at the top of every cycle, so a click is the way back the
   // moment PSNP++ is updated — and a click that cannot make things worse is the
   // right thing to leave under a chip that has just refused to touch anything.
-  incompatible: { label: 'Sync paused',  tier: 'fault',    action: 'sync',   pops: true }
+  incompatible: { label: 'Sync paused',  tier: 'fault',    action: 'sync',   pops: true },
+  // A localStorage write threw — almost always a full quota (see
+  // storage-guard.mjs). The page is now showing a change that is NOT in storage,
+  // and storage is what the sync cycle reads, so this is the one state that says
+  // the data itself is untrustworthy rather than reporting on data we trust.
+  // `sync` stays the action: a cycle re-reads storage and re-reports, which is
+  // the only useful thing a click can do about a quota this script cannot free.
+  storage:      { label: 'Save failed',  tier: 'fault',    action: 'sync',   pops: true }
 };
 
 const CLICK_HINT = {

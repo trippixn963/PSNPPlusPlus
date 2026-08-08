@@ -15336,7 +15336,14 @@ ${MENU_SELECTOR} .button:focus-visible {
     // check re-runs at the top of every cycle, so a click is the way back the
     // moment PSNP++ is updated — and a click that cannot make things worse is the
     // right thing to leave under a chip that has just refused to touch anything.
-    incompatible: { label: "Sync paused", tier: "fault", action: "sync", pops: true }
+    incompatible: { label: "Sync paused", tier: "fault", action: "sync", pops: true },
+    // A localStorage write threw — almost always a full quota (see
+    // storage-guard.mjs). The page is now showing a change that is NOT in storage,
+    // and storage is what the sync cycle reads, so this is the one state that says
+    // the data itself is untrustworthy rather than reporting on data we trust.
+    // `sync` stays the action: a cycle re-reads storage and re-reports, which is
+    // the only useful thing a click can do about a quota this script cannot free.
+    storage: { label: "Save failed", tier: "fault", action: "sync", pops: true }
   };
   var CLICK_HINT = {
     sync: "click to sync now, right-click for settings.",
@@ -17062,6 +17069,63 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return `${next.title || "A game"} in your lists shuts down ${when}${rest}.`;
   }
 
+  // userscript/src/storage-guard.mjs
+  var guarded = /* @__PURE__ */ new WeakMap();
+  var approximateBytes = (value) => {
+    try {
+      return String(value ?? "").length;
+    } catch {
+      return 0;
+    }
+  };
+  function isQuotaError(error) {
+    if (error == null) return false;
+    const name = typeof error.name === "string" ? error.name : "";
+    const code = error.code;
+    return name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED" || code === 22 || code === 1014;
+  }
+  function describeStorageFailure({ key, error, bytes }) {
+    const where = key ? `"${key}"` : "a value";
+    return isQuotaError(error) ? `Browser storage is full \u2014 could not save ${where} (${bytes} bytes). Clearing site data for psnprofiles.com will free it.` : `Could not save ${where} to browser storage: ${error?.message ?? "unknown error"}.`;
+  }
+  function installStorageGuard(storage, { onFailure = () => {
+  } } = {}) {
+    if (storage == null) return () => {
+    };
+    const already = guarded.get(storage);
+    if (already) return already;
+    const original = {
+      setItem: storage.setItem,
+      removeItem: storage.removeItem
+    };
+    const report = (key, error, bytes) => {
+      try {
+        onFailure({ key, error, bytes });
+      } catch (reportError) {
+        console.error("[psnppp] the storage reporter itself failed:", reportError);
+      }
+    };
+    const guard = (name, computeBytes) => function guardedWrite(key, value) {
+      try {
+        return original[name].call(storage, key, value);
+      } catch (error) {
+        report(key, error, computeBytes(value));
+        throw error;
+      }
+    };
+    const wrappedSet = guard("setItem", approximateBytes);
+    const wrappedRemove = guard("removeItem", () => 0);
+    storage.setItem = wrappedSet;
+    storage.removeItem = wrappedRemove;
+    const uninstall = () => {
+      if (storage.setItem === wrappedSet) storage.setItem = original.setItem;
+      if (storage.removeItem === wrappedRemove) storage.removeItem = original.removeItem;
+      guarded.delete(storage);
+    };
+    guarded.set(storage, uninstall);
+    return uninstall;
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
@@ -17336,6 +17400,8 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     let reloadDetail = "";
     let updateAvailable = false;
     let updateDetail = "";
+    let saveFailed = false;
+    let storageDetail = "";
     return (state, detail = "") => {
       if (state === "reload") {
         awaitingReload = true;
@@ -17344,6 +17410,14 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       if (state === "update") {
         updateAvailable = true;
         updateDetail = detail;
+      }
+      if (state === "storage") {
+        saveFailed = true;
+        storageDetail = detail;
+      }
+      if (saveFailed && state !== "storage") {
+        setState("storage", storageDetail);
+        return;
       }
       if (awaitingReload && (state === "synced" || state === "syncing" || state === "update")) {
         setState("reload", reloadDetail);
@@ -17407,6 +17481,17 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       console.error("[psnppp] could not restore the chip position:", error);
     });
     const paint = createIndicatorPainter(indicator.setState);
+    installStorageGuard(window.localStorage, {
+      onFailure: (failure) => {
+        const message = describeStorageFailure(failure);
+        console.error(`[psnppp] ${message}`, failure.error);
+        try {
+          paint("storage", message);
+        } catch (error) {
+          console.error("[psnppp] could not report the storage failure:", error);
+        }
+      }
+    });
     let running = false;
     let pending = false;
     let timer = null;

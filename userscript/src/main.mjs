@@ -30,6 +30,7 @@ import { checkHealth, describeHealth } from './health.mjs';
 import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-history.mjs';
 import { checkWatch, describeWatch } from './watch.mjs';
 import { findMenuWhenReady } from './menu.mjs';
+import { installStorageGuard, describeStorageFailure } from './storage-guard.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
@@ -607,6 +608,12 @@ export function createIndicatorPainter(setState) {
   let reloadDetail = '';
   let updateAvailable = false;
   let updateDetail = '';
+  // Sticky, and never cleared. A write that failed is not undone by a later one
+  // succeeding: the change the user made in between is gone either way, and a
+  // chip that quietly went green again would be the silent-failure this whole
+  // guard exists to end. It clears on reload, like everything else here.
+  let saveFailed = false;
+  let storageDetail = '';
   return (state, detail = '') => {
     if (state === 'reload') {
       awaitingReload = true;
@@ -615,6 +622,21 @@ export function createIndicatorPainter(setState) {
     if (state === 'update') {
       updateAvailable = true;
       updateDetail = detail;
+    }
+    if (state === 'storage') {
+      saveFailed = true;
+      storageDetail = detail;
+    }
+    // FIRST of the three, and the only one that outranks `reload`.
+    //
+    // A failed write means the page is showing a change that is not in storage,
+    // and storage is what the sync cycle reads. Every other state below is a
+    // report about data we trust; this one says the data is wrong. Reloading on
+    // top of it would DISCARD the unsaved change and replace the warning with a
+    // settled chip, so `reload` must not be able to paint over it.
+    if (saveFailed && state !== 'storage') {
+      setState('storage', storageDetail);
+      return;
     }
     if (awaitingReload && (state === 'synced' || state === 'syncing' || state === 'update')) {
       setState('reload', reloadDetail);
@@ -727,6 +749,28 @@ export async function start() {
   // directly — that is what keeps the reload offer alive across the quiet
   // cycle our own write provokes.
   const paint = createIndicatorPainter(indicator.setState);
+
+  // Watch every localStorage write, PSNP+'s included.
+  //
+  // Installed here, after `paint` exists and before the first sync, so a failure
+  // has somewhere to be reported to. It does not change what happens after a
+  // failed write — it still throws, exactly as it does today — it makes the
+  // failure VISIBLE. Without it, a full quota means PSNP+ keeps its in-memory
+  // copy, the page goes on showing the change, and the next cycle syncs the old
+  // bytes under a settled chip: a green light over lost data.
+  installStorageGuard(window.localStorage, {
+    onFailure: failure => {
+      const message = describeStorageFailure(failure);
+      console.error(`[psnppp] ${message}`, failure.error);
+      // Its own try/catch: this runs inside someone else's throwing write, and
+      // a repaint that failed must not replace their error with ours.
+      try {
+        paint('storage', message);
+      } catch (error) {
+        console.error('[psnppp] could not report the storage failure:', error);
+      }
+    }
+  });
 
   let running = false;
   let pending = false;
