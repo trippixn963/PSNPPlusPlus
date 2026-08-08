@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      1.5.0
+// @version      1.5.1
 // @description  Two-way cross-device sync for PSNP+ game lists
 // @author       Trippixn
 // @match        https://psnprofiles.com/*
@@ -1799,7 +1799,8 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       state = null;
     }
     if (state && typeof state.checkedAt === "number" && now - state.checkedAt < THROTTLE_MS) {
-      return { available: Boolean(state.available), latest: state.latest ?? null };
+      const cached = state.latest ?? null;
+      return { available: cached != null && isNewer(cached, currentVersion), latest: cached };
     }
     let result = { available: false, latest: null };
     try {
@@ -1813,7 +1814,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     } catch {
     }
     try {
-      await saveState({ checkedAt: now, available: result.available, latest: result.latest });
+      await saveState({ checkedAt: now, latest: result.latest });
     } catch {
     }
     return result;
