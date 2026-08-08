@@ -783,7 +783,13 @@ ${litTiers} {
     // — so this is an offer, not an update. The click opens the install page in
     // a NEW tab (see onUpdate below); it deliberately does not navigate the
     // current psnprofiles.com tab away.
-    update: { label: "Update ready", tier: "gold", action: "update", pops: true }
+    update: { label: "Update ready", tier: "gold", action: "update", pops: true },
+    // PSNP+ saves its lists in a shape this build does not understand, so the
+    // sync cycle never runs at all (see compat.mjs). `sync` stays the action: the
+    // check re-runs at the top of every cycle, so a click is the way back the
+    // moment PSNP++ is updated — and a click that cannot make things worse is the
+    // right thing to leave under a chip that has just refused to touch anything.
+    incompatible: { label: "Sync paused", tier: "fault", action: "sync", pops: true }
   };
   var CLICK_HINT = {
     sync: "click to sync now, right-click for settings.",
@@ -1820,14 +1826,116 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return result;
   }
 
+  // userscript/src/compat.mjs
+  var SCRIPT_STATE_KEY = "psnpp-scriptstate";
+  var isIdentity = (value) => typeof value === "string" || typeof value === "number";
+  var isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  function readRaw(storage, key) {
+    try {
+      const raw = storage?.getItem?.(key);
+      return typeof raw === "string" ? raw : null;
+    } catch {
+      return null;
+    }
+  }
+  function readPsnpPlusVersion(storage) {
+    const raw = readRaw(storage, SCRIPT_STATE_KEY);
+    if (raw == null) return null;
+    try {
+      const state = JSON.parse(raw);
+      if (!isPlainObject(state)) return null;
+      const version = state.version;
+      return typeof version === "string" && version !== "" ? version : null;
+    } catch {
+      return null;
+    }
+  }
+  var REASONS = {
+    "list-id": "a list whose id is no longer a plain value",
+    "list-url": "a list whose feed url is no longer plain text",
+    "games-not-array": "a list whose games are no longer stored as a list",
+    "game-not-object": "a game entry that is no longer a record",
+    "game-id": "a game with no usable id",
+    "game-updated-at": "a game carrying a new updatedAt field, which PSNP++ uses for its own bookkeeping",
+    "list-name": "lists that no longer carry a name"
+  };
+  var compatible = (version) => ({ ok: true, code: null, reason: null, version });
+  var incompatible = (code, version) => ({ ok: false, code, reason: REASONS[code], version });
+  var DEFER = Symbol("defer");
+  var REMOTE = Symbol("remote");
+  function checkList(list) {
+    if (list.id == null) return DEFER;
+    const url = list.url;
+    if (url != null && typeof url !== "string") return "list-url";
+    if (isRemoteList(list)) return REMOTE;
+    if (!isIdentity(list.id)) return "list-id";
+    const games = list.games;
+    if (games == null) return null;
+    if (!Array.isArray(games)) return "games-not-array";
+    for (const game of games) {
+      if (!isPlainObject(game)) return "game-not-object";
+      if (!isIdentity(game.id)) return "game-id";
+      if (Object.hasOwn(game, "updatedAt")) return "game-updated-at";
+    }
+    return null;
+  }
+  function checkPsnpPlusCompat(storage) {
+    const version = readPsnpPlusVersion(storage);
+    try {
+      const raw = readRaw(storage, LISTS_KEY);
+      if (raw == null) return compatible(version);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return compatible(version);
+      }
+      if (!Array.isArray(parsed)) return compatible(version);
+      const lists = parsed.filter(isPlainObject);
+      let syncable = 0;
+      let named = 0;
+      for (const list of lists) {
+        const verdict = checkList(list);
+        if (verdict === DEFER || verdict === REMOTE) continue;
+        if (verdict !== null) return incompatible(verdict, version);
+        syncable += 1;
+        if (Object.hasOwn(list, "name")) named += 1;
+      }
+      if (syncable > 0 && named === 0) return incompatible("list-name", version);
+      return compatible(version);
+    } catch (error) {
+      console.error("[psnppp] compatibility check failed:", error);
+      return compatible(version);
+    }
+  }
+  function describeIncompatibility(result) {
+    const version = typeof result?.version === "string" && result.version !== "" ? ` v${result.version}` : "";
+    const reason = typeof result?.reason === "string" && result.reason !== "" ? ` \u2014 ${result.reason}` : "";
+    return `PSNP+${version} has changed how it saves your lists${reason}. PSNP++ has paused syncing: nothing was uploaded and nothing on this device was changed, so your lists are untouched. Syncing resumes once PSNP++ understands the new format.`;
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var CHANGE_DEBOUNCE_MS = 3e3;
+  var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
   var UPDATE_META_URL = "https://trippixn.com/psnppp.meta.js";
   var UPDATE_INSTALL_URL = "https://trippixn.com/psnppp.user.js";
   var UPDATE_STATE_KEY = "psnppp.updateCheck";
   var loadUpdateState = () => GM.getValue(UPDATE_STATE_KEY, null);
   var saveUpdateState = (state) => GM.setValue(UPDATE_STATE_KEY, state);
+  async function recordPsnpPlusVersion(version) {
+    if (typeof version !== "string" || version === "") return;
+    try {
+      const seen = await GM.getValue(PSNP_PLUS_VERSION_KEY, null);
+      if (seen === version) return;
+      await GM.setValue(PSNP_PLUS_VERSION_KEY, version);
+      if (seen != null) {
+        console.info(`[psnppp] PSNP+ changed version: ${seen} -> ${version}`);
+      }
+    } catch (error) {
+      console.error("[psnppp] could not record the PSNP+ version:", error);
+    }
+  }
   function currentScriptVersion() {
     return typeof GM_info !== "undefined" && GM_info?.script?.version || null;
   }
@@ -2058,6 +2166,12 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
         const config = await loadConfig();
         if (!config.key) {
           paint("unconfigured", "Click to set up sync (or right-click for settings)");
+          return;
+        }
+        const compat = checkPsnpPlusCompat(window.localStorage);
+        void recordPsnpPlusVersion(compat.version);
+        if (!compat.ok) {
+          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint));
           return;
         }
         paint("syncing");

@@ -21,10 +21,15 @@ import { createSettingsPanel, describeFailure } from './panel.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
+import { checkPsnpPlusCompat, describeIncompatibility } from './compat.mjs';
 import { emptyDoc } from './doc.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const CHANGE_DEBOUNCE_MS = 3000;
+// Which PSNP+ this device last saw. Recorded so their update is a dated,
+// visible event in the console rather than something inferred afterwards from
+// a sync that started behaving oddly.
+const PSNP_PLUS_VERSION_KEY = 'psnppp.psnpPlusVersion';
 
 // The metadata file is the same tiny file @updateURL points at (see
 // banner.txt / build.mjs) — Tampermonkey already polls it, this just reads it
@@ -37,6 +42,37 @@ const UPDATE_STATE_KEY = 'psnppp.updateCheck';
 
 const loadUpdateState = () => GM.getValue(UPDATE_STATE_KEY, null);
 const saveUpdateState = state => GM.setValue(UPDATE_STATE_KEY, state);
+
+/**
+ * Note in the console when PSNP+ itself has been updated.
+ *
+ * PSNP+ writes its own version into `psnpp-scriptstate` on every page load, so
+ * this is their report, not our guess (see compat.mjs). Recording it is what
+ * makes "PSNP+ updated on the day sync started behaving oddly" a fact rather
+ * than a hunch — and the first thing to check when it does.
+ *
+ * Never rejects and never throws: it is called fire-and-forget from inside
+ * sync(), which must never reject, and a GM storage failure here is worth
+ * exactly nothing next to the sync it would otherwise take down. A `null`
+ * version (PSNP+ has not run here yet, or stopped writing it) is not news and
+ * is not recorded — overwriting a known version with "unknown" would lose the
+ * only evidence this keeps.
+ *
+ * Exported so the behaviour is pinned directly, without a browser.
+ */
+export async function recordPsnpPlusVersion(version) {
+  if (typeof version !== 'string' || version === '') return;
+  try {
+    const seen = await GM.getValue(PSNP_PLUS_VERSION_KEY, null);
+    if (seen === version) return;
+    await GM.setValue(PSNP_PLUS_VERSION_KEY, version);
+    if (seen != null) {
+      console.info(`[psnppp] PSNP+ changed version: ${seen} -> ${version}`);
+    }
+  } catch (error) {
+    console.error('[psnppp] could not record the PSNP+ version:', error);
+  }
+}
 
 /**
  * The version Tampermonkey/Violentmonkey installed this copy as.
@@ -510,6 +546,25 @@ export async function start() {
         paint('unconfigured', 'Click to set up sync (or right-click for settings)');
         return;
       }
+      // Before anything is read for a merge, pushed, or written back: does
+      // PSNP+ still save its lists in a shape this build understands? An
+      // incompatibility FAILS CLOSED — the cycle never starts, so there is no
+      // push and no write to localStorage, and the user's lists sit exactly
+      // where PSNP+ left them. Acting on a shape we do not understand is the
+      // one outcome worse than not syncing at all.
+      //
+      // Placed after the key check because an unconfigured install is not
+      // syncing anyway, and before paint('syncing') so the chip never claims to
+      // be doing work it has already decided not to do. checkPsnpPlusCompat is
+      // specified never to throw; it is not wrapped again here because the
+      // whole body of sync() is already inside the try that owns that promise.
+      const compat = checkPsnpPlusCompat(window.localStorage);
+      void recordPsnpPlusVersion(compat.version);
+      if (!compat.ok) {
+        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint));
+        return;
+      }
+
       paint('syncing');
       const client = createSyncClient({ ...config, request: gmRequest });
       const result = await runSyncCycle({

@@ -237,6 +237,9 @@ test('settled states are unlit and states that need the user are not', () => {
     assert.equal(tierOf('reload'), 'platinum');
     assert.equal(tierOf('offline'), 'fault');
     assert.equal(tierOf('conflict'), 'fault');
+    // A paused sync is a fault the user has to know about, not a settled state
+    // that may recede — PSNP+ changed its format and nothing is syncing.
+    assert.equal(tierOf('incompatible'), 'fault');
   } finally {
     uninstallFakeDocument();
   }

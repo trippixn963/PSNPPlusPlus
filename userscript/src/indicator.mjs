@@ -53,7 +53,13 @@ const STATES = {
   // — so this is an offer, not an update. The click opens the install page in
   // a NEW tab (see onUpdate below); it deliberately does not navigate the
   // current psnprofiles.com tab away.
-  update:       { label: 'Update ready', tier: 'gold',     action: 'update', pops: true }
+  update:       { label: 'Update ready', tier: 'gold',     action: 'update', pops: true },
+  // PSNP+ saves its lists in a shape this build does not understand, so the
+  // sync cycle never runs at all (see compat.mjs). `sync` stays the action: the
+  // check re-runs at the top of every cycle, so a click is the way back the
+  // moment PSNP++ is updated — and a click that cannot make things worse is the
+  // right thing to leave under a chip that has just refused to touch anything.
+  incompatible: { label: 'Sync paused',  tier: 'fault',    action: 'sync',   pops: true }
 };
 
 const CLICK_HINT = {
