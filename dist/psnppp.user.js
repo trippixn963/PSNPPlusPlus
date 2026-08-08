@@ -2338,9 +2338,106 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return null;
   }
 
+  // userscript/src/progress-history.mjs
+  var GAMES_LIST_KEY = "psnpp-gameslist";
+  var PROGRESS_DOCUMENT = "progress";
+  var PROGRESS_DOC_VERSION = 1;
+  var MAX_POINTS_PER_GAME = 50;
+  function emptyProgressDoc() {
+    return { version: PROGRESS_DOC_VERSION, games: {} };
+  }
+  var isPlainObject2 = (value) => value != null && typeof value === "object" && !Array.isArray(value);
+  function readScrapedGames(storage) {
+    try {
+      const raw = storage.getItem(GAMES_LIST_KEY);
+      if (typeof raw !== "string") return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter(isPlainObject2) : [];
+    } catch {
+      return [];
+    }
+  }
+  var trophiesOf = (game) => {
+    const t2 = isPlainObject2(game.trophies) ? game.trophies : {};
+    return {
+      platinum: Number(t2.platinum) || 0,
+      gold: Number(t2.gold) || 0,
+      silver: Number(t2.silver) || 0,
+      bronze: Number(t2.bronze) || 0
+    };
+  };
+  function observationOf(game) {
+    return {
+      progress: Number(game.progress) || 0,
+      trophies: trophiesOf(game),
+      lastActivity: Number(game.lastActivity) || 0
+    };
+  }
+  var sameObservation = (a, b) => a != null && b != null && a.progress === b.progress && a.lastActivity === b.lastActivity && a.trophies.platinum === b.trophies.platinum && a.trophies.gold === b.trophies.gold && a.trophies.silver === b.trophies.silver && a.trophies.bronze === b.trophies.bronze;
+  function recordScrape(doc, games, now) {
+    const base = isPlainObject2(doc?.games) ? doc.games : {};
+    const next = { ...base };
+    let recorded = 0;
+    for (const game of games) {
+      const id = game?.id;
+      if (id == null || id === "") continue;
+      const key = String(id);
+      const observation = observationOf(game);
+      const existing = next[key];
+      const points = Array.isArray(existing?.points) ? existing.points : [];
+      const newest = points.length > 0 ? points[points.length - 1] : null;
+      const title = typeof game.title === "string" && game.title !== "" ? game.title : existing?.title ?? "";
+      if (sameObservation(newest, observation)) {
+        if (title !== existing?.title) next[key] = { ...existing, title };
+        continue;
+      }
+      const appended = [...points, { at: now, ...observation }];
+      next[key] = {
+        title,
+        points: appended.length > MAX_POINTS_PER_GAME ? appended.slice(appended.length - MAX_POINTS_PER_GAME) : appended
+      };
+      recorded += 1;
+    }
+    return { doc: { version: PROGRESS_DOC_VERSION, games: next }, recorded };
+  }
+  function mergeProgress(localDoc, remoteDoc) {
+    const local = isPlainObject2(localDoc?.games) ? localDoc.games : {};
+    const remote = isPlainObject2(remoteDoc?.games) ? remoteDoc.games : {};
+    const games = {};
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(local), ...Object.keys(remote)])) {
+      const mine = local[key];
+      const theirs = remote[key];
+      const byTime = /* @__PURE__ */ new Map();
+      for (const point of [...mine?.points ?? [], ...theirs?.points ?? []]) {
+        if (point == null || typeof point.at !== "number") continue;
+        if (!byTime.has(point.at)) byTime.set(point.at, point);
+      }
+      const points = [...byTime.values()].sort((a, b) => a.at - b.at);
+      games[key] = {
+        title: theirs?.title || mine?.title || "",
+        points: points.length > MAX_POINTS_PER_GAME ? points.slice(points.length - MAX_POINTS_PER_GAME) : points
+      };
+    }
+    return { version: PROGRESS_DOC_VERSION, games };
+  }
+  async function syncProgress({ storage, client, loadBase: loadBase2, saveBase: saveBase2, now = Date.now() }) {
+    const base = await loadBase2() ?? emptyProgressDoc();
+    const remote = await client.getState();
+    const merged = mergeProgress(base, remote.doc);
+    const { doc, recorded } = recordScrape(merged, readScrapedGames(storage), now);
+    if (JSON.stringify(doc) === JSON.stringify(remote.doc)) {
+      await saveBase2(doc);
+      return { status: "synced", recorded: 0, pushed: false };
+    }
+    const result = await client.putState(remote.revision, doc);
+    if (result.ok) await saveBase2(doc);
+    return { status: result.ok ? "synced" : "conflict", recorded, pushed: result.ok };
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
+  var PROGRESS_BASE_KEY = "psnppp.progressBase";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
   var UPDATE_META_URL = "https://trippixn.com/psnppp.meta.js";
@@ -2394,6 +2491,20 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return parsed;
   };
   var saveSettingsBase = async (doc) => GM.setValue(SETTINGS_BASE_KEY, JSON.stringify(doc));
+  var loadProgressBase = async () => {
+    const raw = await GM.getValue(PROGRESS_BASE_KEY, null);
+    if (raw == null) return emptyProgressDoc();
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed == null || typeof parsed.games !== "object" || parsed.games === null || Array.isArray(parsed.games)) {
+        return emptyProgressDoc();
+      }
+      return parsed;
+    } catch {
+      return emptyProgressDoc();
+    }
+  };
+  var saveProgressBase = async (doc) => GM.setValue(PROGRESS_BASE_KEY, JSON.stringify(doc));
   async function confirmAdoptions(adoptions) {
     const names = adoptions.map((a) => `\u2022 ${a.name}`).join("\n");
     return window.confirm(
@@ -2715,6 +2826,9 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           loadBase: loadSettingsBase,
           saveBase: saveSettingsBase,
           now: Date.now()
+        }).catch((error) => {
+          console.error("[psnppp] settings sync failed:", error);
+          return { status: "offline", changed: false };
         });
         if (settings2.changed && !(result.status === "synced" && result.changed)) {
           paint("reload", decorateDetail(
@@ -2722,6 +2836,17 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
             config.endpoint
           ));
         }
+        await syncProgress({
+          storage: window.localStorage,
+          client: createSyncClient({
+            ...config,
+            request: gmRequest,
+            documentKey: PROGRESS_DOCUMENT
+          }),
+          loadBase: loadProgressBase,
+          saveBase: saveProgressBase,
+          now: Date.now()
+        }).catch((error) => console.error("[psnppp] progress archive failed:", error));
       } catch (error) {
         paint("offline", describeFailure(error, "Sync failed"));
       } finally {

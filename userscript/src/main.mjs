@@ -27,9 +27,11 @@ import { checkPsnpPlusCompat, describeIncompatibility } from './compat.mjs';
 import { emptyDoc } from './doc.mjs';
 import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sync.mjs';
 import { checkHealth, describeHealth } from './health.mjs';
+import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-history.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
+const PROGRESS_BASE_KEY = 'psnppp.progressBase';
 const CHANGE_DEBOUNCE_MS = 3000;
 // Which PSNP+ this device last saw. Recorded so their update is a dated,
 // visible event in the console rather than something inferred afterwards from
@@ -154,6 +156,30 @@ export const loadSettingsBase = async () => {
   return parsed;
 };
 const saveSettingsBase = async doc => GM.setValue(SETTINGS_BASE_KEY, JSON.stringify(doc));
+
+/**
+ * The progress archive as of this device's last successful progress sync.
+ *
+ * Falls back to an empty document on anything unreadable, like the other two
+ * bases. Cheaper to be wrong here than there: the merge is a union of immutable
+ * observations, so a lost base costs one redundant push rather than risking a
+ * spurious deletion.
+ */
+const loadProgressBase = async () => {
+  const raw = await GM.getValue(PROGRESS_BASE_KEY, null);
+  if (raw == null) return emptyProgressDoc();
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed == null || typeof parsed.games !== 'object' || parsed.games === null
+        || Array.isArray(parsed.games)) {
+      return emptyProgressDoc();
+    }
+    return parsed;
+  } catch {
+    return emptyProgressDoc();
+  }
+};
+const saveProgressBase = async doc => GM.setValue(PROGRESS_BASE_KEY, JSON.stringify(doc));
 
 async function confirmAdoptions(adoptions) {
   const names = adoptions.map(a => `• ${a.name}`).join('\n');
@@ -798,6 +824,12 @@ export async function start() {
       // the situation the lists path already has — so the answer is the same
       // one: offer a reload and let the user take it. Only offered when the
       // lists cycle did not already ask for one, since that offer covers both.
+      // Guarded HERE, not inside syncSettings, because the reason is about this
+      // call site rather than about settings: both convenience paths run after
+      // the lists chip has already been painted, and neither is allowed to
+      // repaint a good lists sync as "Offline". They reach the network, so they
+      // genuinely can reject — an earlier comment here asserted they could not,
+      // which was simply untrue.
       const settings = await syncSettings({
         storage: window.localStorage,
         client: createSyncClient({
@@ -806,12 +838,35 @@ export async function start() {
         loadBase: loadSettingsBase,
         saveBase: saveSettingsBase,
         now: Date.now()
+      }).catch(error => {
+        console.error('[psnppp] settings sync failed:', error);
+        return { status: 'offline', changed: false };
       });
       if (settings.changed && !(result.status === 'synced' && result.changed)) {
         paint('reload', decorateDetail(
           'PSNP+ settings updated — reload the page to apply them', config.endpoint
         ));
       }
+
+      // GAME-PROGRESS ARCHIVE. Last of the three, and the only one that never
+      // writes to PSNP+ at all — it reads the scrape cache PSNP+ overwrites on
+      // every profile visit and keeps what would otherwise be thrown away.
+      //
+      // Deliberately silent: it changes nothing the user is looking at, so it
+      // has no chip state and no reload offer. There is nothing for them to do
+      // about it, and a message on every page load would be noise. Guarded for
+      // the same reason as the settings call above — it reaches the network,
+      // and an archive that failed to push must never be reported to the user
+      // as a sync that failed.
+      await syncProgress({
+        storage: window.localStorage,
+        client: createSyncClient({
+          ...config, request: gmRequest, documentKey: PROGRESS_DOCUMENT
+        }),
+        loadBase: loadProgressBase,
+        saveBase: saveProgressBase,
+        now: Date.now()
+      }).catch(error => console.error('[psnppp] progress archive failed:', error));
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown

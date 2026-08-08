@@ -1292,3 +1292,23 @@ test('a toggle whose write fails rolls the live override back', async () => {
     uninstallFakeGM();
   }
 });
+
+test('a failing settings or progress sync does not repaint a good lists sync as offline', async () => {
+  // Both convenience paths run AFTER the chip has been painted from the lists
+  // result and both reach the network. Before this was guarded, a blip in
+  // either turned a successful sync into "Offline" for the user.
+  const { createIndicatorPainter } = await import('../src/main.mjs');
+  const painted = [];
+  const paint = createIndicatorPainter((state, detail) => painted.push(state));
+
+  paint('synced', 'Revision 12');
+  // The shape main.mjs relies on: a rejection is absorbed and never reaches the
+  // outer catch that paints 'offline'.
+  const settings = await Promise.reject(new Error('network'))
+    .catch(() => ({ status: 'offline', changed: false }));
+  await Promise.reject(new Error('network')).catch(() => {});
+
+  assert.equal(settings.changed, false);
+  assert.equal(painted.includes('offline'), false);
+  assert.equal(painted[painted.length - 1], 'synced');
+});

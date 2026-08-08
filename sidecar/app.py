@@ -76,6 +76,11 @@ DEFAULT_DOCUMENT = "lists"
 EMPTY_DOCUMENTS: dict[str, dict[str, Any]] = {
     "lists": {"version": DOC_VERSION, "lists": {}},
     "settings": {"version": DOC_VERSION, "settings": {}},
+    # Archived game-progress observations, keyed by game id. Grows slowly — the
+    # client only appends a point when a game actually moved, and caps the
+    # points it keeps per game — but it is the one document expected to keep
+    # growing at all, so it is the first place to look if the store gets large.
+    "progress": {"version": DOC_VERSION, "games": {}},
 }
 
 app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None)

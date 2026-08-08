@@ -75,9 +75,15 @@ def test_explicit_lists_and_absent_parameter_share_one_revision_line(client):
 
 
 def test_the_documents_endpoint_names_the_keys_and_the_default(client):
+    """Pins the allowlist exactly, so a document cannot be added unnoticed.
+
+    Adding a key here is meant to be a deliberate edit in two places: the
+    allowlist and this assertion. A test that merely checked "lists is in
+    there" would let a stray key ship silently.
+    """
     body = client.get(f"{BASE}/documents", headers=AUTH).json()
     assert body["default"] == "lists"
-    assert set(body["documents"]) == {"lists", "settings"}
+    assert set(body["documents"]) == {"lists", "settings", "progress"}
 
 
 # --------------------------------------------------------------------------
