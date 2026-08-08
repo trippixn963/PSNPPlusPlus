@@ -97,7 +97,32 @@ export function shouldAutoConfirm(message, knownTitles) {
   const title = extractRemovedTitle(message);
   if (title == null) return false;
   const titles = typeof knownTitles === 'function' ? knownTitles() : knownTitles;
-  return knows(titles, title);
+  if (knows(titles, title)) return true;
+
+  // Declined a dialog that IS the remove prompt — so the title lookup is what
+  // said no. That is the only branch a user can hit while believing the feature
+  // is on, and without this line the reason is invisible: the dialog simply
+  // appears, exactly as it would if the override had never installed.
+  //
+  // Logs the near misses rather than the whole set, because the interesting
+  // case is a title that differs by trimming, casing or a suffix, and dumping
+  // hundreds of titles would bury it.
+  try {
+    const known = titles instanceof Set ? [...titles] : [];
+    const near = known.filter(t => {
+      const a = t.toLowerCase().trim();
+      const b = title.toLowerCase().trim();
+      return a === b || a.includes(b) || b.includes(a);
+    });
+    console.debug(
+      '[psnppp] not auto-confirming: the dialog names a title that is not in any list.',
+      { dialogTitle: title, knownCount: known.length, nearMatches: near.slice(0, 5) }
+    );
+  } catch {
+    // A console that throws must not turn a declined auto-confirm into a
+    // thrown confirm, which would take PSNP+'s click handler down with it.
+  }
+  return false;
 }
 
 /** A handle for every path that installed nothing. `installed` says so honestly. */

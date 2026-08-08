@@ -389,3 +389,35 @@ test('shouldAutoConfirm needs BOTH the exact shape and a real game title', () =>
 test('REMOVE_PREFIX is the literal PSNP+ writes, so a rewording is a miss not a widening', () => {
   assert.equal(REMOVE_PREFIX, 'Are you sure you want to remove ');
 });
+
+test('declining on an unknown title says so, naming near misses', () => {
+  // The only branch a user can hit while believing the feature is on. Without
+  // this the dialog just appears, indistinguishable from the override never
+  // having installed at all.
+  const logged = [];
+  const original = console.debug;
+  console.debug = (...args) => logged.push(args);
+  try {
+    const known = new Set(['Crysis 2 Remastered', 'Bloodborne']);
+    assert.equal(shouldAutoConfirm('Are you sure you want to remove Crysis 2?', known), false);
+  } finally {
+    console.debug = original;
+  }
+  assert.equal(logged.length, 1);
+  const [message, detail] = logged[0];
+  assert.match(message, /not auto-confirming/);
+  assert.equal(detail.dialogTitle, 'Crysis 2');
+  assert.deepEqual(detail.nearMatches, ['Crysis 2 Remastered'], 'the likely culprit is surfaced');
+});
+
+test('a dialog that is not the remove prompt logs nothing', () => {
+  const logged = [];
+  const original = console.debug;
+  console.debug = (...args) => logged.push(args);
+  try {
+    shouldAutoConfirm('Are you sure you want to clear all PSNP+ data?', new Set(['Bloodborne']));
+  } finally {
+    console.debug = original;
+  }
+  assert.equal(logged.length, 0, 'only the remove prompt is worth explaining');
+});
