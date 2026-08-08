@@ -1,23 +1,18 @@
-"""Tests for the PSNP sync sidecar."""
+"""Tests for the PSNP sync sidecar.
+
+These pin the ORIGINAL single-document API — every request here omits the
+`document` parameter, exactly as the already-installed v1.5.0 userscript does.
+They must keep passing verbatim across the multi-document rewrite; that is the
+whole point of the file.
+
+The `client` fixture lives in conftest.py.
+
+Author: Trippixn
+Server: discord.gg/syria
+"""
 from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
-
-import app as app_module
-
-KEY = "test-secret-key"
-AUTH = {"X-Sync-Key": KEY}
-BASE = "/api/psnppp"
-
-
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("PSNP_SYNC_KEY", KEY)
-    monkeypatch.setenv("PSNP_SYNC_DB", str(tmp_path / "state.db"))
-    # raise_server_exceptions=False so an unhandled exception surfaces as the
-    # HTTP 500 a real client would see, instead of re-raising into the test.
-    return TestClient(app_module.app, raise_server_exceptions=False)
+from conftest import AUTH, BASE, KEY
 
 
 def test_health_needs_no_key(client):
