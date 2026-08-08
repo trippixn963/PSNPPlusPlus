@@ -283,6 +283,28 @@ ${litTiers} {
   100% { opacity: 0; transform: translateX(340%); }
 }
 
+/*
+ * Hosted inside PSNP+'s floating menu.
+ *
+ * The menu is what floats, docks and drags in that mode, so the chip must stop
+ * positioning itself — otherwise it stays pinned to the viewport while its own
+ * container moves out from under it. Everything else about it (plate, rail,
+ * tier colours, sheen) is inherited unchanged, which is the point: it is the
+ * same control, not a second one styled to look like it.
+ *
+ * Sits AFTER the base rule so it wins on order alone: no !important, no
+ * specificity games.
+ */
+#${INDICATOR_ID}.psnppp-hosted {
+  position: static;
+  right: auto;
+  bottom: auto;
+  margin-top: 6px;
+  max-width: none;
+  width: 100%;
+  box-shadow: none;
+}
+
 /* ---- the panel --------------------------------------------------------- */
 
 #${PANEL_ID} {

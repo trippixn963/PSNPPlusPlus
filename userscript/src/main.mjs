@@ -905,7 +905,20 @@ export async function start() {
   // resolves null when the menu is switched off in PSNP+'s settings or PSNP+
   // did not load, and neither is a reason to delay the chip. The chip remains
   // the thing that actually reports state.
-  void attachMenuEntryWhenReady(document, { onClick: () => { void sync(); } });
+  // Move the chip INTO PSNP+'s menu once it exists, so there is one floating
+  // surface on the page instead of two. Best-effort and never awaited: when the
+  // menu is switched off in PSNP+'s settings, or PSNP+ did not load at all, the
+  // chip simply stays where it is — which is the whole reason the standalone
+  // path is kept rather than replaced.
+  void attachMenuEntryWhenReady(document, {}).then(handle => {
+    const menu = handle?.element?.parentElement;
+    if (menu == null || indicator?.element == null) return;
+    handle.element.remove();
+    // rehost, not appendChild: the chip has to hand its dragging over to the
+    // menu as well as its position, or the menu becomes an undraggable box
+    // containing a chip that thinks it is still floating.
+    indicator.rehost(menu);
+  });
 
   watchLists(window.localStorage, () => {
     clearTimeout(timer);

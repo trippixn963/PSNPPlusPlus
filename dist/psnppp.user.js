@@ -14844,6 +14844,28 @@ ${litTiers} {
   100% { opacity: 0; transform: translateX(340%); }
 }
 
+/*
+ * Hosted inside PSNP+'s floating menu.
+ *
+ * The menu is what floats, docks and drags in that mode, so the chip must stop
+ * positioning itself \u2014 otherwise it stays pinned to the viewport while its own
+ * container moves out from under it. Everything else about it (plate, rail,
+ * tier colours, sheen) is inherited unchanged, which is the point: it is the
+ * same control, not a second one styled to look like it.
+ *
+ * Sits AFTER the base rule so it wins on order alone: no !important, no
+ * specificity games.
+ */
+#${INDICATOR_ID}.psnppp-hosted {
+  position: static;
+  right: auto;
+  bottom: auto;
+  margin-top: 6px;
+  max-width: none;
+  width: 100%;
+  box-shadow: none;
+}
+
 /* ---- the panel --------------------------------------------------------- */
 
 #${PANEL_ID} {
@@ -15225,7 +15247,19 @@ ${litTiers} {
     onUpdate,
     loadPosition = readPosition,
     savePosition = writePosition,
-    onPositionError = (error) => console.error("[psnppp] chip position:", error)
+    onPositionError = (error) => console.error("[psnppp] chip position:", error),
+    /**
+     * Mount inside this element instead of standing alone.
+     *
+     * Given PSNP+'s floating menu, the chip becomes a row in it and the MENU is
+     * what drags and docks — one surface on the page rather than two widgets
+     * that both float and both have to be moved out of the way separately.
+     *
+     * Null keeps the standalone chip, which is not a legacy path: it is what runs
+     * when PSNP+ fails to load or its menu is switched off, and losing every sync
+     * control in either case would be worse than having two widgets.
+     */
+    host = null
   } = {}) {
     installStyles(document);
     const element = document.createElement("div");
@@ -15251,29 +15285,32 @@ ${litTiers} {
         `psnppp-tier-${current.tier}`,
         pop ? "psnppp-pop" : "",
         panelOpen ? "psnppp-open" : "",
-        snapping ? "psnppp-dock-snap" : ""
+        snapping ? "psnppp-dock-snap" : "",
+        hosted ? "psnppp-hosted" : ""
       ].filter(Boolean).join(" ");
     };
     const viewport = () => ({
       width: globalThis.window?.innerWidth ?? 0,
       height: globalThis.window?.innerHeight ?? 0
     });
-    const rectOf = () => typeof element.getBoundingClientRect === "function" ? element.getBoundingClientRect() : null;
+    let surface = host ?? element;
+    let hosted = host != null;
+    const rectOf = () => typeof surface.getBoundingClientRect === "function" ? surface.getBoundingClientRect() : null;
     const measure = () => {
       const rect = rectOf();
       return {
-        width: rect?.width || element.offsetWidth || FALLBACK_SIZE.width,
-        height: rect?.height || element.offsetHeight || FALLBACK_SIZE.height
+        width: rect?.width || surface.offsetWidth || FALLBACK_SIZE.width,
+        height: rect?.height || surface.offsetHeight || FALLBACK_SIZE.height
       };
     };
     let position = null;
     let dockSide = "right";
     function apply(next) {
       position = next;
-      element.style.left = `${next.left}px`;
-      element.style.top = `${next.top}px`;
-      element.style.right = "auto";
-      element.style.bottom = "auto";
+      surface.style.left = `${next.left}px`;
+      surface.style.top = `${next.top}px`;
+      surface.style.right = "auto";
+      surface.style.bottom = "auto";
     }
     const place = (candidate, size = measure()) => apply(clampToViewport(candidate, size, viewport()));
     function applyDocked(side, top, size = measure()) {
@@ -15431,6 +15468,37 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       setPanelOpen,
       restorePosition,
       handleResize,
+      /**
+       * Move the chip into `newHost` and make THAT the thing that floats.
+       *
+       * Exists because the host is not known when the chip is built: PSNP+ inserts
+       * its floating menu during its own DOMContentLoaded pass, well after the chip
+       * has to be on screen reporting state. Without this, the chip could be moved
+       * into the menu but `surface` would still point at the chip — so dragging
+       * would try to move an element the stylesheet has just made static, and the
+       * menu would sit there while nothing happened.
+       *
+       * Re-clamps immediately: a position saved for a small chip can put a much
+       * wider menu off the edge of the screen.
+       */
+      rehost(newHost) {
+        if (newHost == null || newHost === surface) return false;
+        try {
+          newHost.appendChild(element);
+          hosted = true;
+          paintClasses();
+          element.style.left = "";
+          element.style.top = "";
+          element.style.right = "";
+          element.style.bottom = "";
+          surface = newHost;
+          if (position != null) place(position);
+          return true;
+        } catch (error) {
+          onPositionError(error);
+          return false;
+        }
+      },
       /** Where the chip is, or null while it still sits in its default corner. */
       getPosition: () => position == null ? null : { ...position },
       /**
@@ -17264,9 +17332,12 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
       }
     }
-    void attachMenuEntryWhenReady(document, { onClick: () => {
-      void sync();
-    } });
+    void attachMenuEntryWhenReady(document, {}).then((handle) => {
+      const menu = handle?.element?.parentElement;
+      if (menu == null || indicator?.element == null) return;
+      handle.element.remove();
+      indicator.rehost(menu);
+    });
     watchLists(window.localStorage, () => {
       clearTimeout(timer);
       timer = setTimeout(() => {

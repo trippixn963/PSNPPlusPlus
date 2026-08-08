@@ -204,7 +204,19 @@ export function createIndicator({
   onSyncNow, onSettings, onReload, onUpdate,
   loadPosition = readPosition,
   savePosition = writePosition,
-  onPositionError = error => console.error('[psnppp] chip position:', error)
+  onPositionError = error => console.error('[psnppp] chip position:', error),
+  /**
+   * Mount inside this element instead of standing alone.
+   *
+   * Given PSNP+'s floating menu, the chip becomes a row in it and the MENU is
+   * what drags and docks — one surface on the page rather than two widgets
+   * that both float and both have to be moved out of the way separately.
+   *
+   * Null keeps the standalone chip, which is not a legacy path: it is what runs
+   * when PSNP+ fails to load or its menu is switched off, and losing every sync
+   * control in either case would be worse than having two widgets.
+   */
+  host = null
 } = {}) {
   installStyles(document);
 
@@ -256,7 +268,8 @@ export function createIndicator({
       `psnppp-tier-${current.tier}`,
       pop ? 'psnppp-pop' : '',
       panelOpen ? 'psnppp-open' : '',
-      snapping ? 'psnppp-dock-snap' : ''
+      snapping ? 'psnppp-dock-snap' : '',
+      hosted ? 'psnppp-hosted' : ''
     ].filter(Boolean).join(' ');
   };
 
@@ -267,15 +280,36 @@ export function createIndicator({
     height: globalThis.window?.innerHeight ?? 0
   });
 
-  const rectOf = () => (typeof element.getBoundingClientRect === 'function'
-    ? element.getBoundingClientRect()
+  /**
+   * What actually moves on screen.
+   *
+   * Hosted, that is PSNP+'s menu; standalone, the chip itself. Every drag, dock,
+   * clamp and measurement below is written against this rather than against
+   * `element`, so the two modes share one implementation instead of a second
+   * copy that drifts. Measuring the chip while moving the menu would clamp the
+   * wrong box and let the menu leave the screen.
+   */
+  let surface = host ?? element;
+
+  /**
+   * Whether the chip is laid out as a row inside a host.
+   *
+   * Tracked state rather than a one-off `classList.add`, because paintClasses
+   * rebuilds `className` from scratch on every state change — an added class
+   * would survive exactly until the next sync, at which point the chip would
+   * silently go back to floating inside its own container.
+   */
+  let hosted = host != null;
+
+  const rectOf = () => (typeof surface.getBoundingClientRect === 'function'
+    ? surface.getBoundingClientRect()
     : null);
 
   const measure = () => {
     const rect = rectOf();
     return {
-      width: rect?.width || element.offsetWidth || FALLBACK_SIZE.width,
-      height: rect?.height || element.offsetHeight || FALLBACK_SIZE.height
+      width: rect?.width || surface.offsetWidth || FALLBACK_SIZE.width,
+      height: rect?.height || surface.offsetHeight || FALLBACK_SIZE.height
     };
   };
 
@@ -288,12 +322,13 @@ export function createIndicator({
 
   function apply(next) {
     position = next;
-    element.style.left = `${next.left}px`;
-    element.style.top = `${next.top}px`;
-    // The stylesheet parks the chip with right/bottom. Both have to be released
-    // or the element is anchored on all four sides and left/top do nothing.
-    element.style.right = 'auto';
-    element.style.bottom = 'auto';
+    surface.style.left = `${next.left}px`;
+    surface.style.top = `${next.top}px`;
+    // The stylesheet parks the chip with right/bottom, and PSNP+ parks its menu
+    // with top/left. Either way both must be released, or the element is
+    // anchored on opposing sides and left/top do nothing.
+    surface.style.right = 'auto';
+    surface.style.bottom = 'auto';
   }
 
   const place = (candidate, size = measure()) =>
@@ -580,6 +615,39 @@ export function createIndicator({
     setPanelOpen,
     restorePosition,
     handleResize,
+    /**
+     * Move the chip into `newHost` and make THAT the thing that floats.
+     *
+     * Exists because the host is not known when the chip is built: PSNP+ inserts
+     * its floating menu during its own DOMContentLoaded pass, well after the chip
+     * has to be on screen reporting state. Without this, the chip could be moved
+     * into the menu but `surface` would still point at the chip — so dragging
+     * would try to move an element the stylesheet has just made static, and the
+     * menu would sit there while nothing happened.
+     *
+     * Re-clamps immediately: a position saved for a small chip can put a much
+     * wider menu off the edge of the screen.
+     */
+    rehost(newHost) {
+      if (newHost == null || newHost === surface) return false;
+      try {
+        newHost.appendChild(element);
+        hosted = true;
+        paintClasses();
+        // Release the positioning the chip had applied to ITSELF, or it keeps
+        // its old fixed coordinates as a static row inside the menu.
+        element.style.left = '';
+        element.style.top = '';
+        element.style.right = '';
+        element.style.bottom = '';
+        surface = newHost;
+        if (position != null) place(position);
+        return true;
+      } catch (error) {
+        onPositionError(error);
+        return false;
+      }
+    },
     /** Where the chip is, or null while it still sits in its default corner. */
     getPosition: () => (position == null ? null : { ...position }),
     /**

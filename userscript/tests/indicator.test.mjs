@@ -897,3 +897,67 @@ test('a position stored as JSON text by an older build still restores, docked to
     uninstallFakeDocument();
   }
 });
+
+test('rehost moves the chip and hands dragging over to the new host', () => {
+  // The bug this pins: with `surface` fixed at construction, the chip could be
+  // moved into PSNP+'s menu while dragging still targeted the chip — which the
+  // stylesheet has just made static, so nothing moved at all.
+  installFakeDocument();
+  try {
+    const chip = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
+    const menu = globalThis.document.createElement('div');
+
+    assert.equal(chip.rehost(menu), true);
+    assert.equal(menu.children.includes(chip.element), true, 'moved into the host');
+    assert.equal(chip.element.className.includes('psnppp-hosted'), true, 'laid out as a row');
+    assert.equal(chip.element.style.left, '', 'released its own positioning');
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('rehost is a no-op for null or the current surface', () => {
+  installFakeDocument();
+  try {
+    const chip = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
+    assert.equal(chip.rehost(null), false);
+    assert.equal(chip.rehost(chip.element), false, 'rehosting onto itself would orphan it');
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('a host that refuses the child is reported, not thrown', () => {
+  installFakeDocument();
+  try {
+    const errors = [];
+    const chip = createIndicator({
+      onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {},
+      onPositionError: e => errors.push(e)
+    });
+    const hostile = { appendChild() { throw new Error('no'); } };
+    assert.doesNotThrow(() => chip.rehost(hostile));
+    assert.equal(chip.rehost(hostile), false);
+    assert.equal(errors.length > 0, true);
+  } finally {
+    uninstallFakeDocument();
+  }
+});
+
+test('the hosted layout survives a state change', () => {
+  // paintClasses rebuilds className from scratch, so a class added once would
+  // vanish on the next sync and the chip would go back to floating inside the
+  // menu it is supposed to be a row of.
+  installFakeDocument();
+  try {
+    const chip = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
+    chip.rehost(globalThis.document.createElement('div'));
+    assert.match(chip.element.className, /psnppp-hosted/);
+    chip.setState('syncing');
+    assert.match(chip.element.className, /psnppp-hosted/, 'still a row after syncing');
+    chip.setState('synced', 'Revision 12');
+    assert.match(chip.element.className, /psnppp-hosted/, 'and after settling');
+  } finally {
+    uninstallFakeDocument();
+  }
+});
