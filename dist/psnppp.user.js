@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      1.7.0
+// @version      1.8.0
 // @description  Two-way cross-device sync for PSNP+ game lists
 // @author       Trippixn
 // @match        https://psnprofiles.com/*
@@ -370,7 +370,21 @@
     const title = extractRemovedTitle(message);
     if (title == null) return false;
     const titles = typeof knownTitles === "function" ? knownTitles() : knownTitles;
-    return knows(titles, title);
+    if (knows(titles, title)) return true;
+    try {
+      const known = titles instanceof Set ? [...titles] : [];
+      const near = known.filter((t2) => {
+        const a = t2.toLowerCase().trim();
+        const b = title.toLowerCase().trim();
+        return a === b || a.includes(b) || b.includes(a);
+      });
+      console.debug(
+        "[psnppp] not auto-confirming: the dialog names a title that is not in any list.",
+        { dialogTitle: title, knownCount: known.length, nearMatches: near.slice(0, 5) }
+      );
+    } catch {
+    }
+    return false;
   }
   var INERT = { installed: false, uninstall() {
   } };
