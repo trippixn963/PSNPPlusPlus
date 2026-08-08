@@ -2270,6 +2270,74 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return { status: result.ok ? "synced" : "conflict", changed };
   }
 
+  // userscript/src/health.mjs
+  var BADGE_CONTAINER = "div.logo";
+  var BADGE_PREFIX = "PSNP+ v";
+  var DISPOSABLE_KEYS = Object.freeze([
+    "psnpp-platprices",
+    "psnpp-sessions",
+    "psnpp-guides",
+    "psnpp-unobtainabletrophies",
+    "psnpp-donators",
+    "psnpp-shutdowns"
+  ]);
+  var STORAGE_WARN_BYTES = 4 * 1024 * 1024;
+  var PSNP_PREFIX = "psnpp-";
+  function checkPsnpPlusPresent(doc) {
+    try {
+      if (doc == null || typeof doc.querySelector !== "function") return "unknown";
+      if (doc.readyState !== "complete") return "unknown";
+      const container = doc.querySelector(BADGE_CONTAINER);
+      if (container == null) return "unknown";
+      const text = typeof container.textContent === "string" ? container.textContent : "";
+      return text.includes(BADGE_PREFIX) ? "running" : "missing";
+    } catch {
+      return "unknown";
+    }
+  }
+  function measurePsnpStorage(storage) {
+    const keys = [];
+    let bytes = 0;
+    try {
+      const total = typeof storage.length === "number" ? storage.length : 0;
+      for (let i = 0; i < total; i += 1) {
+        const key = storage.key(i);
+        if (typeof key !== "string") continue;
+        if (!key.startsWith(PSNP_PREFIX) && !key.startsWith("psnppp.")) continue;
+        const value = storage.getItem(key);
+        const size = key.length + (typeof value === "string" ? value.length : 0);
+        keys.push({ key, bytes: size });
+        bytes += size;
+      }
+    } catch {
+    }
+    keys.sort((a, b) => b.bytes - a.bytes);
+    return { bytes, keys };
+  }
+  function checkHealth({ storage, doc, warnBytes = STORAGE_WARN_BYTES }) {
+    const psnpPlus = checkPsnpPlusPresent(doc);
+    const { bytes, keys } = measurePsnpStorage(storage);
+    return {
+      psnpPlus,
+      bytes,
+      keys,
+      storageTight: bytes >= warnBytes,
+      disposableBytes: keys.filter((entry) => DISPOSABLE_KEYS.includes(entry.key)).reduce((sum, entry) => sum + entry.bytes, 0)
+    };
+  }
+  var mb = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  function describeHealth(health) {
+    if (health == null) return null;
+    if (health.psnpPlus === "missing") {
+      return "PSNP+ did not load on this page. Your lists are safe, but PSNP+ is not running.";
+    }
+    if (health.storageTight) {
+      const freeable = health.disposableBytes > 0 ? ` ${mb(health.disposableBytes)} of that is refetchable cache.` : "";
+      return `PSNP+ storage is at ${mb(health.bytes)}. Near the browser limit, edits can fail to save.${freeable}`;
+    }
+    return null;
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
@@ -2547,10 +2615,13 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     };
   }
   var INSECURE_ENDPOINT_WARNING = "WARNING: this endpoint is not https, so your sync key is sent unencrypted. Right-click the chip and change it on the Sync tab.";
-  function decorateDetail(detail, endpoint) {
-    if (isAllowedEndpoint(endpoint)) return detail;
-    return detail ? `${INSECURE_ENDPOINT_WARNING}
-${detail}` : INSECURE_ENDPOINT_WARNING;
+  function decorateDetail(detail, endpoint, health = null) {
+    const lines = [];
+    if (!isAllowedEndpoint(endpoint)) lines.push(INSECURE_ENDPOINT_WARNING);
+    const healthLine = describeHealth(health);
+    if (healthLine) lines.push(healthLine);
+    if (detail) lines.push(detail);
+    return lines.join("\n");
   }
   async function start() {
     try {
@@ -2609,8 +2680,9 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
         }
         const compat = checkPsnpPlusCompat(window.localStorage);
         void recordPsnpPlusVersion(compat.version);
+        const health = checkHealth({ storage: window.localStorage, doc: document });
         if (!compat.ok) {
-          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint));
+          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint, health));
           return;
         }
         paint("syncing");
@@ -2625,7 +2697,7 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
           now: Date.now()
         });
         const { state, detail } = describeSyncResult(result);
-        paint(state, decorateDetail(detail, config.endpoint));
+        paint(state, decorateDetail(detail, config.endpoint, health));
         if (result.status === "synced" && result.changed) {
           try {
             await recordSync({ revision: result.revision, delta: result.delta });

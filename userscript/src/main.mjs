@@ -26,6 +26,7 @@ import { checkForUpdate } from './update-check.mjs';
 import { checkPsnpPlusCompat, describeIncompatibility } from './compat.mjs';
 import { emptyDoc } from './doc.mjs';
 import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sync.mjs';
+import { checkHealth, describeHealth } from './health.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
@@ -614,9 +615,17 @@ const INSECURE_ENDPOINT_WARNING =
  * setting the user cannot see, and the fix is two clicks away in the menu this
  * message names.
  */
-export function decorateDetail(detail, endpoint) {
-  if (isAllowedEndpoint(endpoint)) return detail;
-  return detail ? `${INSECURE_ENDPOINT_WARNING}\n${detail}` : INSECURE_ENDPOINT_WARNING;
+export function decorateDetail(detail, endpoint, health = null) {
+  // Warnings first, sync state after. Both are prefixes rather than separate
+  // chip states because neither is about the sync: an insecure endpoint and a
+  // full quota are both true whether the last cycle succeeded or failed, and
+  // spending a chip state on them would hide whichever one came second.
+  const lines = [];
+  if (!isAllowedEndpoint(endpoint)) lines.push(INSECURE_ENDPOINT_WARNING);
+  const healthLine = describeHealth(health);
+  if (healthLine) lines.push(healthLine);
+  if (detail) lines.push(detail);
+  return lines.join('\n');
 }
 
 export async function start() {
@@ -729,8 +738,14 @@ export async function start() {
       // whole body of sync() is already inside the try that owns that promise.
       const compat = checkPsnpPlusCompat(window.localStorage);
       void recordPsnpPlusVersion(compat.version);
+
+      // Measured once per cycle and threaded through every paint below, so the
+      // reading the user sees always belongs to the same pass as the sync state
+      // beside it. Cheap: one enumeration of localStorage, no parsing.
+      const health = checkHealth({ storage: window.localStorage, doc: document });
+
       if (!compat.ok) {
-        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint));
+        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint, health));
         return;
       }
 
@@ -742,7 +757,7 @@ export async function start() {
         now: Date.now()
       });
       const { state, detail } = describeSyncResult(result);
-      paint(state, decorateDetail(detail, config.endpoint));
+      paint(state, decorateDetail(detail, config.endpoint, health));
 
       // Only cycles that actually wrote are logged. Syncs fire on every load,
       // every tab focus and every debounced edit, and the overwhelming majority
