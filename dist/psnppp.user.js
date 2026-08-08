@@ -111,14 +111,21 @@
       throw new Error(`Unsupported document version: ${doc?.version}`);
     }
   }
-  function createSyncClient({ endpoint, key, request = gmRequest, timeoutMs = 15e3 }) {
+  function createSyncClient({
+    endpoint,
+    key,
+    request = gmRequest,
+    timeoutMs = 15e3,
+    documentKey = null
+  }) {
     const base = String(endpoint).replace(/\/+$/, "");
     const headers = { "X-Sync-Key": key, "Content-Type": "application/json" };
+    const url = documentKey == null ? `${base}/state` : `${base}/state?document=${encodeURIComponent(documentKey)}`;
     return {
       async getState() {
         const response = await request({
           method: "GET",
-          url: `${base}/state`,
+          url,
           headers,
           timeout: timeoutMs
         });
@@ -132,7 +139,7 @@
       async putState(baseRevision, doc) {
         const response = await request({
           method: "PUT",
-          url: `${base}/state`,
+          url,
           headers,
           timeout: timeoutMs,
           data: JSON.stringify({ baseRevision, doc })
@@ -2092,8 +2099,180 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return `PSNP+${version} has changed how it saves your lists${reason}. PSNP++ has paused syncing: nothing was uploaded and nothing on this device was changed, so your lists are untouched. Syncing resumes once PSNP++ understands the new format.`;
   }
 
+  // userscript/src/settings-bridge.mjs
+  var SETTINGS_KEY = "psnpp-settings";
+  var SCRIPT_STATE_KEY2 = "psnpp-scriptstate";
+  var STORE_KEYS = [SETTINGS_KEY, SCRIPT_STATE_KEY2];
+  var UNSYNCED_SETTINGS_FIELDS = Object.freeze(["platPricesApiKey"]);
+  var SYNCED_SCRIPT_STATE_FIELDS = Object.freeze([
+    "activeChecklist",
+    "guideSimpleMatching",
+    "hideLowOwners",
+    "hideUnobtainableTrophiesInLog",
+    "lowOwnersThreshold",
+    "mySeriesCollapseNoStage",
+    "mySeriesCollapseNumberedStages",
+    "seriesAutoCollapse",
+    "seriesDoNotCollapseNoStage"
+  ]);
+  var UNSYNCED_SETTINGS = new Set(UNSYNCED_SETTINGS_FIELDS);
+  var SYNCED_SCRIPT_STATE = new Set(SYNCED_SCRIPT_STATE_FIELDS);
+  function isSyncedField(store, field) {
+    if (store === SETTINGS_KEY) return !UNSYNCED_SETTINGS.has(field);
+    if (store === SCRIPT_STATE_KEY2) return SYNCED_SCRIPT_STATE.has(field);
+    return false;
+  }
+  function readStore(storage, key) {
+    let raw;
+    try {
+      raw = storage.getItem(key);
+    } catch {
+      return null;
+    }
+    if (raw == null) return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed;
+  }
+  function isUnreadable(storage, key) {
+    let raw;
+    try {
+      raw = storage.getItem(key);
+    } catch {
+      return true;
+    }
+    return raw != null && readStore(storage, key) == null;
+  }
+  function readSettingsValues(storage) {
+    const out = {};
+    for (const store of STORE_KEYS) {
+      const parsed = readStore(storage, store);
+      if (parsed == null) continue;
+      const fields = {};
+      for (const [field, value] of Object.entries(parsed)) {
+        if (isSyncedField(store, field)) fields[field] = value;
+      }
+      out[store] = fields;
+    }
+    return out;
+  }
+  function writeSettingsValues(storage, values) {
+    let wrote = false;
+    for (const store of STORE_KEYS) {
+      const fields = values?.[store];
+      if (fields == null || Object.keys(fields).length === 0) continue;
+      if (isUnreadable(storage, store)) continue;
+      const current = readStore(storage, store) ?? {};
+      const next = { ...current };
+      for (const [field, value] of Object.entries(fields)) {
+        if (isSyncedField(store, field)) next[field] = value;
+      }
+      const serialized = JSON.stringify(next);
+      if (serialized === storage.getItem(store)) continue;
+      storage.setItem(store, serialized);
+      wrote = true;
+    }
+    return wrote;
+  }
+
+  // userscript/src/settings-sync.mjs
+  var SETTINGS_DOCUMENT = "settings";
+  var SETTINGS_DOC_VERSION = 1;
+  function emptySettingsDoc() {
+    return { version: SETTINGS_DOC_VERSION, settings: {} };
+  }
+  var nameOf = (store, field) => `${store}.${field}`;
+  var stable = (value) => {
+    const walk = (obj) => {
+      if (Array.isArray(obj)) return obj.map(walk);
+      if (obj == null || typeof obj !== "object") return obj;
+      const out = {};
+      for (const key of Object.keys(obj).sort()) {
+        if (obj[key] !== void 0) out[key] = walk(obj[key]);
+      }
+      return out;
+    };
+    return JSON.stringify(walk(value));
+  };
+  function stampSettings(base, values, now) {
+    const previous = base?.settings ?? {};
+    const firstSync = Object.keys(previous).length === 0;
+    const settings = {};
+    for (const [store, fields] of Object.entries(values ?? {})) {
+      for (const [field, value] of Object.entries(fields ?? {})) {
+        const key = nameOf(store, field);
+        const before = previous[key];
+        const unchanged = before != null && stable(before.value) === stable(value);
+        settings[key] = {
+          value,
+          updatedAt: firstSync ? 0 : unchanged ? before.updatedAt : now
+        };
+      }
+    }
+    return { version: SETTINGS_DOC_VERSION, settings, firstSync };
+  }
+  function mergeSettings(localDoc, remoteDoc, { preferRemote = false } = {}) {
+    const local = localDoc?.settings ?? {};
+    const remote = remoteDoc?.settings ?? {};
+    const settings = {};
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(local), ...Object.keys(remote)])) {
+      const mine = local[key];
+      const theirs = remote[key];
+      if (mine == null) {
+        settings[key] = theirs;
+        continue;
+      }
+      if (theirs == null) {
+        settings[key] = mine;
+        continue;
+      }
+      if (theirs.updatedAt > mine.updatedAt) {
+        settings[key] = theirs;
+        continue;
+      }
+      if (theirs.updatedAt < mine.updatedAt) {
+        settings[key] = mine;
+        continue;
+      }
+      if (preferRemote) {
+        settings[key] = theirs;
+        continue;
+      }
+      settings[key] = stable(theirs.value) <= stable(mine.value) ? theirs : mine;
+    }
+    return { version: SETTINGS_DOC_VERSION, settings };
+  }
+  function toStoreValues(doc) {
+    const values = {};
+    for (const [key, entry] of Object.entries(doc?.settings ?? {})) {
+      if (entry == null || !Object.hasOwn(entry, "value")) continue;
+      const cut = key.indexOf(".");
+      if (cut <= 0) continue;
+      const store = key.slice(0, cut);
+      const field = key.slice(cut + 1);
+      (values[store] ??= {})[field] = entry.value;
+    }
+    return values;
+  }
+  async function syncSettings({ storage, client, loadBase: loadBase2, saveBase: saveBase2, now = Date.now() }) {
+    const base = await loadBase2() ?? emptySettingsDoc();
+    const remote = await client.getState();
+    const stamped = stampSettings(base, readSettingsValues(storage), now);
+    const merged = mergeSettings(stamped, remote.doc, { preferRemote: stamped.firstSync });
+    const changed = writeSettingsValues(storage, toStoreValues(merged));
+    const result = await client.putState(remote.revision, merged);
+    if (result.ok) await saveBase2(merged);
+    return { status: result.ok ? "synced" : "conflict", changed };
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
+  var SETTINGS_BASE_KEY = "psnppp.settingsBase";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
   var UPDATE_META_URL = "https://trippixn.com/psnppp.meta.js";
@@ -2132,6 +2311,21 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return parsed;
   };
   var saveBase = async (doc) => GM.setValue(BASE_KEY, JSON.stringify(doc));
+  var loadSettingsBase = async () => {
+    const raw = await GM.getValue(SETTINGS_BASE_KEY, null);
+    if (raw == null) return emptySettingsDoc();
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return emptySettingsDoc();
+    }
+    if (parsed == null || typeof parsed.settings !== "object" || parsed.settings === null || Array.isArray(parsed.settings)) {
+      return emptySettingsDoc();
+    }
+    return parsed;
+  };
+  var saveSettingsBase = async (doc) => GM.setValue(SETTINGS_BASE_KEY, JSON.stringify(doc));
   async function confirmAdoptions(adoptions) {
     const names = adoptions.map((a) => `\u2022 ${a.name}`).join("\n");
     return window.confirm(
@@ -2438,6 +2632,23 @@ ${detail}` : INSECURE_ENDPOINT_WARNING;
           } catch (error) {
             console.error("[psnppp] could not record sync history:", error);
           }
+        }
+        const settings2 = await syncSettings({
+          storage: window.localStorage,
+          client: createSyncClient({
+            ...config,
+            request: gmRequest,
+            documentKey: SETTINGS_DOCUMENT
+          }),
+          loadBase: loadSettingsBase,
+          saveBase: saveSettingsBase,
+          now: Date.now()
+        });
+        if (settings2.changed && !(result.status === "synced" && result.changed)) {
+          paint("reload", decorateDetail(
+            "PSNP+ settings updated \u2014 reload the page to apply them",
+            config.endpoint
+          ));
         }
       } catch (error) {
         paint("offline", describeFailure(error, "Sync failed"));

@@ -25,8 +25,10 @@ import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
 import { checkPsnpPlusCompat, describeIncompatibility } from './compat.mjs';
 import { emptyDoc } from './doc.mjs';
+import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sync.mjs';
 
 const BASE_KEY = 'psnppp.base';
+const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
 const CHANGE_DEBOUNCE_MS = 3000;
 // Which PSNP+ this device last saw. Recorded so their update is a dated,
 // visible event in the console rather than something inferred afterwards from
@@ -119,6 +121,38 @@ export const loadBase = async () => {
   return parsed;
 };
 const saveBase = async doc => GM.setValue(BASE_KEY, JSON.stringify(doc));
+
+/**
+ * The settings document as of this device's last successful settings sync.
+ *
+ * Kept under its OWN GM key, never folded into `psnppp.base`. The two documents
+ * are merged by different rules against different servers' documents, and a
+ * single blob holding both would mean one path's write could strand or corrupt
+ * the other's base — the exact coupling this feature is built to avoid.
+ *
+ * Falls back to an empty document for anything unreadable, for the same reason
+ * loadBase does: a base that parses but has no `settings` object would be
+ * iterated by stampSettings on every cycle forever. The cost of the fallback is
+ * one cycle that cannot tell a local edit from a fresh device, and for settings
+ * that cost is a field stamped `now` that may win a merge it would otherwise
+ * have lost — recoverable by changing the setting again, unlike a lost list.
+ */
+export const loadSettingsBase = async () => {
+  const raw = await GM.getValue(SETTINGS_BASE_KEY, null);
+  if (raw == null) return emptySettingsDoc();
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return emptySettingsDoc();
+  }
+  if (parsed == null || typeof parsed.settings !== 'object' || parsed.settings === null
+      || Array.isArray(parsed.settings)) {
+    return emptySettingsDoc();
+  }
+  return parsed;
+};
+const saveSettingsBase = async doc => GM.setValue(SETTINGS_BASE_KEY, JSON.stringify(doc));
 
 async function confirmAdoptions(adoptions) {
   const names = adoptions.map(a => `• ${a.name}`).join('\n');
@@ -725,6 +759,43 @@ export async function start() {
         } catch (error) {
           console.error('[psnppp] could not record sync history:', error);
         }
+      }
+
+      // PSNP+'s PREFERENCES, on a path of their own. Last, and after the chip
+      // has already been painted from the lists result, so the product is
+      // finished before the convenience starts. `syncSettings` is specified
+      // never to throw or reject (the same contract checkForUpdate has), which
+      // is what makes it safe to sit inside this try without a catch of its
+      // own: there is no failure of it that can reach the handler below and
+      // repaint a good lists sync as "Offline".
+      //
+      // Its own client and its own base key. The only thing the two paths share
+      // is the transport module and the credentials.
+      //
+      // TIMING, and why a late write is harmless: PSNP+ reads both preference
+      // objects at `window.load` to draw its controls, and this write lands
+      // after a network round trip, so it will usually be later than that.
+      // Nothing is lost by it. PSNP+'s storages re-read localStorage on EVERY
+      // get and set (SettingsStorage._load / ScriptStateStorage._load), so a
+      // preference it reads later in the session picks the new value up, and a
+      // preference it writes is a read-modify-write over our bytes rather than
+      // over a stale copy. What stays stale is the already-drawn UI — exactly
+      // the situation the lists path already has — so the answer is the same
+      // one: offer a reload and let the user take it. Only offered when the
+      // lists cycle did not already ask for one, since that offer covers both.
+      const settings = await syncSettings({
+        storage: window.localStorage,
+        client: createSyncClient({
+          ...config, request: gmRequest, documentKey: SETTINGS_DOCUMENT
+        }),
+        loadBase: loadSettingsBase,
+        saveBase: saveSettingsBase,
+        now: Date.now()
+      });
+      if (settings.changed && !(result.status === 'synced' && result.changed)) {
+        paint('reload', decorateDetail(
+          'PSNP+ settings updated — reload the page to apply them', config.endpoint
+        ));
       }
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;

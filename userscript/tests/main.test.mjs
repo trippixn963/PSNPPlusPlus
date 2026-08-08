@@ -6,7 +6,8 @@ import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
 import { loadConfig, saveConfig } from '../src/config.mjs';
 import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta,
   createIndicatorPainter, decorateDetail, currentScriptVersion, confirmTarget,
-  applyAutoConfirm } from '../src/main.mjs';
+  applyAutoConfirm, loadSettingsBase } from '../src/main.mjs';
+import { emptySettingsDoc, stampSettings } from '../src/settings-sync.mjs';
 import { emptyDoc, toDoc } from '../src/doc.mjs';
 import { stampChanges } from '../src/merger.mjs';
 import { describeFailure, createSettingsPanel } from '../src/panel.mjs';
@@ -630,6 +631,48 @@ test('a well-shaped base is returned untouched', async () => {
     const doc = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist')]), 500);
     store.set('psnppp.base', JSON.stringify(doc));
     assert.deepEqual(await loadBase(), doc);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+// --- the settings base, on its own key --------------------------------------
+//
+// Same failure mode as the lists base, on a different document: stampSettings
+// iterates `base.settings`, so a base that parses but has no settings object
+// would throw out of the settings path on every cycle. And the two bases must
+// live on separate GM keys — one path's write must never be able to strand or
+// corrupt the other's record of what it last settled.
+
+test('a settings base with no settings object falls back to an empty document', async () => {
+  const store = installFakeGM();
+  try {
+    for (const raw of ['{}', '{"version":1}', 'null', '[]', '"nope"', '{"settings":null}',
+      '{"settings":[]}', 'not json']) {
+      store.set('psnppp.settingsBase', raw);
+      const base = await loadSettingsBase();
+      assert.deepEqual(base, emptySettingsDoc(), `${raw} must fall back`);
+      assert.doesNotThrow(() => stampSettings(base, {}, 1000));
+    }
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the settings base and the lists base never share a key', async () => {
+  const store = installFakeGM();
+  try {
+    const lists = stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist')]), 500);
+    store.set('psnppp.base', JSON.stringify(lists));
+    // Nothing has ever written the settings base; the lists base must not be
+    // mistaken for one, and reading it must not disturb the lists base.
+    assert.deepEqual(await loadSettingsBase(), emptySettingsDoc());
+    assert.deepEqual(await loadBase(), lists);
+
+    const settings = { version: 1, settings: { 'psnpp-settings': { hideRank: { value: true, updatedAt: 5 } } } };
+    store.set('psnppp.settingsBase', JSON.stringify(settings));
+    assert.deepEqual(await loadSettingsBase(), settings);
+    assert.deepEqual(await loadBase(), lists, 'the lists base moved');
   } finally {
     uninstallFakeGM();
   }

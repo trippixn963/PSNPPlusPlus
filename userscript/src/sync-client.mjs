@@ -42,14 +42,33 @@ function assertDocVersion(doc) {
   }
 }
 
-export function createSyncClient({ endpoint, key, request = gmRequest, timeoutMs = 15000 }) {
+/**
+ * A client for one sidecar document.
+ *
+ * `documentKey` selects which document this client speaks for. Omitting it
+ * builds the URL exactly as this client always has — no query string at all —
+ * because the sidecar reads an absent `document` as `lists`, and the lists path
+ * must keep sending byte-identical requests. A named key adds
+ * `?document=<key>`, which is the only difference between the two clients.
+ *
+ * The document is fixed per client rather than passed per call on purpose: a
+ * caller that could name the document on each request could pull `lists` and
+ * push it back over `settings`, which is precisely the mix-up the sidecar's
+ * closed allowlist and this project's separate paths exist to make impossible.
+ */
+export function createSyncClient({
+  endpoint, key, request = gmRequest, timeoutMs = 15000, documentKey = null
+}) {
   const base = String(endpoint).replace(/\/+$/, '');
   const headers = { 'X-Sync-Key': key, 'Content-Type': 'application/json' };
+  const url = documentKey == null
+    ? `${base}/state`
+    : `${base}/state?document=${encodeURIComponent(documentKey)}`;
 
   return {
     async getState() {
       const response = await request({
-        method: 'GET', url: `${base}/state`, headers, timeout: timeoutMs
+        method: 'GET', url, headers, timeout: timeoutMs
       });
       if (response.status !== 200) {
         throw new Error(`Sync server returned ${response.status}`);
@@ -61,7 +80,7 @@ export function createSyncClient({ endpoint, key, request = gmRequest, timeoutMs
 
     async putState(baseRevision, doc) {
       const response = await request({
-        method: 'PUT', url: `${base}/state`, headers, timeout: timeoutMs,
+        method: 'PUT', url, headers, timeout: timeoutMs,
         data: JSON.stringify({ baseRevision, doc })
       });
       if (response.status === 409) {
