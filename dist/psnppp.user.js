@@ -23,7 +23,7 @@
 
 
 /* ====================================================================
-   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 7 local patch(es): menu-hover-in-css, menu-no-content-toggle, menu-refresh-visible, rename-floating-menu, skip-remove-confirm, theme-floating-menu, theme-psnp-plus-accent
+   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 2 local patch(es): skip-remove-confirm, theme-psnp-plus-accent
    ==================================================================== */
 
 /******/ (() => { // webpackBootstrap
@@ -5251,6 +5251,12 @@ class FloatingMenu extends _util_J__WEBPACK_IMPORTED_MODULE_0__.JC {
             'top: 20px;',
             'left: 20px;',
             'z-index: 2147483647;',
+            'background-color: #292b2d;',
+            'padding: 5px;',
+            'border: 1px solid #646464;',
+            'opacity: 0.2;',
+            'color: white;',
+            'border-radius: 5px;'
         ].join(' ');
         this._content = content;
         this._onShow = onShow;
@@ -5260,13 +5266,15 @@ class FloatingMenu extends _util_J__WEBPACK_IMPORTED_MODULE_0__.JC {
     _build() {
         this
             .setAttribute('style', this._baseStyle)
-            .mouseenter(() => {
+            .mouseenter((_, el) => {
+            el.setCss('opacity', '1');
             this._onShow();
         })
-            .mouseleave(() => {
+            .mouseleave((_, el) => {
+            el.setCss('opacity', '0.2');
             this._onHide();
         })
-            .append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('div').append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('b').setText('PSNP++ Menu')));
+            .append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('div').append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('b').setText('PSNP+ Menu')));
     }
     insert() {
         if (new _features_settings_SettingsStorage__WEBPACK_IMPORTED_MODULE_1__.SettingsStorage().get('hideFloatingMenus')) {
@@ -5904,13 +5912,13 @@ class Profile {
         });
         menuWrapper.append(updateProfileButton);
         const refreshText = _util_J__WEBPACK_IMPORTED_MODULE_0__.J.q('div.sidebar > span.floatr > small').getText().replace(/\s\s+/g, ' ').split(' • ');
-        const refreshContainer = _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('span');
+        const refreshContainer = _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('span').hide();
         if (!refreshText.some(t => t == null)) {
             menuWrapper.append(refreshContainer);
             refreshContainer.append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('br'), _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('small').setText(refreshText[0]).setAttribute('style', 'font-size: 10px;'));
             refreshContainer.append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('br'), _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('small').setText(refreshText[1]).setAttribute('style', 'font-size: 10px;'));
         }
-        const floatingMenu = new _ui_FloatingMenu__WEBPACK_IMPORTED_MODULE_1__.FloatingMenu(menuWrapper);
+        const floatingMenu = new _ui_FloatingMenu__WEBPACK_IMPORTED_MODULE_1__.FloatingMenu(menuWrapper, () => refreshContainer.show(), () => refreshContainer.hide());
         floatingMenu.insert();
     }
     _appendNavigation() {
@@ -14642,50 +14650,6 @@ else {
     };
   }
 
-  // userscript/src/menu.mjs
-  var MENU_SELECTOR = ".psnpp-floating-menu";
-  var WAIT_MS = 8e3;
-  function findMenu(doc) {
-    try {
-      return doc?.querySelector?.(MENU_SELECTOR) ?? null;
-    } catch (error) {
-      console.error("[psnppp] could not look for the menu:", error);
-      return null;
-    }
-  }
-  function findMenuWhenReady(doc, { waitMs = WAIT_MS } = {}) {
-    return new Promise((resolve) => {
-      try {
-        const immediate = findMenu(doc);
-        if (immediate != null) {
-          resolve(immediate);
-          return;
-        }
-        if (typeof MutationObserver !== "function" || doc?.body == null) {
-          resolve(null);
-          return;
-        }
-        let settled = false;
-        const finish = (menu) => {
-          if (settled) return;
-          settled = true;
-          observer.disconnect();
-          clearTimeout(timer);
-          resolve(menu);
-        };
-        const observer = new MutationObserver(() => {
-          const menu = findMenu(doc);
-          if (menu != null) finish(menu);
-        });
-        observer.observe(doc.body, { childList: true, subtree: true });
-        const timer = setTimeout(() => finish(null), waitMs);
-      } catch (error) {
-        console.error("[psnppp] could not watch for the menu:", error);
-        resolve(null);
-      }
-    });
-  }
-
   // userscript/src/theme.mjs
   var TOKENS = {
     plate: "#1b1d1f",
@@ -14877,181 +14841,6 @@ ${litTiers} {
   100% { opacity: 0; transform: translateX(340%); }
 }
 
-/*
- * Hosted inside PSNP+'s floating menu.
- *
- * The menu is what floats, docks and drags in that mode, so the chip must stop
- * positioning itself \u2014 otherwise it stays pinned to the viewport while its own
- * container moves out from under it. Everything else about it (plate, rail,
- * tier colours, sheen) is inherited unchanged, which is the point: it is the
- * same control, not a second one styled to look like it.
- *
- * Sits AFTER the base rule so it wins on order alone: no !important, no
- * specificity games.
- */
-#${INDICATOR_ID}.psnppp-hosted {
-  position: static;
-  right: auto;
-  bottom: auto;
-  margin-top: 6px;
-  max-width: none;
-  width: 100%;
-  box-shadow: none;
-  /* The host fades; we must not fade AGAIN inside it. Opacity multiplies down
-     the tree, so .55 within their .2 rendered at .11. */
-  opacity: 1;
-}
-
-/* ---- PSNP+'s floating menu, reskinned ----------------------------------- */
-
-/*
- * The menu is the surface now \u2014 the chip is a row inside it \u2014 so it has to read
- * as one object with the chip and the panel rather than as a grey box one of
- * them happens to live in.
- *
- * Owned here rather than in the patch that used to rewrite PSNP+'s inline
- * style attribute. Two patches clear the way: theme-floating-menu strips the
- * visual half of that attribute, and menu-hover-in-css removes the handlers
- * that wrote opacity inline. What is left below is ordinary CSS, in the same
- * tokens as everything else, with no !important except where third-party
- * inline styles genuinely have to be outranked (marked, each time).
- */
-${MENU_SELECTOR} {
-  padding: 9px 10px 10px;
-  border: 1px solid ${t.hairline};
-  border-radius: 3px;
-  background: ${t.plate};
-  box-shadow: ${PLATE_SHADOW};
-  color: ${t.data};
-  font-family: ${TYPE.body};
-  font-size: 12px;
-  line-height: 1.45;
-  min-width: 148px;
-  /* The whole menu drags, so the whole menu must not be selectable: a drag
-     across the title used to paint it blue and leave a selection behind. */
-  user-select: none;
-  cursor: grab;
-  opacity: .55;
-  transition: opacity .18s ease, border-color .18s ease;
-}
-
-${MENU_SELECTOR}:hover {
-  opacity: 1;
-  border-color: ${t.edge};
-}
-
-/* Raised by indicator.mjs for exactly the states that ask the user to act, and
-   dropped again when the chip settles. Without it an update offer sat at the
-   resting fade and went unread. */
-${MENU_SELECTOR}.psnppp-attention {
-  opacity: 1;
-  border-color: ${t.bronzeDim};
-}
-
-/* Held down: the cursor is the only feedback that the grab took. */
-${MENU_SELECTOR}:active {
-  cursor: grabbing;
-}
-
-/* The title. PSNP+ emits a bare <b> inside a wrapper div. */
-${MENU_SELECTOR} > div:first-child > b {
-  display: block;
-  margin-bottom: 8px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid ${t.hairline};
-  color: ${t.engrave};
-  font-family: ${TYPE.display};
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-
-/*
- * PSNP+ separates its buttons with <br> and lays them out inline. Stacking them
- * as blocks and dropping the breaks gives one rhythm instead of two competing
- * ones \u2014 and means the spacing is a margin that can be reasoned about rather
- * than the height of a line box.
- */
-${MENU_SELECTOR} br {
-  display: none;
-}
-
-${MENU_SELECTOR} .button {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  /* Their own margin-top: 5px is set INLINE on each button, so this is one of
-     the two places that has to outrank an inline style. */
-  margin: 0 0 5px !important;
-  padding: 6px 9px;
-  border: 1px solid ${t.hairline};
-  border-radius: 2px;
-  background: ${t.control};
-  color: ${t.data};
-  font-family: ${TYPE.body};
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1.3;
-  text-align: left;
-  text-decoration: none;
-  text-shadow: none;
-  cursor: pointer;
-  transition: background .14s ease, border-color .14s ease, color .14s ease;
-}
-
-/* .button.grey is PSNP+'s own rule (background: #646464) and it is the class
-   every one of these buttons carries, so it has to be answered directly. */
-${MENU_SELECTOR} .button.grey {
-  background: ${t.control};
-}
-
-${MENU_SELECTOR} .button:last-of-type {
-  margin-bottom: 0 !important;
-}
-
-${MENU_SELECTOR} .button:hover,
-${MENU_SELECTOR} .button.grey:hover {
-  border-color: ${t.bronzeDim};
-  background: ${t.sunken};
-  color: ${t.bright};
-}
-
-${MENU_SELECTOR} .button:focus-visible {
-  outline: 2px solid ${t.platinum};
-  outline-offset: 1px;
-}
-
-/*
- * PSNP+'s search-example chips, on the guide search page.
- *
- * They are CLICKABLE \u2014 clicking one fills the search box with that query \u2014 but
- * PSNP+ styles them background: lightgrey with no colour and no hover, so
- * they read as inert sample text. The affordance was missing, not the styling.
- *
- * code.psnpp-code (0,1,1) rather than .psnpp-code (0,1,0) on purpose: PSNP+
- * injects its stylesheet when the page runs, which is AFTER ours, so at equal
- * specificity theirs would win on order. One extra element in the selector wins
- * it outright without an !important and without patching their sheet. All five
- * uses are on a <code> element, so nothing is missed by requiring it.
- */
-code.psnpp-code {
-  display: inline-block;
-  padding: 1px 5px;
-  border: 1px solid ${t.hairline};
-  border-radius: 2px;
-  background: ${t.sunken};
-  color: ${t.data};
-  font-family: ${TYPE.data};
-  font-size: 11.5px;
-  cursor: pointer;
-  transition: border-color .14s ease, color .14s ease;
-}
-
-code.psnpp-code:hover {
-  border-color: ${t.bronzeDim};
-  color: ${t.gold};
-}
 
 /* ---- the panel --------------------------------------------------------- */
 
@@ -15384,7 +15173,6 @@ code.psnpp-code:hover {
   var POSITION_KEY = "psnppp.chipPosition";
   var EDGE_MARGIN = 8;
   var DRAG_THRESHOLD_PX = 4;
-  var ATTENTION_LIFT_MS = 12e3;
   var RESIZE_SETTLE_MS = 120;
   var FALLBACK_SIZE = CHIP_FALLBACK_SIZE;
   var finiteOr = (value, fallback) => Number.isFinite(value) ? value : fallback;
@@ -15443,19 +15231,7 @@ code.psnpp-code:hover {
     onUpdate,
     loadPosition = readPosition,
     savePosition = writePosition,
-    onPositionError = (error) => console.error("[psnppp] chip position:", error),
-    /**
-     * Mount inside this element instead of standing alone.
-     *
-     * Given PSNP+'s floating menu, the chip becomes a row in it and the MENU is
-     * what drags and docks — one surface on the page rather than two widgets
-     * that both float and both have to be moved out of the way separately.
-     *
-     * Null keeps the standalone chip, which is not a legacy path: it is what runs
-     * when PSNP+ fails to load or its menu is switched off, and losing every sync
-     * control in either case would be worse than having two widgets.
-     */
-    host = null
+    onPositionError = (error) => console.error("[psnppp] chip position:", error)
   } = {}) {
     installStyles(document);
     const element = document.createElement("div");
@@ -15483,44 +15259,29 @@ code.psnpp-code:hover {
         `psnppp-tier-${current.tier}`,
         popping ? "psnppp-pop" : "",
         panelOpen ? "psnppp-open" : "",
-        snapping ? "psnppp-dock-snap" : "",
-        hosted ? "psnppp-hosted" : ""
+        snapping ? "psnppp-dock-snap" : ""
       ].filter(Boolean).join(" ");
-      if (hosted) liftHost(current.pops || panelOpen);
     };
-    let attentionTimer = null;
-    function liftHost(lift) {
-      clearTimeout(attentionTimer);
-      attentionTimer = null;
-      surface.classList?.[lift ? "add" : "remove"]("psnppp-attention");
-      if (!lift || panelOpen) return;
-      attentionTimer = setTimeout(() => {
-        attentionTimer = null;
-        surface.classList?.remove("psnppp-attention");
-      }, ATTENTION_LIFT_MS);
-    }
     const viewport = () => ({
       width: globalThis.window?.innerWidth ?? 0,
       height: globalThis.window?.innerHeight ?? 0
     });
-    let surface = host ?? element;
-    let hosted = host != null;
-    const rectOf = () => typeof surface.getBoundingClientRect === "function" ? surface.getBoundingClientRect() : null;
+    const rectOf = () => typeof element.getBoundingClientRect === "function" ? element.getBoundingClientRect() : null;
     const measure = () => {
       const rect = rectOf();
       return {
-        width: rect?.width || surface.offsetWidth || FALLBACK_SIZE.width,
-        height: rect?.height || surface.offsetHeight || FALLBACK_SIZE.height
+        width: rect?.width || element.offsetWidth || FALLBACK_SIZE.width,
+        height: rect?.height || element.offsetHeight || FALLBACK_SIZE.height
       };
     };
     let position = null;
     let dockSide = "right";
     function apply(next) {
       position = next;
-      surface.style.left = `${next.left}px`;
-      surface.style.top = `${next.top}px`;
-      surface.style.right = "auto";
-      surface.style.bottom = "auto";
+      element.style.left = `${next.left}px`;
+      element.style.top = `${next.top}px`;
+      element.style.right = "auto";
+      element.style.bottom = "auto";
     }
     const place = (candidate, size = measure()) => apply(clampToViewport(candidate, size, viewport()));
     function applyDocked(side, top, size = measure()) {
@@ -15595,7 +15356,7 @@ code.psnpp-code:hover {
     };
     const takeCapture = (pointerId) => {
       try {
-        surface.setPointerCapture?.(pointerId);
+        element.setPointerCapture?.(pointerId);
       } catch {
       }
     };
@@ -15630,7 +15391,7 @@ code.psnpp-code:hover {
       const { moved, pointerId, size } = drag;
       drag = null;
       try {
-        surface.releasePointerCapture?.(pointerId);
+        element.releasePointerCapture?.(pointerId);
       } catch {
       }
       if (!commit || !moved) return;
@@ -15656,7 +15417,7 @@ code.psnpp-code:hover {
     const unbindDrag = (target) => {
       for (const [type, handler] of SURFACE_EVENTS) target.removeEventListener?.(type, handler);
     };
-    bindDrag(surface);
+    bindDrag(element);
     const activate = () => {
       if (current.action === "reload") onReload();
       else if (current.action === "update") onUpdate();
@@ -15705,73 +15466,25 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       restorePosition,
       handleResize,
       /**
-       * Move the chip into `newHost` and make THAT the thing that floats.
-       *
-       * Exists because the host is not known when the chip is built: PSNP+ inserts
-       * its floating menu during its own DOMContentLoaded pass, well after the chip
-       * has to be on screen reporting state. Without this, the chip could be moved
-       * into the menu but `surface` would still point at the chip — so dragging
-       * would try to move an element the stylesheet has just made static, and the
-       * menu would sit there while nothing happened.
-       *
-       * Re-clamps immediately: a position saved for a small chip can put a much
-       * wider menu off the edge of the screen.
-       */
-      rehost(newHost) {
-        if (newHost == null || newHost === surface) return false;
-        try {
-          unbindDrag(surface);
-          newHost.appendChild(element);
-          bindDrag(newHost);
-          element.style.left = "";
-          element.style.top = "";
-          element.style.right = "";
-          element.style.bottom = "";
-          hosted = true;
-          surface = newHost;
-          paintClasses();
-          const rect = rectOf();
-          const size = measure();
-          const view = viewport();
-          const side = rect != null ? sideFor(rect.left, size.width, view.width) : dockSide;
-          applyDocked(side, position?.top ?? rect?.top ?? EDGE_INSET_PX, size);
-          return true;
-        } catch (error) {
-          onPositionError(error);
-          return false;
-        }
-      },
-      /**
-       * What actually floats on the page — the menu when hosted, the chip itself
-       * otherwise.
-       *
-       * The settings panel anchors to this rather than to `element`. Hosted, the
-       * chip is one full-width row somewhere inside the menu, so measuring it gave
-       * the panel the row's box and the panel hung off a slice of the menu instead
-       * of off the menu.
-       */
-      /**
        * Release every listener and timer this installed.
        *
-       * Nothing in the userscript calls this today — the chip lives as long as the
-       * page does. It exists because the resize listener is on `window`, which
-       * outlives the chip: a test that builds a chip per case was leaving one
-       * behind on every one of them, all still firing, all still measuring
-       * detached elements. A widget that cannot be taken down is a leak waiting
-       * for a caller.
+       * Nothing in the userscript calls this — the chip lives as long as the page
+       * does. It exists because the resize listener is on `window`, which outlives
+       * the chip: a test that builds a chip per case was leaving one behind on
+       * every one of them, all still firing, all still measuring detached
+       * elements. A widget that cannot be taken down is a leak waiting for a
+       * caller.
        */
       destroy() {
         try {
           globalThis.window?.removeEventListener?.("resize", onResize);
-          unbindDrag(surface);
+          unbindDrag(element);
           clearTimeout(resizeTimer);
           clearTimeout(snapTimer);
-          clearTimeout(attentionTimer);
         } catch (error) {
           onPositionError(error);
         }
       },
-      getSurface: () => surface,
       /** Where the chip is, or null while it still sits in its default corner. */
       getPosition: () => position == null ? null : { ...position },
       /**
@@ -16671,435 +16384,6 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return `PSNP+${version} has changed how it saves your lists${reason}. PSNP++ has paused syncing: nothing was uploaded and nothing on this device was changed, so your lists are untouched. Syncing resumes once PSNP++ understands the new format.`;
   }
 
-  // userscript/src/settings-bridge.mjs
-  var SETTINGS_KEY = "psnpp-settings";
-  var SCRIPT_STATE_KEY2 = "psnpp-scriptstate";
-  var STORE_KEYS = [SETTINGS_KEY, SCRIPT_STATE_KEY2];
-  var UNSYNCED_SETTINGS_FIELDS = Object.freeze(["platPricesApiKey"]);
-  var SYNCED_SCRIPT_STATE_FIELDS = Object.freeze([
-    "activeChecklist",
-    "guideSimpleMatching",
-    "hideLowOwners",
-    "hideUnobtainableTrophiesInLog",
-    "lowOwnersThreshold",
-    "mySeriesCollapseNoStage",
-    "mySeriesCollapseNumberedStages",
-    "seriesAutoCollapse",
-    "seriesDoNotCollapseNoStage"
-  ]);
-  var UNSYNCED_SETTINGS = new Set(UNSYNCED_SETTINGS_FIELDS);
-  var SYNCED_SCRIPT_STATE = new Set(SYNCED_SCRIPT_STATE_FIELDS);
-  function isSyncedField(store, field) {
-    if (store === SETTINGS_KEY) return !UNSYNCED_SETTINGS.has(field);
-    if (store === SCRIPT_STATE_KEY2) return SYNCED_SCRIPT_STATE.has(field);
-    return false;
-  }
-  function readStore(storage, key) {
-    let raw;
-    try {
-      raw = storage.getItem(key);
-    } catch {
-      return null;
-    }
-    if (raw == null) return null;
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed;
-  }
-  function isUnreadable(storage, key) {
-    let raw;
-    try {
-      raw = storage.getItem(key);
-    } catch {
-      return true;
-    }
-    return raw != null && readStore(storage, key) == null;
-  }
-  function readSettingsValues(storage) {
-    const out = {};
-    for (const store of STORE_KEYS) {
-      const parsed = readStore(storage, store);
-      if (parsed == null) continue;
-      const fields = {};
-      for (const [field, value] of Object.entries(parsed)) {
-        if (isSyncedField(store, field)) fields[field] = value;
-      }
-      out[store] = fields;
-    }
-    return out;
-  }
-  function writeSettingsValues(storage, values) {
-    let wrote = false;
-    for (const store of STORE_KEYS) {
-      const fields = values?.[store];
-      if (fields == null || Object.keys(fields).length === 0) continue;
-      if (isUnreadable(storage, store)) continue;
-      const current = readStore(storage, store) ?? {};
-      const next = { ...current };
-      for (const [field, value] of Object.entries(fields)) {
-        if (isSyncedField(store, field)) next[field] = value;
-      }
-      const serialized = JSON.stringify(next);
-      if (serialized === storage.getItem(store)) continue;
-      storage.setItem(store, serialized);
-      wrote = true;
-    }
-    return wrote;
-  }
-
-  // userscript/src/settings-sync.mjs
-  var SETTINGS_DOCUMENT = "settings";
-  var SETTINGS_DOC_VERSION = 1;
-  function emptySettingsDoc() {
-    return { version: SETTINGS_DOC_VERSION, settings: {} };
-  }
-  var nameOf = (store, field) => `${store}.${field}`;
-  var stable = (value) => {
-    const walk = (obj) => {
-      if (Array.isArray(obj)) return obj.map(walk);
-      if (obj == null || typeof obj !== "object") return obj;
-      const out = {};
-      for (const key of Object.keys(obj).sort()) {
-        if (obj[key] !== void 0) out[key] = walk(obj[key]);
-      }
-      return out;
-    };
-    return JSON.stringify(walk(value));
-  };
-  function stampSettings(base, values, now) {
-    const previous = base?.settings ?? {};
-    const firstSync = Object.keys(previous).length === 0;
-    const settings = {};
-    for (const [store, fields] of Object.entries(values ?? {})) {
-      for (const [field, value] of Object.entries(fields ?? {})) {
-        const key = nameOf(store, field);
-        const before = previous[key];
-        const unchanged = before != null && stable(before.value) === stable(value);
-        settings[key] = {
-          value,
-          updatedAt: firstSync ? 0 : unchanged ? before.updatedAt : now
-        };
-      }
-    }
-    return { version: SETTINGS_DOC_VERSION, settings, firstSync };
-  }
-  function mergeSettings(localDoc, remoteDoc, { preferRemote = false } = {}) {
-    const local = localDoc?.settings ?? {};
-    const remote = remoteDoc?.settings ?? {};
-    const settings = {};
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(local), ...Object.keys(remote)])) {
-      const mine = local[key];
-      const theirs = remote[key];
-      if (mine == null) {
-        settings[key] = theirs;
-        continue;
-      }
-      if (theirs == null) {
-        settings[key] = mine;
-        continue;
-      }
-      if (theirs.updatedAt > mine.updatedAt) {
-        settings[key] = theirs;
-        continue;
-      }
-      if (theirs.updatedAt < mine.updatedAt) {
-        settings[key] = mine;
-        continue;
-      }
-      if (preferRemote) {
-        settings[key] = theirs;
-        continue;
-      }
-      settings[key] = stable(theirs.value) <= stable(mine.value) ? theirs : mine;
-    }
-    return { version: SETTINGS_DOC_VERSION, settings };
-  }
-  function toStoreValues(doc) {
-    const values = {};
-    for (const [key, entry] of Object.entries(doc?.settings ?? {})) {
-      if (entry == null || !Object.hasOwn(entry, "value")) continue;
-      const cut = key.indexOf(".");
-      if (cut <= 0) continue;
-      const store = key.slice(0, cut);
-      const field = key.slice(cut + 1);
-      (values[store] ??= {})[field] = entry.value;
-    }
-    return values;
-  }
-  async function syncSettings({ storage, client, loadBase: loadBase2, saveBase: saveBase2, now = Date.now() }) {
-    const base = await loadBase2() ?? emptySettingsDoc();
-    const remote = await client.getState();
-    const stamped = stampSettings(base, readSettingsValues(storage), now);
-    const merged = mergeSettings(stamped, remote.doc, { preferRemote: stamped.firstSync });
-    const changed = writeSettingsValues(storage, toStoreValues(merged));
-    const result = await client.putState(remote.revision, merged);
-    if (result.ok) await saveBase2(merged);
-    return { status: result.ok ? "synced" : "conflict", changed };
-  }
-
-  // userscript/src/health.mjs
-  var BADGE_CONTAINER = "div.logo";
-  var BADGE_PREFIX = "PSNP+ v";
-  var DISPOSABLE_KEYS = Object.freeze([
-    "psnpp-platprices",
-    "psnpp-sessions",
-    "psnpp-guides",
-    "psnpp-unobtainabletrophies",
-    "psnpp-donators",
-    "psnpp-shutdowns"
-  ]);
-  var STORAGE_WARN_BYTES = 4 * 1024 * 1024;
-  var PSNP_PREFIX = "psnpp-";
-  function checkPsnpPlusPresent(doc) {
-    try {
-      if (doc == null || typeof doc.querySelector !== "function") return "unknown";
-      if (doc.readyState !== "complete") return "unknown";
-      const container = doc.querySelector(BADGE_CONTAINER);
-      if (container == null) return "unknown";
-      const text = typeof container.textContent === "string" ? container.textContent : "";
-      const badges = countOccurrences(text, BADGE_PREFIX);
-      if (badges === 0) return "missing";
-      return badges > 1 ? "duplicate" : "running";
-    } catch {
-      return "unknown";
-    }
-  }
-  var countOccurrences = (haystack, needle) => {
-    let count = 0;
-    let at = haystack.indexOf(needle);
-    while (at !== -1) {
-      count += 1;
-      at = haystack.indexOf(needle, at + needle.length);
-    }
-    return count;
-  };
-  function measurePsnpStorage(storage) {
-    const keys = [];
-    let bytes = 0;
-    try {
-      const total = typeof storage.length === "number" ? storage.length : 0;
-      for (let i = 0; i < total; i += 1) {
-        const key = storage.key(i);
-        if (typeof key !== "string") continue;
-        if (!key.startsWith(PSNP_PREFIX) && !key.startsWith("psnppp.")) continue;
-        const value = storage.getItem(key);
-        const size = key.length + (typeof value === "string" ? value.length : 0);
-        keys.push({ key, bytes: size });
-        bytes += size;
-      }
-    } catch {
-    }
-    keys.sort((a, b) => b.bytes - a.bytes);
-    return { bytes, keys };
-  }
-  function checkHealth({ storage, doc, warnBytes = STORAGE_WARN_BYTES }) {
-    const psnpPlus = checkPsnpPlusPresent(doc);
-    const { bytes, keys } = measurePsnpStorage(storage);
-    return {
-      psnpPlus,
-      bytes,
-      keys,
-      storageTight: bytes >= warnBytes,
-      disposableBytes: keys.filter((entry) => DISPOSABLE_KEYS.includes(entry.key)).reduce((sum, entry) => sum + entry.bytes, 0)
-    };
-  }
-  var mb = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  function describeHealth(health) {
-    if (health == null) return null;
-    if (health.psnpPlus === "duplicate") {
-      return "Two copies of PSNP+ are running. PSNP++ now includes PSNP+ \u2014 disable the separate PSNP+ script in your userscript manager, or the two will overwrite each other's list edits.";
-    }
-    if (health.psnpPlus === "missing") {
-      return "PSNP+ did not load on this page. Your lists are safe, but PSNP+ is not running.";
-    }
-    if (health.storageTight) {
-      const freeable = health.disposableBytes > 0 ? ` ${mb(health.disposableBytes)} of that is refetchable cache.` : "";
-      return `PSNP+ storage is at ${mb(health.bytes)}. Near the browser limit, edits can fail to save.${freeable}`;
-    }
-    return null;
-  }
-
-  // userscript/src/progress-history.mjs
-  var GAMES_LIST_KEY = "psnpp-gameslist";
-  var PROGRESS_DOCUMENT = "progress";
-  var PROGRESS_DOC_VERSION = 1;
-  var MAX_POINTS_PER_GAME = 50;
-  function emptyProgressDoc() {
-    return { version: PROGRESS_DOC_VERSION, games: {} };
-  }
-  var isPlainObject2 = (value) => value != null && typeof value === "object" && !Array.isArray(value);
-  function readScrapedGames(storage) {
-    try {
-      const raw = storage.getItem(GAMES_LIST_KEY);
-      if (typeof raw !== "string") return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter(isPlainObject2) : [];
-    } catch {
-      return [];
-    }
-  }
-  var trophiesOf = (game) => {
-    const t2 = isPlainObject2(game.trophies) ? game.trophies : {};
-    return {
-      platinum: Number(t2.platinum) || 0,
-      gold: Number(t2.gold) || 0,
-      silver: Number(t2.silver) || 0,
-      bronze: Number(t2.bronze) || 0
-    };
-  };
-  function observationOf(game) {
-    return {
-      progress: Number(game.progress) || 0,
-      trophies: trophiesOf(game),
-      lastActivity: Number(game.lastActivity) || 0
-    };
-  }
-  var sameObservation = (a, b) => a != null && b != null && a.progress === b.progress && a.lastActivity === b.lastActivity && a.trophies.platinum === b.trophies.platinum && a.trophies.gold === b.trophies.gold && a.trophies.silver === b.trophies.silver && a.trophies.bronze === b.trophies.bronze;
-  function recordScrape(doc, games, now) {
-    const base = isPlainObject2(doc?.games) ? doc.games : {};
-    const next = { ...base };
-    let recorded = 0;
-    for (const game of games) {
-      const id = game?.id;
-      if (id == null || id === "") continue;
-      const key = String(id);
-      const observation = observationOf(game);
-      const existing = next[key];
-      const points = Array.isArray(existing?.points) ? existing.points : [];
-      const newest = points.length > 0 ? points[points.length - 1] : null;
-      const title = typeof game.title === "string" && game.title !== "" ? game.title : existing?.title ?? "";
-      if (sameObservation(newest, observation)) {
-        if (title !== existing?.title) next[key] = { ...existing, title };
-        continue;
-      }
-      const appended = [...points, { at: now, ...observation }];
-      next[key] = {
-        title,
-        points: appended.length > MAX_POINTS_PER_GAME ? appended.slice(appended.length - MAX_POINTS_PER_GAME) : appended
-      };
-      recorded += 1;
-    }
-    return { doc: { version: PROGRESS_DOC_VERSION, games: next }, recorded };
-  }
-  function mergeProgress(localDoc, remoteDoc) {
-    const local = isPlainObject2(localDoc?.games) ? localDoc.games : {};
-    const remote = isPlainObject2(remoteDoc?.games) ? remoteDoc.games : {};
-    const games = {};
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(local), ...Object.keys(remote)])) {
-      const mine = local[key];
-      const theirs = remote[key];
-      const byTime = /* @__PURE__ */ new Map();
-      for (const point of [...mine?.points ?? [], ...theirs?.points ?? []]) {
-        if (point == null || typeof point.at !== "number") continue;
-        if (!byTime.has(point.at)) byTime.set(point.at, point);
-      }
-      const points = [...byTime.values()].sort((a, b) => a.at - b.at);
-      games[key] = {
-        title: theirs?.title || mine?.title || "",
-        points: points.length > MAX_POINTS_PER_GAME ? points.slice(points.length - MAX_POINTS_PER_GAME) : points
-      };
-    }
-    return { version: PROGRESS_DOC_VERSION, games };
-  }
-  async function syncProgress({ storage, client, loadBase: loadBase2, saveBase: saveBase2, now = Date.now() }) {
-    const base = await loadBase2() ?? emptyProgressDoc();
-    const remote = await client.getState();
-    const merged = mergeProgress(base, remote.doc);
-    const { doc, recorded } = recordScrape(merged, readScrapedGames(storage), now);
-    if (JSON.stringify(doc) === JSON.stringify(remote.doc)) {
-      await saveBase2(doc);
-      return { status: "synced", recorded: 0, pushed: false };
-    }
-    const result = await client.putState(remote.revision, doc);
-    if (result.ok) await saveBase2(doc);
-    return { status: result.ok ? "synced" : "conflict", recorded, pushed: result.ok };
-  }
-
-  // userscript/src/watch.mjs
-  var SHUTDOWNS_KEY = "psnpp-shutdowns";
-  var UNOBTAINABLES_KEY = "psnpp-unobtainabletrophies";
-  var SHUTDOWN_HORIZON_DAYS = 120;
-  var DAY_MS = 24 * 60 * 60 * 1e3;
-  var isPlainObject3 = (value) => value != null && typeof value === "object" && !Array.isArray(value);
-  function readFeed(storage, key) {
-    try {
-      const raw = storage.getItem(key);
-      if (typeof raw !== "string") return {};
-      const parsed = JSON.parse(raw);
-      const list = parsed?.data?.list;
-      return isPlainObject3(list) ? list : {};
-    } catch {
-      return {};
-    }
-  }
-  function gamesInLists(storage) {
-    const games = /* @__PURE__ */ new Map();
-    for (const list of readLists(storage)) {
-      if (!Array.isArray(list?.games)) continue;
-      for (const game of list.games) {
-        if (!isPlainObject3(game) || game.id == null) continue;
-        const id = String(game.id);
-        const entry = games.get(id) ?? { id, title: game.title ?? "", lists: [] };
-        if (typeof list.name === "string" && !entry.lists.includes(list.name)) {
-          entry.lists.push(list.name);
-        }
-        if (!entry.title && typeof game.title === "string") entry.title = game.title;
-        games.set(id, entry);
-      }
-    }
-    return [...games.values()];
-  }
-  function shutdownWatch(games, feed, now, horizonDays = SHUTDOWN_HORIZON_DAYS) {
-    const soon = [];
-    const passed = [];
-    for (const game of games) {
-      const entry = feed[game.id];
-      if (!isPlainObject3(entry)) continue;
-      const at = Number(entry.shutdownTimestamp);
-      if (!Number.isFinite(at) || at === 0) continue;
-      const days = Math.round((at - now) / DAY_MS);
-      const found = { ...game, at, days, note: typeof entry.note === "string" ? entry.note : "" };
-      if (at <= now) passed.push(found);
-      else if (days <= horizonDays) soon.push(found);
-    }
-    soon.sort((a, b) => a.at - b.at);
-    passed.sort((a, b) => b.at - a.at);
-    return { soon, passed };
-  }
-  function unobtainableWatch(games, feed) {
-    const out = [];
-    for (const game of games) {
-      const trophies = feed[game.id];
-      if (!Array.isArray(trophies) || trophies.length === 0) continue;
-      out.push({ ...game, count: trophies.length });
-    }
-    return out.sort((a, b) => b.count - a.count);
-  }
-  function checkWatch({ storage, now = Date.now(), horizonDays = SHUTDOWN_HORIZON_DAYS }) {
-    try {
-      const games = gamesInLists(storage);
-      const shutdowns = shutdownWatch(games, readFeed(storage, SHUTDOWNS_KEY), now, horizonDays);
-      const unobtainable = unobtainableWatch(games, readFeed(storage, UNOBTAINABLES_KEY));
-      return { shutdowns, unobtainable, gamesChecked: games.length };
-    } catch {
-      return { shutdowns: { soon: [], passed: [] }, unobtainable: [], gamesChecked: 0 };
-    }
-  }
-  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  function describeWatch(watch) {
-    const soon = watch?.shutdowns?.soon ?? [];
-    if (soon.length === 0) return null;
-    const next = soon[0];
-    const when = next.days <= 0 ? "today" : `in ${plural(next.days, "day")}`;
-    const rest = soon.length > 1 ? ` (+${soon.length - 1} more)` : "";
-    return `${next.title || "A game"} in your lists shuts down ${when}${rest}.`;
-  }
-
   // userscript/src/storage-guard.mjs
   var guarded = /* @__PURE__ */ new WeakMap();
   var approximateBytes = (value) => {
@@ -17157,90 +16441,8 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return uninstall;
   }
 
-  // userscript/src/compare-bridge.mjs
-  var COMPARE_KEY = "psnpp-compareplus";
-  var isMap = (value) => value != null && typeof value === "object" && !Array.isArray(value);
-  async function readCompareValues({ gm = globalThis.GM, storage = globalThis.localStorage } = {}) {
-    let raw = null;
-    try {
-      if (gm?.getValue != null) raw = await gm.getValue(COMPARE_KEY, null);
-    } catch {
-      raw = null;
-    }
-    if (raw == null) {
-      try {
-        raw = storage?.getItem?.(COMPARE_KEY) ?? null;
-      } catch {
-        raw = null;
-      }
-    }
-    if (raw == null) return {};
-    let parsed;
-    try {
-      parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    } catch {
-      return {};
-    }
-    if (!isMap(parsed)) return {};
-    const out = {};
-    for (const [id, value] of Object.entries(parsed)) {
-      if (typeof value === "string") out[id] = value;
-      else if (typeof value === "number" || typeof value === "boolean") out[id] = String(value);
-    }
-    return out;
-  }
-  async function writeCompareValues(values, { gm = globalThis.GM, storage = globalThis.localStorage } = {}) {
-    if (!isMap(values)) return false;
-    const encoded = JSON.stringify(values);
-    try {
-      if (gm?.setValue != null) {
-        try {
-          storage?.removeItem?.(COMPARE_KEY);
-        } catch {
-        }
-        await gm.setValue(COMPARE_KEY, encoded);
-        return true;
-      }
-      storage?.setItem?.(COMPARE_KEY, encoded);
-      return true;
-    } catch (error) {
-      console.error("[psnppp] could not save Compare+ data:", error);
-      return false;
-    }
-  }
-
-  // userscript/src/compare-sync.mjs
-  var COMPARE_DOCUMENT = "compare";
-  var STORE = "compare";
-  function emptyCompareDoc() {
-    return { version: SETTINGS_DOC_VERSION, settings: {} };
-  }
-  async function syncCompare({
-    client,
-    loadBase: loadBase2,
-    saveBase: saveBase2,
-    now = Date.now(),
-    gm = globalThis.GM,
-    storage = globalThis.localStorage
-  }) {
-    const base = await loadBase2() ?? emptyCompareDoc();
-    const remote = await client.getState();
-    const values = await readCompareValues({ gm, storage });
-    const stamped = stampSettings(base, { [STORE]: values }, now);
-    const merged = mergeSettings(stamped, remote.doc, { preferRemote: stamped.firstSync });
-    const mergedValues = toStoreValues(merged)[STORE] ?? {};
-    const changed = JSON.stringify(mergedValues) !== JSON.stringify(values);
-    if (changed) await writeCompareValues(mergedValues, { gm, storage });
-    const result = await client.putState(remote.revision, merged);
-    if (result.ok) await saveBase2(merged);
-    return { status: result.ok ? "synced" : "conflict", changed };
-  }
-
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
-  var SETTINGS_BASE_KEY = "psnppp.settingsBase";
-  var PROGRESS_BASE_KEY = "psnppp.progressBase";
-  var COMPARE_BASE_KEY = "psnppp.compareBase";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
   var UPDATE_META_URL = "https://trippixn.com/psnppp.meta.js";
@@ -17279,49 +16481,6 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return parsed;
   };
   var saveBase = async (doc) => GM.setValue(BASE_KEY, JSON.stringify(doc));
-  var loadSettingsBase = async () => {
-    const raw = await GM.getValue(SETTINGS_BASE_KEY, null);
-    if (raw == null) return emptySettingsDoc();
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return emptySettingsDoc();
-    }
-    if (parsed == null || typeof parsed.settings !== "object" || parsed.settings === null || Array.isArray(parsed.settings)) {
-      return emptySettingsDoc();
-    }
-    return parsed;
-  };
-  var saveSettingsBase = async (doc) => GM.setValue(SETTINGS_BASE_KEY, JSON.stringify(doc));
-  var loadProgressBase = async () => {
-    const raw = await GM.getValue(PROGRESS_BASE_KEY, null);
-    if (raw == null) return emptyProgressDoc();
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed == null || typeof parsed.games !== "object" || parsed.games === null || Array.isArray(parsed.games)) {
-        return emptyProgressDoc();
-      }
-      return parsed;
-    } catch {
-      return emptyProgressDoc();
-    }
-  };
-  var saveProgressBase = async (doc) => GM.setValue(PROGRESS_BASE_KEY, JSON.stringify(doc));
-  var loadCompareBase = async () => {
-    const raw = await GM.getValue(COMPARE_BASE_KEY, null);
-    if (raw == null) return emptyCompareDoc();
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed == null || typeof parsed.settings !== "object" || parsed.settings === null || Array.isArray(parsed.settings)) {
-        return emptyCompareDoc();
-      }
-      return parsed;
-    } catch {
-      return emptyCompareDoc();
-    }
-  };
-  var saveCompareBase = async (doc) => GM.setValue(COMPARE_BASE_KEY, JSON.stringify(doc));
   async function confirmAdoptions(adoptions) {
     const names = adoptions.map((a) => `\u2022 ${a.name}`).join("\n");
     return window.confirm(
@@ -17393,10 +16552,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           resolve();
         };
         panel = createSettingsPanel({
-          // The surface, not the chip row: hosted, the chip is one row inside
-          // PSNP+'s menu, and anchoring to it hung the panel off that row rather
-          // than off the menu the user actually opened it from.
-          anchor: chip?.getSurface?.() ?? chip?.element ?? null,
+          anchor: chip?.element ?? null,
           side: chip?.getSide?.() ?? "right",
           config,
           backups,
@@ -17556,13 +16712,9 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     };
   }
   var INSECURE_ENDPOINT_WARNING = "WARNING: this endpoint is not https, so your sync key is sent unencrypted. Right-click the chip and change it on the Sync tab.";
-  function decorateDetail(detail, endpoint, health = null, watch = null) {
+  function decorateDetail(detail, endpoint) {
     const lines = [];
     if (!isAllowedEndpoint(endpoint)) lines.push(INSECURE_ENDPOINT_WARNING);
-    const healthLine = describeHealth(health);
-    if (healthLine) lines.push(healthLine);
-    const watchLine = describeWatch(watch);
-    if (watchLine) lines.push(watchLine);
     if (detail) lines.push(detail);
     return lines.join("\n");
   }
@@ -17634,10 +16786,8 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
         const compat = checkPsnpPlusCompat(window.localStorage);
         void recordPsnpPlusVersion(compat.version);
-        const health = checkHealth({ storage: window.localStorage, doc: document });
-        const watch = checkWatch({ storage: window.localStorage });
         if (!compat.ok) {
-          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint, health, watch));
+          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint));
           return;
         }
         paint("syncing");
@@ -17652,7 +16802,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           now: Date.now()
         });
         const { state, detail } = describeSyncResult(result);
-        paint(state, decorateDetail(detail, config.endpoint, health, watch));
+        paint(state, decorateDetail(detail, config.endpoint));
         if (result.status === "synced" && result.changed) {
           try {
             await recordSync({ revision: result.revision, delta: result.delta });
@@ -17660,47 +16810,6 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
             console.error("[psnppp] could not record sync history:", error);
           }
         }
-        const settings2 = await syncSettings({
-          storage: window.localStorage,
-          client: createSyncClient({
-            ...config,
-            request: gmRequest,
-            documentKey: SETTINGS_DOCUMENT
-          }),
-          loadBase: loadSettingsBase,
-          saveBase: saveSettingsBase,
-          now: Date.now()
-        }).catch((error) => {
-          console.error("[psnppp] settings sync failed:", error);
-          return { status: "offline", changed: false };
-        });
-        if (settings2.changed && !(result.status === "synced" && result.changed)) {
-          paint("reload", decorateDetail(
-            "PSNP+ settings updated \u2014 reload the page to apply them",
-            config.endpoint
-          ));
-        }
-        await syncProgress({
-          storage: window.localStorage,
-          client: createSyncClient({
-            ...config,
-            request: gmRequest,
-            documentKey: PROGRESS_DOCUMENT
-          }),
-          loadBase: loadProgressBase,
-          saveBase: saveProgressBase,
-          now: Date.now()
-        }).catch((error) => console.error("[psnppp] progress archive failed:", error));
-        await syncCompare({
-          client: createSyncClient({
-            ...config,
-            request: gmRequest,
-            documentKey: COMPARE_DOCUMENT
-          }),
-          loadBase: loadCompareBase,
-          saveBase: saveCompareBase,
-          now: Date.now()
-        }).catch((error) => console.error("[psnppp] Compare+ sync failed:", error));
       } catch (error) {
         paint("offline", describeFailure(error, "Sync failed"));
       } finally {
@@ -17711,10 +16820,6 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
       }
     }
-    void findMenuWhenReady(document).then((menu) => {
-      if (menu == null || indicator?.element == null) return;
-      indicator.rehost(menu);
-    });
     watchLists(window.localStorage, () => {
       clearTimeout(timer);
       timer = setTimeout(() => {

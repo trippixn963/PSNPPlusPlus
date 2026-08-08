@@ -25,18 +25,9 @@ import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
 import { checkPsnpPlusCompat, describeIncompatibility } from './compat.mjs';
 import { emptyDoc } from './doc.mjs';
-import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sync.mjs';
-import { checkHealth, describeHealth } from './health.mjs';
-import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-history.mjs';
-import { checkWatch, describeWatch } from './watch.mjs';
-import { findMenuWhenReady } from './menu.mjs';
 import { installStorageGuard, describeStorageFailure } from './storage-guard.mjs';
-import { syncCompare, emptyCompareDoc, COMPARE_DOCUMENT } from './compare-sync.mjs';
 
 const BASE_KEY = 'psnppp.base';
-const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
-const PROGRESS_BASE_KEY = 'psnppp.progressBase';
-const COMPARE_BASE_KEY = 'psnppp.compareBase';
 const CHANGE_DEBOUNCE_MS = 3000;
 // Which PSNP+ this device last saw. Recorded so their update is a dated,
 // visible event in the console rather than something inferred afterwards from
@@ -130,86 +121,8 @@ export const loadBase = async () => {
 };
 const saveBase = async doc => GM.setValue(BASE_KEY, JSON.stringify(doc));
 
-/**
- * The settings document as of this device's last successful settings sync.
- *
- * Kept under its OWN GM key, never folded into `psnppp.base`. The two documents
- * are merged by different rules against different servers' documents, and a
- * single blob holding both would mean one path's write could strand or corrupt
- * the other's base — the exact coupling this feature is built to avoid.
- *
- * Falls back to an empty document for anything unreadable, for the same reason
- * loadBase does: a base that parses but has no `settings` object would be
- * iterated by stampSettings on every cycle forever. The cost of the fallback is
- * one cycle that cannot tell a local edit from a fresh device, and for settings
- * that cost is a field stamped `now` that may win a merge it would otherwise
- * have lost — recoverable by changing the setting again, unlike a lost list.
- */
-export const loadSettingsBase = async () => {
-  const raw = await GM.getValue(SETTINGS_BASE_KEY, null);
-  if (raw == null) return emptySettingsDoc();
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return emptySettingsDoc();
-  }
-  if (parsed == null || typeof parsed.settings !== 'object' || parsed.settings === null
-      || Array.isArray(parsed.settings)) {
-    return emptySettingsDoc();
-  }
-  return parsed;
-};
-const saveSettingsBase = async doc => GM.setValue(SETTINGS_BASE_KEY, JSON.stringify(doc));
 
-/**
- * The progress archive as of this device's last successful progress sync.
- *
- * Falls back to an empty document on anything unreadable, like the other two
- * bases. Cheaper to be wrong here than there: the merge is a union of immutable
- * observations, so a lost base costs one redundant push rather than risking a
- * spurious deletion.
- */
-const loadProgressBase = async () => {
-  const raw = await GM.getValue(PROGRESS_BASE_KEY, null);
-  if (raw == null) return emptyProgressDoc();
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed == null || typeof parsed.games !== 'object' || parsed.games === null
-        || Array.isArray(parsed.games)) {
-      return emptyProgressDoc();
-    }
-    return parsed;
-  } catch {
-    return emptyProgressDoc();
-  }
-};
-const saveProgressBase = async doc => GM.setValue(PROGRESS_BASE_KEY, JSON.stringify(doc));
 
-/**
- * The Compare+ map as of this device's last successful Compare+ sync.
- *
- * Same fallback rule as the other three, and the cheapest of the four to get
- * wrong: an unreadable base means one cycle that cannot tell a local edit from
- * a fresh device, which for Compare+ costs at most a set of PSN IDs reverting
- * once. The field is `settings` because the document reuses the settings
- * merge's shape — see compare-sync.mjs.
- */
-const loadCompareBase = async () => {
-  const raw = await GM.getValue(COMPARE_BASE_KEY, null);
-  if (raw == null) return emptyCompareDoc();
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed == null || typeof parsed.settings !== 'object' || parsed.settings === null
-        || Array.isArray(parsed.settings)) {
-      return emptyCompareDoc();
-    }
-    return parsed;
-  } catch {
-    return emptyCompareDoc();
-  }
-};
-const saveCompareBase = async doc => GM.setValue(COMPARE_BASE_KEY, JSON.stringify(doc));
 
 async function confirmAdoptions(adoptions) {
   const names = adoptions.map(a => `• ${a.name}`).join('\n');
@@ -381,10 +294,7 @@ export async function openSettings({ chip = null } = {}) {
       };
 
       panel = createSettingsPanel({
-        // The surface, not the chip row: hosted, the chip is one row inside
-        // PSNP+'s menu, and anchoring to it hung the panel off that row rather
-        // than off the menu the user actually opened it from.
-        anchor: chip?.getSurface?.() ?? chip?.element ?? null,
+        anchor: chip?.element ?? null,
         side: chip?.getSide?.() ?? 'right',
         config,
         backups,
@@ -695,19 +605,13 @@ const INSECURE_ENDPOINT_WARNING =
  * setting the user cannot see, and the fix is two clicks away in the menu this
  * message names.
  */
-export function decorateDetail(detail, endpoint, health = null, watch = null) {
-  // Warnings first, sync state after. Both are prefixes rather than separate
-  // chip states because neither is about the sync: an insecure endpoint and a
-  // full quota are both true whether the last cycle succeeded or failed, and
-  // spending a chip state on them would hide whichever one came second.
+export function decorateDetail(detail, endpoint) {
+  // The warning first, sync state after. A prefix rather than a separate chip
+  // state because it is not about the sync: an insecure endpoint is true
+  // whether the last cycle succeeded or failed, and spending a chip state on it
+  // would hide whichever of the two came second.
   const lines = [];
   if (!isAllowedEndpoint(endpoint)) lines.push(INSECURE_ENDPOINT_WARNING);
-  const healthLine = describeHealth(health);
-  if (healthLine) lines.push(healthLine);
-  // After health, before the sync state: a closing server is more urgent than
-  // "Synced" and less urgent than "PSNP+ is not running".
-  const watchLine = describeWatch(watch);
-  if (watchLine) lines.push(watchLine);
   if (detail) lines.push(detail);
   return lines.join('\n');
 }
@@ -845,18 +749,8 @@ export async function start() {
       const compat = checkPsnpPlusCompat(window.localStorage);
       void recordPsnpPlusVersion(compat.version);
 
-      // Measured once per cycle and threaded through every paint below, so the
-      // reading the user sees always belongs to the same pass as the sync state
-      // beside it. Cheap: one enumeration of localStorage, no parsing.
-      const health = checkHealth({ storage: window.localStorage, doc: document });
-
-      // Reads PSNP+'s own cached shutdown and unobtainable feeds and joins them
-      // against the lists — no network of its own, and pinned to the PSNP+ this
-      // build ships, so the cache shape cannot move underneath it.
-      const watch = checkWatch({ storage: window.localStorage });
-
       if (!compat.ok) {
-        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint, health, watch));
+        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint));
         return;
       }
 
@@ -868,7 +762,7 @@ export async function start() {
         now: Date.now()
       });
       const { state, detail } = describeSyncResult(result);
-      paint(state, decorateDetail(detail, config.endpoint, health, watch));
+      paint(state, decorateDetail(detail, config.endpoint));
 
       // Only cycles that actually wrote are logged. Syncs fire on every load,
       // every tab focus and every debounced edit, and the overwhelming majority
@@ -887,89 +781,6 @@ export async function start() {
         }
       }
 
-      // PSNP+'s PREFERENCES, on a path of their own. Last, and after the chip
-      // has already been painted from the lists result, so the product is
-      // finished before the convenience starts. `syncSettings` is specified
-      // never to throw or reject (the same contract checkForUpdate has), which
-      // is what makes it safe to sit inside this try without a catch of its
-      // own: there is no failure of it that can reach the handler below and
-      // repaint a good lists sync as "Offline".
-      //
-      // Its own client and its own base key. The only thing the two paths share
-      // is the transport module and the credentials.
-      //
-      // TIMING, and why a late write is harmless: PSNP+ reads both preference
-      // objects at `window.load` to draw its controls, and this write lands
-      // after a network round trip, so it will usually be later than that.
-      // Nothing is lost by it. PSNP+'s storages re-read localStorage on EVERY
-      // get and set (SettingsStorage._load / ScriptStateStorage._load), so a
-      // preference it reads later in the session picks the new value up, and a
-      // preference it writes is a read-modify-write over our bytes rather than
-      // over a stale copy. What stays stale is the already-drawn UI — exactly
-      // the situation the lists path already has — so the answer is the same
-      // one: offer a reload and let the user take it. Only offered when the
-      // lists cycle did not already ask for one, since that offer covers both.
-      // Guarded HERE, not inside syncSettings, because the reason is about this
-      // call site rather than about settings: both convenience paths run after
-      // the lists chip has already been painted, and neither is allowed to
-      // repaint a good lists sync as "Offline". They reach the network, so they
-      // genuinely can reject — an earlier comment here asserted they could not,
-      // which was simply untrue.
-      const settings = await syncSettings({
-        storage: window.localStorage,
-        client: createSyncClient({
-          ...config, request: gmRequest, documentKey: SETTINGS_DOCUMENT
-        }),
-        loadBase: loadSettingsBase,
-        saveBase: saveSettingsBase,
-        now: Date.now()
-      }).catch(error => {
-        console.error('[psnppp] settings sync failed:', error);
-        return { status: 'offline', changed: false };
-      });
-      if (settings.changed && !(result.status === 'synced' && result.changed)) {
-        paint('reload', decorateDetail(
-          'PSNP+ settings updated — reload the page to apply them', config.endpoint
-        ));
-      }
-
-      // GAME-PROGRESS ARCHIVE. Last of the three, and the only one that never
-      // writes to PSNP+ at all — it reads the scrape cache PSNP+ overwrites on
-      // every profile visit and keeps what would otherwise be thrown away.
-      //
-      // Deliberately silent: it changes nothing the user is looking at, so it
-      // has no chip state and no reload offer. There is nothing for them to do
-      // about it, and a message on every page load would be noise. Guarded for
-      // the same reason as the settings call above — it reaches the network,
-      // and an archive that failed to push must never be reported to the user
-      // as a sync that failed.
-      await syncProgress({
-        storage: window.localStorage,
-        client: createSyncClient({
-          ...config, request: gmRequest, documentKey: PROGRESS_DOCUMENT
-        }),
-        loadBase: loadProgressBase,
-        saveBase: saveProgressBase,
-        now: Date.now()
-      }).catch(error => console.error('[psnppp] progress archive failed:', error));
-
-      // Compare+ entries. Its own document, its own base key, and its own
-      // .catch for the same reason the two above have one: it reaches the
-      // network, so it genuinely can reject, and a Compare+ failure must never
-      // repaint a good lists sync as "Offline".
-      //
-      // Quietly, like the archive. A merged Compare+ entry changes an input box
-      // on a trophy list page the user may not even be on, and there is nothing
-      // for them to do about it — a reload offer for four PSN IDs would cost
-      // more attention than it is worth.
-      await syncCompare({
-        client: createSyncClient({
-          ...config, request: gmRequest, documentKey: COMPARE_DOCUMENT
-        }),
-        loadBase: loadCompareBase,
-        saveBase: saveCompareBase,
-        now: Date.now()
-      }).catch(error => console.error('[psnppp] Compare+ sync failed:', error));
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown
@@ -993,18 +804,6 @@ export async function start() {
   // (changed === false) and writes nothing. Net cost is one extra network
   // round-trip per user edit — bounded, not free, and not worth "fixing" by
   // e.g. reaching into watchLists's absorb state from here.
-  // Move the chip INTO PSNP+'s menu once it exists, so there is one floating
-  // surface on the page instead of two. Best-effort and never awaited: when the
-  // menu is switched off in PSNP+'s settings, or PSNP+ did not load at all, the
-  // chip simply stays where it is — which is the whole reason the standalone
-  // path is kept rather than replaced.
-  void findMenuWhenReady(document).then(menu => {
-    if (menu == null || indicator?.element == null) return;
-    // rehost, not appendChild: the chip has to hand its dragging, its dock side
-    // and its position over to the menu, or the menu becomes an undraggable box
-    // containing a chip that thinks it is still floating.
-    indicator.rehost(menu);
-  });
 
   watchLists(window.localStorage, () => {
     clearTimeout(timer);

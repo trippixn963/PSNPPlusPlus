@@ -20,19 +20,12 @@
  * plate. The metal only exists while the chip needs the user, which is what
  * makes it mean anything.
  *
- * SCOPING. Every selector below starts at #${INDICATOR_ID}, #${PANEL_ID}, or
- * PSNP+'s own menu class, and every rule targets a class rather than a bare
- * element. We are a guest on a page we do not own: nothing here may reach out
- * of the widget, and page styles must not reach in. Class selectors (0,2,0) are
- * used instead of element selectors so an ordinary `.form input` on the host
- * page cannot win a specificity tie against us.
- *
- * `!important` appears exactly twice, both in the menu block, both against
- * `margin` — PSNP+ sets `margin-top: 5px` INLINE on each of its buttons, and an
- * inline declaration cannot be outranked any other way. Two patches removed the
- * other inline styles at their source so nothing else here has to shout; if a
- * third `!important` ever seems necessary, the honest fix is another patch, not
- * another shout.
+ * SCOPING. Every selector below starts at #${INDICATOR_ID} or #${PANEL_ID},
+ * every rule targets a .psnppp-* class rather than a bare element, and there is
+ * not one `!important`. We are a guest on a page we do not own: nothing here
+ * may reach out of the widget, and page styles must not reach in. Class
+ * selectors (0,2,0) are used instead of element selectors so an ordinary
+ * `.form input` on the host page cannot win a specificity tie against us.
  *
  * Author: Trippixn
  * Server: discord.gg/syria
@@ -134,14 +127,6 @@ export const TYPE = {
   body: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
 };
 
-/*
- * PSNP+'s floating menu, by the class PSNP+ gives it.
- *
- * Imported rather than written out again: menu.mjs finds the menu with this
- * selector and this sheet skins it, and a second copy of the string is how one
- * of the two silently stops matching after a PSNP+ update.
- */
-import { MENU_SELECTOR } from './menu.mjs';
 
 const STYLE_ID = 'psnppp-style';
 
@@ -299,181 +284,6 @@ ${litTiers} {
   100% { opacity: 0; transform: translateX(340%); }
 }
 
-/*
- * Hosted inside PSNP+'s floating menu.
- *
- * The menu is what floats, docks and drags in that mode, so the chip must stop
- * positioning itself — otherwise it stays pinned to the viewport while its own
- * container moves out from under it. Everything else about it (plate, rail,
- * tier colours, sheen) is inherited unchanged, which is the point: it is the
- * same control, not a second one styled to look like it.
- *
- * Sits AFTER the base rule so it wins on order alone: no !important, no
- * specificity games.
- */
-#${INDICATOR_ID}.psnppp-hosted {
-  position: static;
-  right: auto;
-  bottom: auto;
-  margin-top: 6px;
-  max-width: none;
-  width: 100%;
-  box-shadow: none;
-  /* The host fades; we must not fade AGAIN inside it. Opacity multiplies down
-     the tree, so .55 within their .2 rendered at .11. */
-  opacity: 1;
-}
-
-/* ---- PSNP+'s floating menu, reskinned ----------------------------------- */
-
-/*
- * The menu is the surface now — the chip is a row inside it — so it has to read
- * as one object with the chip and the panel rather than as a grey box one of
- * them happens to live in.
- *
- * Owned here rather than in the patch that used to rewrite PSNP+'s inline
- * style attribute. Two patches clear the way: theme-floating-menu strips the
- * visual half of that attribute, and menu-hover-in-css removes the handlers
- * that wrote opacity inline. What is left below is ordinary CSS, in the same
- * tokens as everything else, with no !important except where third-party
- * inline styles genuinely have to be outranked (marked, each time).
- */
-${MENU_SELECTOR} {
-  padding: 9px 10px 10px;
-  border: 1px solid ${t.hairline};
-  border-radius: 3px;
-  background: ${t.plate};
-  box-shadow: ${PLATE_SHADOW};
-  color: ${t.data};
-  font-family: ${TYPE.body};
-  font-size: 12px;
-  line-height: 1.45;
-  min-width: 148px;
-  /* The whole menu drags, so the whole menu must not be selectable: a drag
-     across the title used to paint it blue and leave a selection behind. */
-  user-select: none;
-  cursor: grab;
-  opacity: .55;
-  transition: opacity .18s ease, border-color .18s ease;
-}
-
-${MENU_SELECTOR}:hover {
-  opacity: 1;
-  border-color: ${t.edge};
-}
-
-/* Raised by indicator.mjs for exactly the states that ask the user to act, and
-   dropped again when the chip settles. Without it an update offer sat at the
-   resting fade and went unread. */
-${MENU_SELECTOR}.psnppp-attention {
-  opacity: 1;
-  border-color: ${t.bronzeDim};
-}
-
-/* Held down: the cursor is the only feedback that the grab took. */
-${MENU_SELECTOR}:active {
-  cursor: grabbing;
-}
-
-/* The title. PSNP+ emits a bare <b> inside a wrapper div. */
-${MENU_SELECTOR} > div:first-child > b {
-  display: block;
-  margin-bottom: 8px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid ${t.hairline};
-  color: ${t.engrave};
-  font-family: ${TYPE.display};
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-
-/*
- * PSNP+ separates its buttons with <br> and lays them out inline. Stacking them
- * as blocks and dropping the breaks gives one rhythm instead of two competing
- * ones — and means the spacing is a margin that can be reasoned about rather
- * than the height of a line box.
- */
-${MENU_SELECTOR} br {
-  display: none;
-}
-
-${MENU_SELECTOR} .button {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  /* Their own margin-top: 5px is set INLINE on each button, so this is one of
-     the two places that has to outrank an inline style. */
-  margin: 0 0 5px !important;
-  padding: 6px 9px;
-  border: 1px solid ${t.hairline};
-  border-radius: 2px;
-  background: ${t.control};
-  color: ${t.data};
-  font-family: ${TYPE.body};
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1.3;
-  text-align: left;
-  text-decoration: none;
-  text-shadow: none;
-  cursor: pointer;
-  transition: background .14s ease, border-color .14s ease, color .14s ease;
-}
-
-/* .button.grey is PSNP+'s own rule (background: #646464) and it is the class
-   every one of these buttons carries, so it has to be answered directly. */
-${MENU_SELECTOR} .button.grey {
-  background: ${t.control};
-}
-
-${MENU_SELECTOR} .button:last-of-type {
-  margin-bottom: 0 !important;
-}
-
-${MENU_SELECTOR} .button:hover,
-${MENU_SELECTOR} .button.grey:hover {
-  border-color: ${t.bronzeDim};
-  background: ${t.sunken};
-  color: ${t.bright};
-}
-
-${MENU_SELECTOR} .button:focus-visible {
-  outline: 2px solid ${t.platinum};
-  outline-offset: 1px;
-}
-
-/*
- * PSNP+'s search-example chips, on the guide search page.
- *
- * They are CLICKABLE — clicking one fills the search box with that query — but
- * PSNP+ styles them background: lightgrey with no colour and no hover, so
- * they read as inert sample text. The affordance was missing, not the styling.
- *
- * code.psnpp-code (0,1,1) rather than .psnpp-code (0,1,0) on purpose: PSNP+
- * injects its stylesheet when the page runs, which is AFTER ours, so at equal
- * specificity theirs would win on order. One extra element in the selector wins
- * it outright without an !important and without patching their sheet. All five
- * uses are on a <code> element, so nothing is missed by requiring it.
- */
-code.psnpp-code {
-  display: inline-block;
-  padding: 1px 5px;
-  border: 1px solid ${t.hairline};
-  border-radius: 2px;
-  background: ${t.sunken};
-  color: ${t.data};
-  font-family: ${TYPE.data};
-  font-size: 11.5px;
-  cursor: pointer;
-  transition: border-color .14s ease, color .14s ease;
-}
-
-code.psnpp-code:hover {
-  border-color: ${t.bronzeDim};
-  color: ${t.gold};
-}
 
 /* ---- the panel --------------------------------------------------------- */
 

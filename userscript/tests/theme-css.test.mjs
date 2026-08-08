@@ -45,7 +45,7 @@ test('the stylesheet exports as one non-trivial string covering every surface', 
   const { CSS } = await import('../src/theme.mjs');
   assert.equal(typeof CSS, 'string');
   assert.ok(CSS.length > 2000, 'a truncated sheet is a broken sheet');
-  for (const marker of ['psnppp-indicator', 'psnppp-panel', 'psnpp-floating-menu', 'psnpp-code']) {
+  for (const marker of ['psnppp-indicator', 'psnppp-panel', 'psnppp-rail', 'psnppp-label']) {
     assert.ok(CSS.includes(marker), `${marker} rules must be present`);
   }
 });

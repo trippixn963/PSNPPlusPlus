@@ -90,15 +90,7 @@ export const EDGE_MARGIN = 8;
  */
 export const DRAG_THRESHOLD_PX = 4;
 
-/**
- * How long the host stays lifted out of its resting fade for an offer.
- *
- * Long enough to be read without being looked for, short enough that an offer
- * the user has chosen to ignore stops sitting at full opacity over their page.
- */
-export const ATTENTION_LIFT_MS = 12000;
-
-/** How long the resize stream must be quiet before the surface is re-docked. */
+/** How long the resize stream must be quiet before the chip is re-docked. */
 export const RESIZE_SETTLE_MS = 120;
 
 /** Used only when the element cannot be measured yet (never rendered). */
@@ -222,19 +214,7 @@ export function createIndicator({
   onSyncNow, onSettings, onReload, onUpdate,
   loadPosition = readPosition,
   savePosition = writePosition,
-  onPositionError = error => console.error('[psnppp] chip position:', error),
-  /**
-   * Mount inside this element instead of standing alone.
-   *
-   * Given PSNP+'s floating menu, the chip becomes a row in it and the MENU is
-   * what drags and docks — one surface on the page rather than two widgets
-   * that both float and both have to be moved out of the way separately.
-   *
-   * Null keeps the standalone chip, which is not a legacy path: it is what runs
-   * when PSNP+ fails to load or its menu is switched off, and losing every sync
-   * control in either case would be worse than having two widgets.
-   */
-  host = null
+  onPositionError = error => console.error('[psnppp] chip position:', error)
 } = {}) {
   installStyles(document);
 
@@ -293,52 +273,12 @@ export function createIndicator({
       `psnppp-tier-${current.tier}`,
       popping ? 'psnppp-pop' : '',
       panelOpen ? 'psnppp-open' : '',
-      snapping ? 'psnppp-dock-snap' : '',
-      hosted ? 'psnppp-hosted' : ''
+      snapping ? 'psnppp-dock-snap' : ''
     ].filter(Boolean).join(' ');
 
-    // Hosted, the offer has to get through PSNP+'s fade as well as our own.
-    // Their menu rests at opacity .2, and opacity MULTIPLIES down the tree, so
-    // the chip's own .55 landed at .11 — "Update ready" was being drawn, in
-    // gold, and was for practical purposes invisible until you hovered a faint
-    // box in the corner. `.psnppp-hosted` gives up our fade (the host owns it
-    // now); this lifts the host's for exactly the states that ask the user to
-    // do something, which is what `pops` already means. It is dropped again the
-    // moment the chip settles, so the menu goes back to receding.
-    // Also while the panel is open: the panel is opened FROM the menu, and a
-    // host that faded back to .2 the moment the pointer moved into the panel
-    // would leave the settings hanging off something half-gone.
-    if (hosted) liftHost(current.pops || panelOpen);
   };
 
-  // Cleared when the lift is renewed or dropped, so a settle that lands mid-way
-  // through an earlier lift cannot be undone by that lift's own expiry.
-  let attentionTimer = null;
 
-  /**
-   * Raise or drop the host's fade.
-   *
-   * The lift EXPIRES. An offer the user has decided not to take yet — an update
-   * they will install later — should not hold PSNP+'s menu at full opacity over
-   * their page for the rest of the session; that stops being a signal and starts
-   * being clutter. It recedes after ATTENTION_LIFT_MS and the state itself is
-   * unchanged, so the tier colour and the label are still there on hover, and
-   * arriving in the state again re-lifts it.
-   *
-   * The panel is the exception: while it is open the menu is being used, so the
-   * lift is held for as long as it stays open rather than timed out from under
-   * the user mid-interaction.
-   */
-  function liftHost(lift) {
-    clearTimeout(attentionTimer);
-    attentionTimer = null;
-    surface.classList?.[lift ? 'add' : 'remove']('psnppp-attention');
-    if (!lift || panelOpen) return;
-    attentionTimer = setTimeout(() => {
-      attentionTimer = null;
-      surface.classList?.remove('psnppp-attention');
-    }, ATTENTION_LIFT_MS);
-  }
 
   // --- position ------------------------------------------------------------
 
@@ -347,36 +287,15 @@ export function createIndicator({
     height: globalThis.window?.innerHeight ?? 0
   });
 
-  /**
-   * What actually moves on screen.
-   *
-   * Hosted, that is PSNP+'s menu; standalone, the chip itself. Every drag, dock,
-   * clamp and measurement below is written against this rather than against
-   * `element`, so the two modes share one implementation instead of a second
-   * copy that drifts. Measuring the chip while moving the menu would clamp the
-   * wrong box and let the menu leave the screen.
-   */
-  let surface = host ?? element;
-
-  /**
-   * Whether the chip is laid out as a row inside a host.
-   *
-   * Tracked state rather than a one-off `classList.add`, because paintClasses
-   * rebuilds `className` from scratch on every state change — an added class
-   * would survive exactly until the next sync, at which point the chip would
-   * silently go back to floating inside its own container.
-   */
-  let hosted = host != null;
-
-  const rectOf = () => (typeof surface.getBoundingClientRect === 'function'
-    ? surface.getBoundingClientRect()
+    const rectOf = () => (typeof element.getBoundingClientRect === 'function'
+    ? element.getBoundingClientRect()
     : null);
 
   const measure = () => {
     const rect = rectOf();
     return {
-      width: rect?.width || surface.offsetWidth || FALLBACK_SIZE.width,
-      height: rect?.height || surface.offsetHeight || FALLBACK_SIZE.height
+      width: rect?.width || element.offsetWidth || FALLBACK_SIZE.width,
+      height: rect?.height || element.offsetHeight || FALLBACK_SIZE.height
     };
   };
 
@@ -389,13 +308,13 @@ export function createIndicator({
 
   function apply(next) {
     position = next;
-    surface.style.left = `${next.left}px`;
-    surface.style.top = `${next.top}px`;
+    element.style.left = `${next.left}px`;
+    element.style.top = `${next.top}px`;
     // The stylesheet parks the chip with right/bottom, and PSNP+ parks its menu
     // with top/left. Either way both must be released, or the element is
     // anchored on opposing sides and left/top do nothing.
-    surface.style.right = 'auto';
-    surface.style.bottom = 'auto';
+    element.style.right = 'auto';
+    element.style.bottom = 'auto';
   }
 
   const place = (candidate, size = measure()) =>
@@ -484,7 +403,7 @@ export function createIndicator({
 
   /**
    * Resize fires in a continuous stream while a window is being dragged by its
-   * corner — tens of events a second, each one measuring the surface and
+   * corner — tens of events a second, each one measuring the chip and
    * writing to its style. Coalesced to one re-dock after the stream settles.
    *
    * A trailing timer rather than a leading one: the useful moment is the size
@@ -508,27 +427,13 @@ export function createIndicator({
   // a click too, and a chip in the `reload` state would reload the page the
   // instant you finished moving it.
   //
-  // Cleared again at the START of every gesture, and that is not belt-and-braces
-  // — it is the whole reason this survives being hosted. The flag is set on
-  // pointerup anywhere on the surface, but only the CHIP has a click listener to
-  // consume it. Drag the menu by its title and the click never lands on the
-  // chip, so the flag used to sit there armed and eat the next real click: one
-  // dead press on Sync after every time you moved the menu.
+  // Cleared again at the START of every gesture. A drag whose pointerup lands
+  // somewhere without a click listener leaves the flag armed with nothing to
+  // consume it, and it then spends itself on the next real press — one dead
+  // click on Sync after moving the chip.
   let suppressClick = false;
 
-  /**
-   * The drag listeners live on whatever is currently the SURFACE, not on the
-   * chip.
-   *
-   * Hosted, the surface is PSNP+'s menu, and the chip is one row inside it — so
-   * listening on the chip alone made the menu look draggable while only a thin
-   * strip of it responded. Everything else about the menu (its title, its
-   * padding, PSNP+'s own rows) did nothing, which reads as broken rather than
-   * as a small hit area.
-   *
-   * Clicks still work: a pointerdown on the chip bubbles to the surface, and the
-   * DRAG_THRESHOLD_PX check below is what separates a click from a drag.
-   */
+  /** DRAG_THRESHOLD_PX below is what separates a click from a drag. */
   const onPointerDown = event => {
     // Left button / touch / pen only. `button` is undefined on synthetic events
     // in the tests, which is treated as the primary button.
@@ -563,22 +468,19 @@ export function createIndicator({
    *
    * Deliberately not on pointerdown. A captured pointer has its compatibility
    * mouse events retargeted to the CAPTURE TARGET, and `click` is dispatched at
-   * the common ancestor of the retargeted mousedown/mouseup — so with the menu
-   * holding capture, a press on the chip delivered its click to the menu. The
-   * chip is where the click listener lives, so every hosted click went nowhere:
-   * "Update ready" did nothing, and so did Sync and Reload.
-   *
-   * Held off until past DRAG_THRESHOLD_PX, a plain click never involves capture
-   * at all and lands where it was aimed. A real drag still gets what capture is
-   * for — tracking off the edge of the surface without a listener on the host
-   * document — because by then the click is being suppressed anyway.
+   * the common ancestor of the retargeted mousedown/mouseup — which is a good
+   * way to lose a click to an element that has no listener for it. Held off
+   * until past DRAG_THRESHOLD_PX, a plain click never involves capture at all
+   * and lands where it was aimed; a real drag still gets what capture is for,
+   * tracking off the edge of the chip without a listener on the host document,
+   * because by then the click is being suppressed anyway.
    *
    * Best-effort: it throws for a pointer id the browser no longer considers
    * active, and that must not abort a drag that is otherwise fine.
    */
   const takeCapture = pointerId => {
     try {
-      surface.setPointerCapture?.(pointerId);
+      element.setPointerCapture?.(pointerId);
     } catch { /* capture is an optimisation, not a requirement */ }
   };
 
@@ -636,7 +538,7 @@ export function createIndicator({
     const { moved, pointerId, size } = drag;
     drag = null;
     try {
-      surface.releasePointerCapture?.(pointerId);
+      element.releasePointerCapture?.(pointerId);
     } catch { /* already released, or never captured */ }
     if (!commit || !moved) return;
     suppressClick = true;
@@ -646,22 +548,14 @@ export function createIndicator({
   const onPointerUp = endDrag;
   const onPointerCancel = event => endDrag(event, { commit: false });
 
-  /**
-   * Right-click anywhere on the surface opens the settings.
-   *
-   * On the surface rather than on the chip, for the same reason the drag is:
-   * hosted, the chip is one row and the menu is the object. A menu you can drag
-   * from anywhere but can only right-click on one strip of is a menu with an
-   * invisible seam down it.
-   */
+  /** Right-click opens the settings. */
   const onContextMenu = event => {
     event.preventDefault?.();
     onSettings();
   };
 
-  // Every listener that belongs to the SURFACE, in one list, so binding and
-  // unbinding cannot fall out of step — the previous pair was written out twice
-  // and a fifth listener would have had to be remembered in both.
+  // Every listener the chip installs on itself, in one list, so binding and
+  // unbinding cannot fall out of step.
   const SURFACE_EVENTS = [
     ['pointerdown', onPointerDown],
     ['pointermove', onPointerMove],
@@ -677,7 +571,7 @@ export function createIndicator({
     for (const [type, handler] of SURFACE_EVENTS) target.removeEventListener?.(type, handler);
   };
 
-  bindDrag(surface);
+  bindDrag(element);
 
   // --- clicks --------------------------------------------------------------
 
@@ -771,96 +665,25 @@ export function createIndicator({
     restorePosition,
     handleResize,
     /**
-     * Move the chip into `newHost` and make THAT the thing that floats.
-     *
-     * Exists because the host is not known when the chip is built: PSNP+ inserts
-     * its floating menu during its own DOMContentLoaded pass, well after the chip
-     * has to be on screen reporting state. Without this, the chip could be moved
-     * into the menu but `surface` would still point at the chip — so dragging
-     * would try to move an element the stylesheet has just made static, and the
-     * menu would sit there while nothing happened.
-     *
-     * Re-clamps immediately: a position saved for a small chip can put a much
-     * wider menu off the edge of the screen.
-     */
-    rehost(newHost) {
-      if (newHost == null || newHost === surface) return false;
-      try {
-        // Hand the drag over with the position. Without this the listeners stay
-        // on the chip while the MENU is what moves, so only a thin row of a much
-        // larger box responds to a grab — which reads as broken, not as a small
-        // hit area.
-        unbindDrag(surface);
-        newHost.appendChild(element);
-        bindDrag(newHost);
-        // Release the positioning the chip had applied to ITSELF, or it keeps
-        // its old fixed coordinates as a static row inside the menu.
-        element.style.left = '';
-        element.style.top = '';
-        element.style.right = '';
-        element.style.bottom = '';
-        // Both BEFORE paintClasses: it now writes to the surface as well as to
-        // the chip, so painting against the old one would put the attention
-        // class on the chip and leave the host untouched.
-        hosted = true;
-        surface = newHost;
-        paintClasses();
-        // Re-derive which edge we are actually near, and re-dock onto it.
-        //
-        // `dockSide` started as 'right' because that is the corner the CSS parks
-        // the standalone chip in. PSNP+ parks its menu at top-LEFT, so the
-        // moment the menu becomes the surface that default is simply false — and
-        // the settings panel opens on the side away from `dockSide`, so it was
-        // being flung to the opposite edge of the screen from the menu it
-        // belongs to. Measured from the live rect rather than assumed.
-        //
-        // applyDocked, not place: a `left` saved for a ~90px chip does not put a
-        // ~220px menu flush against anything. Docking recomputes it from the
-        // menu's own width, so it lands on the edge instead of near it.
-        const rect = rectOf();
-        const size = measure();
-        const view = viewport();
-        const side = rect != null
-          ? sideFor(rect.left, size.width, view.width)
-          : dockSide;
-        applyDocked(side, position?.top ?? rect?.top ?? EDGE_INSET_PX, size);
-        return true;
-      } catch (error) {
-        onPositionError(error);
-        return false;
-      }
-    },
-    /**
-     * What actually floats on the page — the menu when hosted, the chip itself
-     * otherwise.
-     *
-     * The settings panel anchors to this rather than to `element`. Hosted, the
-     * chip is one full-width row somewhere inside the menu, so measuring it gave
-     * the panel the row's box and the panel hung off a slice of the menu instead
-     * of off the menu.
-     */
-    /**
      * Release every listener and timer this installed.
      *
-     * Nothing in the userscript calls this today — the chip lives as long as the
-     * page does. It exists because the resize listener is on `window`, which
-     * outlives the chip: a test that builds a chip per case was leaving one
-     * behind on every one of them, all still firing, all still measuring
-     * detached elements. A widget that cannot be taken down is a leak waiting
-     * for a caller.
+     * Nothing in the userscript calls this — the chip lives as long as the page
+     * does. It exists because the resize listener is on `window`, which outlives
+     * the chip: a test that builds a chip per case was leaving one behind on
+     * every one of them, all still firing, all still measuring detached
+     * elements. A widget that cannot be taken down is a leak waiting for a
+     * caller.
      */
     destroy() {
       try {
         globalThis.window?.removeEventListener?.('resize', onResize);
-        unbindDrag(surface);
+        unbindDrag(element);
         clearTimeout(resizeTimer);
         clearTimeout(snapTimer);
-        clearTimeout(attentionTimer);
       } catch (error) {
         onPositionError(error);
       }
     },
-    getSurface: () => surface,
     /** Where the chip is, or null while it still sits in its default corner. */
     getPosition: () => (position == null ? null : { ...position }),
     /**
