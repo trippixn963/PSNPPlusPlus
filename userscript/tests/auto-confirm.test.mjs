@@ -395,13 +395,13 @@ test('declining on an unknown title says so, naming near misses', () => {
   // this the dialog just appears, indistinguishable from the override never
   // having installed at all.
   const logged = [];
-  const original = console.debug;
-  console.debug = (...args) => logged.push(args);
+  const original = console.warn;
+  console.warn = (...args) => logged.push(args);
   try {
     const known = new Set(['Crysis 2 Remastered', 'Bloodborne']);
     assert.equal(shouldAutoConfirm('Are you sure you want to remove Crysis 2?', known), false);
   } finally {
-    console.debug = original;
+    console.warn = original;
   }
   assert.equal(logged.length, 1);
   const [message, detail] = logged[0];
@@ -410,14 +410,18 @@ test('declining on an unknown title says so, naming near misses', () => {
   assert.deepEqual(detail.nearMatches, ['Crysis 2 Remastered'], 'the likely culprit is surfaced');
 });
 
-test('a dialog that is not the remove prompt logs nothing', () => {
+test('an unrecognised dialog is reported as such, not silently ignored', () => {
+  // "the prompt still appears" and "that is not the prompt we match" look
+  // identical from the outside unless this says which one happened.
   const logged = [];
-  const original = console.debug;
-  console.debug = (...args) => logged.push(args);
+  const original = console.warn;
+  console.warn = (...args) => logged.push(args);
   try {
     shouldAutoConfirm('Are you sure you want to clear all PSNP+ data?', new Set(['Bloodborne']));
   } finally {
-    console.debug = original;
+    console.warn = original;
   }
-  assert.equal(logged.length, 0, 'only the remove prompt is worth explaining');
+  assert.equal(logged.length, 1);
+  assert.match(logged[0][0], /not the remove prompt/);
+  assert.match(logged[0][1], /clear all PSNP\+ data/);
 });

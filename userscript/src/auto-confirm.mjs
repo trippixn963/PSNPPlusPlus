@@ -67,8 +67,16 @@ const REMOVE_SUFFIX = '?';
  */
 export function extractRemovedTitle(message) {
   if (typeof message !== 'string') return null;
-  if (!message.startsWith(REMOVE_PREFIX)) return null;
-  if (!message.endsWith(REMOVE_SUFFIX)) return null;
+  if (!message.startsWith(REMOVE_PREFIX) || !message.endsWith(REMOVE_SUFFIX)) {
+    // Every confirm PSNP+ raises passes through here, so this is the only place
+    // that can report a dialog we did not recognise AT ALL — as opposed to one
+    // we recognised and declined. Without it, "the prompt still appears" and
+    // "the prompt is not the one we match" look identical from the outside.
+    try {
+      console.warn('[psnppp] confirm seen, not the remove prompt:', JSON.stringify(message));
+    } catch { /* a console that throws must not break PSNP+'s click handler */ }
+    return null;
+  }
   const title = message.slice(REMOVE_PREFIX.length, -REMOVE_SUFFIX.length);
   if (title === '') return null;
   if (title.includes('\n') || title.includes('\r')) return null;
@@ -114,7 +122,12 @@ export function shouldAutoConfirm(message, knownTitles) {
       const b = title.toLowerCase().trim();
       return a === b || a.includes(b) || b.includes(a);
     });
-    console.debug(
+    // warn, NOT debug: console.debug lands on Chrome DevTools' "Verbose" level,
+    // which is hidden by default, so the first version of this line printed
+    // faithfully and was invisible to the person it was written for. This fires
+    // only when the remove prompt appeared despite the feature being on, which
+    // is precisely the anomaly worth surfacing.
+    console.warn(
       '[psnppp] not auto-confirming: the dialog names a title that is not in any list.',
       { dialogTitle: title, knownCount: known.length, nearMatches: near.slice(0, 5) }
     );
