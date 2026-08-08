@@ -8,8 +8,7 @@
   "scripts": {
     "test": "node --test 'userscript/tests/*.test.mjs'",
     "build": "node userscript/build.mjs",
-    "release": "bash scripts/release.sh",
-    "build:all-in-one": "node userscript/build-all-in-one.mjs"
+    "release": "bash scripts/release.sh"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

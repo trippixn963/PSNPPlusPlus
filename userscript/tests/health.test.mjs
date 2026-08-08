@@ -149,3 +149,33 @@ test('the warn threshold is what actually gates the message', () => {
   assert.equal(checkHealth({ storage, doc: fakeDoc(), warnBytes: 500 }).storageTight, true);
   assert.equal(STORAGE_WARN_BYTES, 4 * 1024 * 1024);
 });
+
+test('two PSNP+ badges means both copies are running', () => {
+  // PSNP++ now ships PSNP+. If the standalone is still enabled, both write to
+  // the same keys independently and can overwrite each other's list edits.
+  const doc = {
+    readyState: 'complete',
+    querySelector: sel => (sel === 'div.logo'
+      ? { textContent: 'PSNProfilesPSNP+ v11.14PSNP+ v11.14' } : null)
+  };
+  assert.equal(checkPsnpPlusPresent(doc), 'duplicate');
+});
+
+test('the duplicate warning tells the user what to actually do', () => {
+  const storage = { length: 0, key: () => null, getItem: () => null };
+  const doc = {
+    readyState: 'complete',
+    querySelector: () => ({ textContent: 'PSNP+ v11.14PSNP+ v11.14' })
+  };
+  const message = describeHealth(checkHealth({ storage, doc }));
+  assert.match(message, /Two copies of PSNP\+/);
+  assert.match(message, /disable the separate PSNP\+ script/);
+});
+
+test('one badge is still just running', () => {
+  const doc = {
+    readyState: 'complete',
+    querySelector: () => ({ textContent: 'PSNProfilesPSNP+ v11.14' })
+  };
+  assert.equal(checkPsnpPlusPresent(doc), 'running');
+});

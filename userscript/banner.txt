@@ -2,10 +2,12 @@
 // @name         PSNP++
 // @namespace    psnppp.trippixn
 // @version      {{VERSION}}
-// @description  Two-way cross-device sync for PSNP+ game lists
+// @description  PSNP+ with local patches, plus two-way cross-device sync for your game lists
 // @author       Trippixn
 // @match        https://psnprofiles.com/*
 // @run-at       document-start
+// @inject-into  page
+// @sandbox      raw
 // @noframes
 // @grant        GM_xmlhttpRequest
 // @grant        GM.getValue
@@ -13,6 +15,8 @@
 // @grant        GM.deleteValue
 // @grant        unsafeWindow
 // @connect      trippixn.com
+// @connect      psnp-plus.huskycode.dev
+// @connect      platprices.com
 // @downloadURL  https://trippixn.com/psnppp.user.js
 // @updateURL    https://trippixn.com/psnppp.meta.js
 // ==/UserScript==

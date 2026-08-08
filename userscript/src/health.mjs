@@ -74,11 +74,30 @@ export function checkPsnpPlusPresent(doc) {
     if (container == null) return 'unknown';
 
     const text = typeof container.textContent === 'string' ? container.textContent : '';
-    return text.includes(BADGE_PREFIX) ? 'running' : 'missing';
+    const badges = countOccurrences(text, BADGE_PREFIX);
+    if (badges === 0) return 'missing';
+
+    // PSNP++ now SHIPS PSNP+. If the standalone PSNP+ is still enabled in the
+    // userscript manager, both copies run: two sets of controls, and two
+    // independent writers to the same `psnpp-*` keys. That second part is the
+    // dangerous half — the two can overwrite each other's list edits with no
+    // error anywhere. Each copy stamps its own badge, so counting them is the
+    // cheapest possible detection.
+    return badges > 1 ? 'duplicate' : 'running';
   } catch {
     return 'unknown';
   }
 }
+
+const countOccurrences = (haystack, needle) => {
+  let count = 0;
+  let at = haystack.indexOf(needle);
+  while (at !== -1) {
+    count += 1;
+    at = haystack.indexOf(needle, at + needle.length);
+  }
+  return count;
+};
 
 /**
  * How many bytes PSNP+ and PSNP++ are holding in localStorage, per key.
@@ -156,6 +175,14 @@ const mb = bytes => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
  */
 export function describeHealth(health) {
   if (health == null) return null;
+  if (health.psnpPlus === 'duplicate') {
+    // First, and worded as an instruction rather than an observation: two PSNP+
+    // instances write to the same storage independently, so this is the one
+    // health state that can actually cost the user data if left alone.
+    return 'Two copies of PSNP+ are running. PSNP++ now includes PSNP+ — '
+      + 'disable the separate PSNP+ script in your userscript manager, or the two '
+      + 'will overwrite each other\'s list edits.';
+  }
   if (health.psnpPlus === 'missing') {
     return 'PSNP+ did not load on this page. Your lists are safe, but PSNP+ is not running.';
   }
