@@ -444,6 +444,37 @@ ${MENU_SELECTOR} .button:focus-visible {
   outline-offset: 1px;
 }
 
+/*
+ * PSNP+'s search-example chips, on the guide search page.
+ *
+ * They are CLICKABLE — clicking one fills the search box with that query — but
+ * PSNP+ styles them background: lightgrey with no colour and no hover, so
+ * they read as inert sample text. The affordance was missing, not the styling.
+ *
+ * code.psnpp-code (0,1,1) rather than .psnpp-code (0,1,0) on purpose: PSNP+
+ * injects its stylesheet when the page runs, which is AFTER ours, so at equal
+ * specificity theirs would win on order. One extra element in the selector wins
+ * it outright without an !important and without patching their sheet. All five
+ * uses are on a <code> element, so nothing is missed by requiring it.
+ */
+code.psnpp-code {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid ${t.hairline};
+  border-radius: 2px;
+  background: ${t.sunken};
+  color: ${t.data};
+  font-family: ${TYPE.data};
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color .14s ease, color .14s ease;
+}
+
+code.psnpp-code:hover {
+  border-color: ${t.bronzeDim};
+  color: ${t.gold};
+}
+
 /* ---- the panel --------------------------------------------------------- */
 
 #${PANEL_ID} {

@@ -23,7 +23,7 @@
 
 
 /* ====================================================================
-   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 5 local patch(es): menu-hover-in-css, rename-floating-menu, skip-remove-confirm, theme-floating-menu, theme-psnp-plus-accent
+   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 7 local patch(es): menu-hover-in-css, menu-no-content-toggle, menu-refresh-visible, rename-floating-menu, skip-remove-confirm, theme-floating-menu, theme-psnp-plus-accent
    ==================================================================== */
 
 /******/ (() => { // webpackBootstrap
@@ -5904,13 +5904,13 @@ class Profile {
         });
         menuWrapper.append(updateProfileButton);
         const refreshText = _util_J__WEBPACK_IMPORTED_MODULE_0__.J.q('div.sidebar > span.floatr > small').getText().replace(/\s\s+/g, ' ').split(' • ');
-        const refreshContainer = _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('span').hide();
+        const refreshContainer = _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('span');
         if (!refreshText.some(t => t == null)) {
             menuWrapper.append(refreshContainer);
             refreshContainer.append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('br'), _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('small').setText(refreshText[0]).setAttribute('style', 'font-size: 10px;'));
             refreshContainer.append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('br'), _util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('small').setText(refreshText[1]).setAttribute('style', 'font-size: 10px;'));
         }
-        const floatingMenu = new _ui_FloatingMenu__WEBPACK_IMPORTED_MODULE_1__.FloatingMenu(menuWrapper, () => refreshContainer.show(), () => refreshContainer.hide());
+        const floatingMenu = new _ui_FloatingMenu__WEBPACK_IMPORTED_MODULE_1__.FloatingMenu(menuWrapper);
         floatingMenu.insert();
     }
     _appendNavigation() {
@@ -15020,6 +15020,37 @@ ${MENU_SELECTOR} .button.grey:hover {
 ${MENU_SELECTOR} .button:focus-visible {
   outline: 2px solid ${t.platinum};
   outline-offset: 1px;
+}
+
+/*
+ * PSNP+'s search-example chips, on the guide search page.
+ *
+ * They are CLICKABLE \u2014 clicking one fills the search box with that query \u2014 but
+ * PSNP+ styles them background: lightgrey with no colour and no hover, so
+ * they read as inert sample text. The affordance was missing, not the styling.
+ *
+ * code.psnpp-code (0,1,1) rather than .psnpp-code (0,1,0) on purpose: PSNP+
+ * injects its stylesheet when the page runs, which is AFTER ours, so at equal
+ * specificity theirs would win on order. One extra element in the selector wins
+ * it outright without an !important and without patching their sheet. All five
+ * uses are on a <code> element, so nothing is missed by requiring it.
+ */
+code.psnpp-code {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid ${t.hairline};
+  border-radius: 2px;
+  background: ${t.sunken};
+  color: ${t.data};
+  font-family: ${TYPE.data};
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color .14s ease, color .14s ease;
+}
+
+code.psnpp-code:hover {
+  border-color: ${t.bronzeDim};
+  color: ${t.gold};
 }
 
 /* ---- the panel --------------------------------------------------------- */
