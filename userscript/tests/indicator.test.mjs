@@ -1083,3 +1083,37 @@ test('rehosting re-derives the dock side from where the menu actually is', () =>
     uninstallFakeWindow();
   }
 });
+
+test('a plain press takes no pointer capture, so the click lands on the chip', () => {
+  // Chrome retargets a captured pointer's compatibility mouse events to the
+  // capture target, and dispatches `click` at the common ancestor of the
+  // retargeted pair. With the menu capturing on pointerdown, a press on the chip
+  // delivered its click to the menu — and the chip is where the click listener
+  // lives, so every hosted click went nowhere. Update ready, Sync, Reload: all
+  // of them dead.
+  installFakeWindow({ innerWidth: 1200, innerHeight: 800 });
+  installFakeDocument();
+  try {
+    const { calls, indicator } = build();
+    const menu = globalThis.document.createElement('div');
+    menu.rect = { left: 20, top: 20, width: 220, height: 120, right: 240, bottom: 140 };
+    let captured = null;
+    menu.setPointerCapture = id => { captured = id; };
+    menu.releasePointerCapture = () => { captured = null; };
+    indicator.rehost(menu);
+
+    menu.dispatch('pointerdown', { button: 0, pointerId: 7, clientX: 50, clientY: 50 });
+    assert.equal(captured, null, 'a press alone captures nothing');
+    indicator.element.dispatch('click');
+    assert.equal(calls.sync, 1, 'so the click reaches the chip');
+
+    // A real drag must still capture — that is what tracks a pointer dragged
+    // off the edge of the surface without a listener on the host document.
+    menu.dispatch('pointerdown', { button: 0, pointerId: 8, clientX: 50, clientY: 50 });
+    menu.dispatch('pointermove', { pointerId: 8, clientX: 250, clientY: 250 });
+    assert.equal(captured, 8, 'crossing the threshold takes capture');
+  } finally {
+    uninstallFakeDocument();
+    uninstallFakeWindow();
+  }
+});

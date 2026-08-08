@@ -15392,8 +15392,10 @@ ${litTiers} {
         size,
         moved: false
       };
+    };
+    const takeCapture = (pointerId) => {
       try {
-        surface.setPointerCapture?.(event.pointerId);
+        surface.setPointerCapture?.(pointerId);
       } catch {
       }
     };
@@ -15402,6 +15404,7 @@ ${litTiers} {
       const dx = (event.clientX ?? 0) - drag.originX;
       const dy = (event.clientY ?? 0) - drag.originY;
       if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+      if (!drag.moved) takeCapture(drag.pointerId);
       drag.moved = true;
       place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
     };

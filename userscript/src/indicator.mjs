@@ -494,15 +494,30 @@ export function createIndicator({
       size,
       moved: false
     };
-    // Capture keeps the whole gesture on the surface, so no listener of ours
-    // ever lands on the host document — a fast drag off the edge still tracks,
-    // and nothing we install can interfere with the page's own pointer handling.
-    // It goes on the SURFACE, which is where the listeners are; capturing on the
-    // chip instead would leave the moves reaching us only by bubbling.
-    // Best-effort: it throws for a pointer id the browser no longer considers
-    // active, and that must not abort a drag that is otherwise fine.
+    // Capture is NOT taken here. See takeCapture, below.
+  };
+
+  /**
+   * Take pointer capture, once the gesture is genuinely a drag.
+   *
+   * Deliberately not on pointerdown. A captured pointer has its compatibility
+   * mouse events retargeted to the CAPTURE TARGET, and `click` is dispatched at
+   * the common ancestor of the retargeted mousedown/mouseup — so with the menu
+   * holding capture, a press on the chip delivered its click to the menu. The
+   * chip is where the click listener lives, so every hosted click went nowhere:
+   * "Update ready" did nothing, and so did Sync and Reload.
+   *
+   * Held off until past DRAG_THRESHOLD_PX, a plain click never involves capture
+   * at all and lands where it was aimed. A real drag still gets what capture is
+   * for — tracking off the edge of the surface without a listener on the host
+   * document — because by then the click is being suppressed anyway.
+   *
+   * Best-effort: it throws for a pointer id the browser no longer considers
+   * active, and that must not abort a drag that is otherwise fine.
+   */
+  const takeCapture = pointerId => {
     try {
-      surface.setPointerCapture?.(event.pointerId);
+      surface.setPointerCapture?.(pointerId);
     } catch { /* capture is an optimisation, not a requirement */ }
   };
 
@@ -511,6 +526,9 @@ export function createIndicator({
     const dx = (event.clientX ?? 0) - drag.originX;
     const dy = (event.clientY ?? 0) - drag.originY;
     if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+    // The threshold has just been crossed for the first time: this is a drag,
+    // not a click, so it is now safe to capture.
+    if (!drag.moved) takeCapture(drag.pointerId);
     drag.moved = true;
     place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
   };
