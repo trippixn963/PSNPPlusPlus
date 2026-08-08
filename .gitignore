@@ -6,3 +6,4 @@ sidecar/state.db-shm
 sidecar/.env
 __pycache__/
 .DS_Store
+dist/.psnppp-inner.js
