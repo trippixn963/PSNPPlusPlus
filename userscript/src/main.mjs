@@ -29,6 +29,7 @@ import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sy
 import { checkHealth, describeHealth } from './health.mjs';
 import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-history.mjs';
 import { checkWatch, describeWatch } from './watch.mjs';
+import { attachMenuEntryWhenReady } from './menu.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
@@ -900,6 +901,12 @@ export async function start() {
   // (changed === false) and writes nothing. Net cost is one extra network
   // round-trip per user edit — bounded, not free, and not worth "fixing" by
   // e.g. reaching into watchLists's absorb state from here.
+  // A shortcut into PSNP+'s own menu. Fire-and-forget and never awaited: it
+  // resolves null when the menu is switched off in PSNP+'s settings or PSNP+
+  // did not load, and neither is a reason to delay the chip. The chip remains
+  // the thing that actually reports state.
+  void attachMenuEntryWhenReady(document, { onClick: () => { void sync(); } });
+
   watchLists(window.localStorage, () => {
     clearTimeout(timer);
     timer = setTimeout(() => { void sync(); }, CHANGE_DEBOUNCE_MS);

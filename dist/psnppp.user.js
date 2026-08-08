@@ -23,7 +23,7 @@
 
 
 /* ====================================================================
-   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 1 local patch(es): skip-remove-confirm
+   PSNP+ v11.14 by HusKyCode — vendored verbatim, with 4 local patch(es): rename-floating-menu, skip-remove-confirm, theme-floating-menu, theme-psnp-plus-accent
    ==================================================================== */
 
 /******/ (() => { // webpackBootstrap
@@ -2491,7 +2491,7 @@ const COLOR_DARK_ORANGE = '#db8320';
 const COLOR_LIGHT_ORANGE = '#fbe2bf';
 const COLOR_DARK_YELLOW = '#c5c500';
 const COLOR_LIGHT_YELLOW = '#ffffed';
-const COLOR_PURPLE = '#5865f2';
+const COLOR_PURPLE = '#a77b34';
 const HASH_PROFILE = '#profile';
 const HASH_GAME_LISTS = '#gamelists';
 const HASH_MY_SERIES = '#myseries';
@@ -5251,12 +5251,15 @@ class FloatingMenu extends _util_J__WEBPACK_IMPORTED_MODULE_0__.JC {
             'top: 20px;',
             'left: 20px;',
             'z-index: 2147483647;',
-            'background-color: #292b2d;',
-            'padding: 5px;',
-            'border: 1px solid #646464;',
-            'opacity: 0.2;',
-            'color: white;',
-            'border-radius: 5px;'
+            'background-color: #1b1d1f;',
+            'padding: 8px 10px;',
+            'border: 1px solid #26292b;',
+            'opacity: 0.55;',
+            'color: #cfd2d5;',
+            'border-radius: 6px;',
+            'font-size: 12px;',
+            'letter-spacing: 0.04em;',
+            'box-shadow: 0 2px 10px rgba(0,0,0,.45);'
         ].join(' ');
         this._content = content;
         this._onShow = onShow;
@@ -5274,7 +5277,7 @@ class FloatingMenu extends _util_J__WEBPACK_IMPORTED_MODULE_0__.JC {
             el.setCss('opacity', '0.2');
             this._onHide();
         })
-            .append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('div').append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('b').setText('PSNP+ Menu')));
+            .append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('div').append(_util_J__WEBPACK_IMPORTED_MODULE_0__.J.c('b').setText('PSNP++ Menu')));
     }
     insert() {
         if (new _features_settings_SettingsStorage__WEBPACK_IMPORTED_MODULE_1__.SettingsStorage().get('hideFloatingMenus')) {
@@ -16759,6 +16762,82 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return `${next.title || "A game"} in your lists shuts down ${when}${rest}.`;
   }
 
+  // userscript/src/menu.mjs
+  var MENU_SELECTOR = ".psnpp-floating-menu";
+  var ENTRY_ID = "psnppp-menu-entry";
+  var WAIT_MS = 8e3;
+  function attachMenuEntry(doc, { onClick, label = "Sync now" } = {}) {
+    try {
+      const menu = doc?.querySelector?.(MENU_SELECTOR);
+      if (menu == null) return null;
+      const existing = doc.getElementById?.(ENTRY_ID);
+      if (existing != null) {
+        return { element: existing, setLabel: (text) => {
+          existing.textContent = text;
+        } };
+      }
+      const row = doc.createElement("div");
+      row.id = ENTRY_ID;
+      row.textContent = label;
+      row.style.cssText = [
+        "margin-top:6px",
+        `border-top:1px solid ${TOKENS.hairline}`,
+        "padding-top:6px",
+        "cursor:pointer",
+        `color:${TOKENS.gold}`,
+        "user-select:none"
+      ].join(";");
+      row.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          onClick?.();
+        } catch (error) {
+          console.error("[psnppp] menu action failed:", error);
+        }
+      });
+      menu.appendChild(row);
+      return { element: row, setLabel: (text) => {
+        row.textContent = text;
+      } };
+    } catch (error) {
+      console.error("[psnppp] could not add the menu entry:", error);
+      return null;
+    }
+  }
+  function attachMenuEntryWhenReady(doc, options = {}, { waitMs = WAIT_MS } = {}) {
+    return new Promise((resolve) => {
+      try {
+        const immediate = attachMenuEntry(doc, options);
+        if (immediate != null) {
+          resolve(immediate);
+          return;
+        }
+        if (typeof MutationObserver !== "function" || doc?.body == null) {
+          resolve(null);
+          return;
+        }
+        let settled = false;
+        const finish = (handle) => {
+          if (settled) return;
+          settled = true;
+          observer.disconnect();
+          clearTimeout(timer);
+          resolve(handle);
+        };
+        const observer = new MutationObserver(() => {
+          const handle = attachMenuEntry(doc, options);
+          if (handle != null) finish(handle);
+        });
+        observer.observe(doc.body, { childList: true, subtree: true });
+        const timer = setTimeout(() => finish(null), waitMs);
+      } catch (error) {
+        console.error("[psnppp] could not watch for the menu:", error);
+        resolve(null);
+      }
+    });
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
@@ -17185,6 +17264,9 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
       }
     }
+    void attachMenuEntryWhenReady(document, { onClick: () => {
+      void sync();
+    } });
     watchLists(window.localStorage, () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
