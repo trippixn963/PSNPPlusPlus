@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      1.8.0
+// @version      1.8.1
 // @description  Two-way cross-device sync for PSNP+ game lists
 // @author       Trippixn
 // @match        https://psnprofiles.com/*
@@ -358,8 +358,13 @@
   var REMOVE_SUFFIX = "?";
   function extractRemovedTitle(message) {
     if (typeof message !== "string") return null;
-    if (!message.startsWith(REMOVE_PREFIX)) return null;
-    if (!message.endsWith(REMOVE_SUFFIX)) return null;
+    if (!message.startsWith(REMOVE_PREFIX) || !message.endsWith(REMOVE_SUFFIX)) {
+      try {
+        console.warn("[psnppp] confirm seen, not the remove prompt:", JSON.stringify(message));
+      } catch {
+      }
+      return null;
+    }
     const title = message.slice(REMOVE_PREFIX.length, -REMOVE_SUFFIX.length);
     if (title === "") return null;
     if (title.includes("\n") || title.includes("\r")) return null;
@@ -378,7 +383,7 @@
         const b = title.toLowerCase().trim();
         return a === b || a.includes(b) || b.includes(a);
       });
-      console.debug(
+      console.warn(
         "[psnppp] not auto-confirming: the dialog names a title that is not in any list.",
         { dialogTitle: title, knownCount: known.length, nearMatches: near.slice(0, 5) }
       );
