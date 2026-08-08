@@ -123,15 +123,53 @@ test('an unmeasurable chip falls back to the stylesheet corner regardless of sid
   }
 });
 
-test('the vertical placement (above/below the chip) is unaffected by which side it opens toward', () => {
+test('the panel is top-aligned to its anchor, not hung below it', () => {
   installFakeDocument();
   installFakeWindow({ width: 1280, height: 800 });
   try {
-    // Plenty of room below — opens below the chip, same as before docking existed.
     const anchor = anchorAt({ left: EDGE_INSET_PX, top: 100 });
     const panel = createSettingsPanel({ anchor, side: 'left' });
-    assert.equal(panel.element.style.top, `${100 + 26 + EDGE_INSET_PX}px`);
+    assert.equal(panel.element.style.top, '100px', 'aligned to the anchor top');
     assert.equal(panel.element.style.bottom, 'auto');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('a taller anchor does not move the panel', () => {
+  // The bug: PSNP+'s menu GROWS ON HOVER (the profile page reveals a refresh
+  // container from _onShow). The panel used to hang off rect.bottom, so it was
+  // placed against the expanded height and left stranded in mid-air the moment
+  // the pointer left and the menu collapsed. Its top edge never moved.
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const collapsed = anchorAt({ left: EDGE_INSET_PX, top: 100 });
+    const shut = createSettingsPanel({ anchor: collapsed, side: 'left' });
+
+    const expanded = anchorAt({ left: EDGE_INSET_PX, top: 100 });
+    expanded.rect = { ...expanded.rect, height: 220, bottom: 320 };
+    const open = createSettingsPanel({ anchor: expanded, side: 'left' });
+
+    assert.equal(open.element.style.top, shut.element.style.top,
+      'the same anchor at the same top places the panel identically, expanded or not');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('an anchor near the bottom of the screen still gets a panel that fits', () => {
+  installFakeDocument();
+  installFakeWindow({ width: 1280, height: 800 });
+  try {
+    const anchor = anchorAt({ left: EDGE_INSET_PX, top: 780 });
+    const panel = createSettingsPanel({ anchor, side: 'left' });
+    const top = Number.parseInt(panel.element.style.top, 10);
+    assert.ok(Number.isFinite(top), 'a real number');
+    assert.ok(top >= EDGE_INSET_PX && top <= 800 - EDGE_INSET_PX,
+      `clamped onto the screen, got ${top}`);
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();

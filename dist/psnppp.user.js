@@ -16074,14 +16074,10 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       const desiredLeft = isDockedLeft ? rect.right + EDGE_INSET_PX : rect.left - width - EDGE_INSET_PX;
       element.style.left = `${clampAxis(desiredLeft, width, view.width, EDGE_INSET_PX)}px`;
       element.style.right = "auto";
-      const spaceBelow = view.height - rect.bottom;
-      if (spaceBelow >= rect.top) {
-        element.style.top = `${Math.round(rect.bottom + EDGE_INSET_PX)}px`;
-        element.style.bottom = "auto";
-      } else {
-        element.style.bottom = `${Math.round(view.height - rect.top + EDGE_INSET_PX)}px`;
-        element.style.top = "auto";
-      }
+      const measured = [element.offsetHeight, element.getBoundingClientRect?.()?.height].find((value) => Number.isFinite(value) && value > 0);
+      const height = measured ?? 0;
+      element.style.top = `${Math.round(clampAxis(rect.top, height, view.height, EDGE_INSET_PX))}px`;
+      element.style.bottom = "auto";
     }
     return { element, close, showMessage };
   }

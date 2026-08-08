@@ -501,16 +501,31 @@ export function createSettingsPanel({
     element.style.left = `${clampAxis(desiredLeft, width, view.width, EDGE_INSET_PX)}px`;
     element.style.right = 'auto';
 
-    // Measured, not assumed: the chip is draggable, so "above and to the left"
-    // would put the panel off-screen the moment the chip is parked at the top.
-    const spaceBelow = view.height - rect.bottom;
-    if (spaceBelow >= rect.top) {
-      element.style.top = `${Math.round(rect.bottom + EDGE_INSET_PX)}px`;
-      element.style.bottom = 'auto';
-    } else {
-      element.style.bottom = `${Math.round(view.height - rect.top + EDGE_INSET_PX)}px`;
-      element.style.top = 'auto';
-    }
+    // Vertically: TOP-ALIGNED to the anchor, never hung below it.
+    //
+    // The panel already sits BESIDE the anchor horizontally, so hanging it below
+    // as well placed it diagonally off a corner — beside and below at once, which
+    // is neither.
+    //
+    // The real reason, though, is that the anchor's BOTTOM EDGE MOVES. PSNP+'s
+    // menu grows on hover: the profile page passes an _onShow that reveals a
+    // refresh container inside it. A panel measured against `rect.bottom` while
+    // the menu was expanded was left stranded in mid-air the moment the pointer
+    // left and the menu collapsed back — a gap of whatever the refresh container
+    // happens to be tall, with nothing in it.
+    //
+    // The top edge does not move when a box grows downward, so aligning to it is
+    // stable under exactly the change that broke the old placement. Clamped, so
+    // an anchor parked near the bottom of the screen still gets a panel that
+    // fits: the clamp pulls it up rather than letting it run off.
+    // Either measurement, whichever the environment offers; 0 is a fine answer
+    // for a panel that has not been laid out, since clampAxis treats a
+    // zero-height box as one that fits anywhere.
+    const measured = [element.offsetHeight, element.getBoundingClientRect?.()?.height]
+      .find(value => Number.isFinite(value) && value > 0);
+    const height = measured ?? 0;
+    element.style.top = `${Math.round(clampAxis(rect.top, height, view.height, EDGE_INSET_PX))}px`;
+    element.style.bottom = 'auto';
   }
 
   return { element, close, showMessage };
