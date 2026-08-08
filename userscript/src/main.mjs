@@ -31,10 +31,12 @@ import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-hi
 import { checkWatch, describeWatch } from './watch.mjs';
 import { findMenuWhenReady } from './menu.mjs';
 import { installStorageGuard, describeStorageFailure } from './storage-guard.mjs';
+import { syncCompare, emptyCompareDoc, COMPARE_DOCUMENT } from './compare-sync.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
 const PROGRESS_BASE_KEY = 'psnppp.progressBase';
+const COMPARE_BASE_KEY = 'psnppp.compareBase';
 const CHANGE_DEBOUNCE_MS = 3000;
 // Which PSNP+ this device last saw. Recorded so their update is a dated,
 // visible event in the console rather than something inferred afterwards from
@@ -183,6 +185,31 @@ const loadProgressBase = async () => {
   }
 };
 const saveProgressBase = async doc => GM.setValue(PROGRESS_BASE_KEY, JSON.stringify(doc));
+
+/**
+ * The Compare+ map as of this device's last successful Compare+ sync.
+ *
+ * Same fallback rule as the other three, and the cheapest of the four to get
+ * wrong: an unreadable base means one cycle that cannot tell a local edit from
+ * a fresh device, which for Compare+ costs at most a set of PSN IDs reverting
+ * once. The field is `settings` because the document reuses the settings
+ * merge's shape — see compare-sync.mjs.
+ */
+const loadCompareBase = async () => {
+  const raw = await GM.getValue(COMPARE_BASE_KEY, null);
+  if (raw == null) return emptyCompareDoc();
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed == null || typeof parsed.settings !== 'object' || parsed.settings === null
+        || Array.isArray(parsed.settings)) {
+      return emptyCompareDoc();
+    }
+    return parsed;
+  } catch {
+    return emptyCompareDoc();
+  }
+};
+const saveCompareBase = async doc => GM.setValue(COMPARE_BASE_KEY, JSON.stringify(doc));
 
 async function confirmAdoptions(adoptions) {
   const names = adoptions.map(a => `• ${a.name}`).join('\n');
@@ -925,6 +952,24 @@ export async function start() {
         saveBase: saveProgressBase,
         now: Date.now()
       }).catch(error => console.error('[psnppp] progress archive failed:', error));
+
+      // Compare+ entries. Its own document, its own base key, and its own
+      // .catch for the same reason the two above have one: it reaches the
+      // network, so it genuinely can reject, and a Compare+ failure must never
+      // repaint a good lists sync as "Offline".
+      //
+      // Quietly, like the archive. A merged Compare+ entry changes an input box
+      // on a trophy list page the user may not even be on, and there is nothing
+      // for them to do about it — a reload offer for four PSN IDs would cost
+      // more attention than it is worth.
+      await syncCompare({
+        client: createSyncClient({
+          ...config, request: gmRequest, documentKey: COMPARE_DOCUMENT
+        }),
+        loadBase: loadCompareBase,
+        saveBase: saveCompareBase,
+        now: Date.now()
+      }).catch(error => console.error('[psnppp] Compare+ sync failed:', error));
     } catch (error) {
       // Network or server trouble must never block the page or lose local edits;
       // the next load or focus retries. String(), not error.message: a thrown

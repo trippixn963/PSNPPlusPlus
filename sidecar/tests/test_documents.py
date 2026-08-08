@@ -83,7 +83,7 @@ def test_the_documents_endpoint_names_the_keys_and_the_default(client):
     """
     body = client.get(f"{BASE}/documents", headers=AUTH).json()
     assert body["default"] == "lists"
-    assert set(body["documents"]) == {"lists", "settings", "progress"}
+    assert set(body["documents"]) == {"lists", "settings", "progress", "compare"}
 
 
 # --------------------------------------------------------------------------

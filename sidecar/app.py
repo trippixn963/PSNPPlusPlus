@@ -81,6 +81,12 @@ EMPTY_DOCUMENTS: dict[str, dict[str, Any]] = {
     # points it keeps per game — but it is the one document expected to keep
     # growing at all, so it is the first place to look if the store gets large.
     "progress": {"version": DOC_VERSION, "games": {}},
+    # PSNP+'s Compare+ entries: trophy list id -> the PSN IDs to compare that
+    # game against. Shares the settings document's shape because it shares its
+    # merge (a flat keyed map, per-key last-write-wins, no tombstones) — the
+    # field is called "settings" because that is the shape's name in the client,
+    # not because this holds settings.
+    "compare": {"version": DOC_VERSION, "settings": {}},
 }
 
 app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None)

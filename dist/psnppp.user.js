@@ -17126,10 +17126,90 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return uninstall;
   }
 
+  // userscript/src/compare-bridge.mjs
+  var COMPARE_KEY = "psnpp-compareplus";
+  var isMap = (value) => value != null && typeof value === "object" && !Array.isArray(value);
+  async function readCompareValues({ gm = globalThis.GM, storage = globalThis.localStorage } = {}) {
+    let raw = null;
+    try {
+      if (gm?.getValue != null) raw = await gm.getValue(COMPARE_KEY, null);
+    } catch {
+      raw = null;
+    }
+    if (raw == null) {
+      try {
+        raw = storage?.getItem?.(COMPARE_KEY) ?? null;
+      } catch {
+        raw = null;
+      }
+    }
+    if (raw == null) return {};
+    let parsed;
+    try {
+      parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch {
+      return {};
+    }
+    if (!isMap(parsed)) return {};
+    const out = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === "string") out[id] = value;
+      else if (typeof value === "number" || typeof value === "boolean") out[id] = String(value);
+    }
+    return out;
+  }
+  async function writeCompareValues(values, { gm = globalThis.GM, storage = globalThis.localStorage } = {}) {
+    if (!isMap(values)) return false;
+    const encoded = JSON.stringify(values);
+    try {
+      if (gm?.setValue != null) {
+        try {
+          storage?.removeItem?.(COMPARE_KEY);
+        } catch {
+        }
+        await gm.setValue(COMPARE_KEY, encoded);
+        return true;
+      }
+      storage?.setItem?.(COMPARE_KEY, encoded);
+      return true;
+    } catch (error) {
+      console.error("[psnppp] could not save Compare+ data:", error);
+      return false;
+    }
+  }
+
+  // userscript/src/compare-sync.mjs
+  var COMPARE_DOCUMENT = "compare";
+  var STORE = "compare";
+  function emptyCompareDoc() {
+    return { version: SETTINGS_DOC_VERSION, settings: {} };
+  }
+  async function syncCompare({
+    client,
+    loadBase: loadBase2,
+    saveBase: saveBase2,
+    now = Date.now(),
+    gm = globalThis.GM,
+    storage = globalThis.localStorage
+  }) {
+    const base = await loadBase2() ?? emptyCompareDoc();
+    const remote = await client.getState();
+    const values = await readCompareValues({ gm, storage });
+    const stamped = stampSettings(base, { [STORE]: values }, now);
+    const merged = mergeSettings(stamped, remote.doc, { preferRemote: stamped.firstSync });
+    const mergedValues = toStoreValues(merged)[STORE] ?? {};
+    const changed = JSON.stringify(mergedValues) !== JSON.stringify(values);
+    if (changed) await writeCompareValues(mergedValues, { gm, storage });
+    const result = await client.putState(remote.revision, merged);
+    if (result.ok) await saveBase2(merged);
+    return { status: result.ok ? "synced" : "conflict", changed };
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
   var PROGRESS_BASE_KEY = "psnppp.progressBase";
+  var COMPARE_BASE_KEY = "psnppp.compareBase";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
   var UPDATE_META_URL = "https://trippixn.com/psnppp.meta.js";
@@ -17197,6 +17277,20 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
   };
   var saveProgressBase = async (doc) => GM.setValue(PROGRESS_BASE_KEY, JSON.stringify(doc));
+  var loadCompareBase = async () => {
+    const raw = await GM.getValue(COMPARE_BASE_KEY, null);
+    if (raw == null) return emptyCompareDoc();
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed == null || typeof parsed.settings !== "object" || parsed.settings === null || Array.isArray(parsed.settings)) {
+        return emptyCompareDoc();
+      }
+      return parsed;
+    } catch {
+      return emptyCompareDoc();
+    }
+  };
+  var saveCompareBase = async (doc) => GM.setValue(COMPARE_BASE_KEY, JSON.stringify(doc));
   async function confirmAdoptions(adoptions) {
     const names = adoptions.map((a) => `\u2022 ${a.name}`).join("\n");
     return window.confirm(
@@ -17566,6 +17660,16 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           saveBase: saveProgressBase,
           now: Date.now()
         }).catch((error) => console.error("[psnppp] progress archive failed:", error));
+        await syncCompare({
+          client: createSyncClient({
+            ...config,
+            request: gmRequest,
+            documentKey: COMPARE_DOCUMENT
+          }),
+          loadBase: loadCompareBase,
+          saveBase: saveCompareBase,
+          now: Date.now()
+        }).catch((error) => console.error("[psnppp] Compare+ sync failed:", error));
       } catch (error) {
         paint("offline", describeFailure(error, "Sync failed"));
       } finally {
