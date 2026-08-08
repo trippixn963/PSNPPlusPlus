@@ -303,6 +303,18 @@ ${litTiers} {
   max-width: none;
   width: 100%;
   box-shadow: none;
+  /* The host fades; we must not fade AGAIN inside it. Opacity multiplies down
+     the tree, so .55 within their .2 rendered at .11. */
+  opacity: 1;
+}
+
+/* Lifts PSNP+'s resting fade off the whole menu while the chip is asking for
+   something (see the pops flag in indicator.mjs). Marked important because
+   their mouseleave handler writes opacity 0.2 as an INLINE style, which no plain
+   rule of ours can outrank. Scoped to the class we add and remove, so the menu
+   is left entirely alone the rest of the time. */
+.psnppp-attention {
+  opacity: 1 !important;
 }
 
 /* ---- the panel --------------------------------------------------------- */

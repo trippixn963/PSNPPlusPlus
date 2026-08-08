@@ -271,6 +271,22 @@ export function createIndicator({
       snapping ? 'psnppp-dock-snap' : '',
       hosted ? 'psnppp-hosted' : ''
     ].filter(Boolean).join(' ');
+
+    // Hosted, the offer has to get through PSNP+'s fade as well as our own.
+    // Their menu rests at opacity .2, and opacity MULTIPLIES down the tree, so
+    // the chip's own .55 landed at .11 — "Update ready" was being drawn, in
+    // gold, and was for practical purposes invisible until you hovered a faint
+    // box in the corner. `.psnppp-hosted` gives up our fade (the host owns it
+    // now); this lifts the host's for exactly the states that ask the user to
+    // do something, which is what `pops` already means. It is dropped again the
+    // moment the chip settles, so the menu goes back to receding.
+    // Also while the panel is open: the panel is opened FROM the menu, and a
+    // host that faded back to .2 the moment the pointer moved into the panel
+    // would leave the settings hanging off something half-gone.
+    if (hosted) {
+      const lift = current.pops || panelOpen;
+      surface.classList?.[lift ? 'add' : 'remove']('psnppp-attention');
+    }
   };
 
   // --- position ------------------------------------------------------------
@@ -668,15 +684,18 @@ export function createIndicator({
         unbindDrag(surface);
         newHost.appendChild(element);
         bindDrag(newHost);
-        hosted = true;
-        paintClasses();
         // Release the positioning the chip had applied to ITSELF, or it keeps
         // its old fixed coordinates as a static row inside the menu.
         element.style.left = '';
         element.style.top = '';
         element.style.right = '';
         element.style.bottom = '';
+        // Both BEFORE paintClasses: it now writes to the surface as well as to
+        // the chip, so painting against the old one would put the attention
+        // class on the chip and leave the host untouched.
+        hosted = true;
         surface = newHost;
+        paintClasses();
         if (position != null) place(position);
         return true;
       } catch (error) {

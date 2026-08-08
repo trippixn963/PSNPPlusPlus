@@ -984,3 +984,24 @@ test('rehost moves the drag listeners onto the new host', () => {
     uninstallFakeDocument();
   }
 });
+
+test('an actionable state lifts the host fade, a settled one drops it again', () => {
+  // PSNP+'s menu rests at opacity .2 and ours multiplied .55 into it, so
+  // "Update ready" was drawn at ~.11 — present, gold, and invisible.
+  installFakeDocument();
+  try {
+    const chip = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
+    const menu = globalThis.document.createElement('div');
+    const classes = new Set();
+    menu.classList = { add: c => classes.add(c), remove: c => classes.delete(c) };
+    chip.rehost(menu);
+
+    chip.setState('update', 'Version 9.9.9 is available');
+    assert.equal(classes.has('psnppp-attention'), true, 'update lifts the fade');
+
+    chip.setState('synced', 'up to date');
+    assert.equal(classes.has('psnppp-attention'), false, 'settled lets it recede');
+  } finally {
+    uninstallFakeDocument();
+  }
+});

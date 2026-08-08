@@ -14864,6 +14864,18 @@ ${litTiers} {
   max-width: none;
   width: 100%;
   box-shadow: none;
+  /* The host fades; we must not fade AGAIN inside it. Opacity multiplies down
+     the tree, so .55 within their .2 rendered at .11. */
+  opacity: 1;
+}
+
+/* Lifts PSNP+'s resting fade off the whole menu while the chip is asking for
+   something (see the pops flag in indicator.mjs). Marked important because
+   their mouseleave handler writes opacity 0.2 as an INLINE style, which no plain
+   rule of ours can outrank. Scoped to the class we add and remove, so the menu
+   is left entirely alone the rest of the time. */
+.psnppp-attention {
+  opacity: 1 !important;
 }
 
 /* ---- the panel --------------------------------------------------------- */
@@ -15288,6 +15300,10 @@ ${litTiers} {
         snapping ? "psnppp-dock-snap" : "",
         hosted ? "psnppp-hosted" : ""
       ].filter(Boolean).join(" ");
+      if (hosted) {
+        const lift = current.pops || panelOpen;
+        surface.classList?.[lift ? "add" : "remove"]("psnppp-attention");
+      }
     };
     const viewport = () => ({
       width: globalThis.window?.innerWidth ?? 0,
@@ -15500,13 +15516,13 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
           unbindDrag(surface);
           newHost.appendChild(element);
           bindDrag(newHost);
-          hosted = true;
-          paintClasses();
           element.style.left = "";
           element.style.top = "";
           element.style.right = "";
           element.style.bottom = "";
+          hosted = true;
           surface = newHost;
+          paintClasses();
           if (position != null) place(position);
           return true;
         } catch (error) {
