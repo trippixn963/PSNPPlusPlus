@@ -97,8 +97,14 @@ export async function checkForUpdate({
   } catch {
     state = null;
   }
+  // Cache the fetched version, never the verdict. `available` is a comparison
+  // between two things, and one of them — the version WE are running — changes
+  // the moment the user takes the update. A cached boolean would keep saying
+  // "update ready" for the rest of the throttle window about a version they
+  // already installed, which is exactly what it did.
   if (state && typeof state.checkedAt === 'number' && now - state.checkedAt < THROTTLE_MS) {
-    return { available: Boolean(state.available), latest: state.latest ?? null };
+    const cached = state.latest ?? null;
+    return { available: cached != null && isNewer(cached, currentVersion), latest: cached };
   }
 
   let result = { available: false, latest: null };
@@ -116,7 +122,8 @@ export async function checkForUpdate({
   }
 
   try {
-    await saveState({ checkedAt: now, available: result.available, latest: result.latest });
+    // Deliberately no `available` here — see the cached branch above.
+    await saveState({ checkedAt: now, latest: result.latest });
   } catch {
     // Persistence failing must not fail the check itself — it just means the
     // next call within the window re-requests instead of reading a cache.

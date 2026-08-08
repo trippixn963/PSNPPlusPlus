@@ -186,6 +186,29 @@ test('a second call inside the 30-minute window does not re-request and returns 
   assert.equal(request.calls.length, 1, 'the throttled call must not issue a second request');
 });
 
+test('taking the update clears the offer immediately, without waiting out the throttle', async () => {
+  // Reported live: the chip kept saying UPDATE READY after the update was
+  // installed and the page reloaded. The cache stored the VERDICT, so it kept
+  // answering a question asked about the old version for the rest of the window.
+  const request = fakeRequest([{ status: 200, responseText: metaBody('1.5.0') }]);
+  const state = fakeGmState();
+
+  const before = await checkForUpdate({
+    currentVersion: '1.4.0', metaUrl: META_URL, request, now: 1000,
+    loadState: state.loadState, saveState: state.saveState
+  });
+  assert.deepEqual(before, { available: true, latest: '1.5.0' });
+
+  // The user installs it. Same throttle window, but we are 1.5.0 now.
+  const after = await checkForUpdate({
+    currentVersion: '1.5.0', metaUrl: META_URL, request, now: 1000 + 60 * 1000,
+    loadState: state.loadState, saveState: state.saveState
+  });
+  assert.equal(after.available, false, 'the offer must clear as soon as we are the offered version');
+  assert.equal(after.latest, '1.5.0');
+  assert.equal(request.calls.length, 1, 'and it must do that from cache, without re-requesting');
+});
+
 test('a call outside the 30-minute window re-requests', async () => {
   const request = fakeRequest([
     { status: 200, responseText: metaBody('1.10.0') },
