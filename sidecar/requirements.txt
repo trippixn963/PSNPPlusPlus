@@ -1,2 +1,41 @@
+# ============================================================
+# PSNP++ - Sidecar Dependencies
+# ============================================================
+#
+# Every Python package the sync sidecar needs, runtime and test, in one file.
+#
+# Install:  .venv/bin/pip install -r requirements.txt
+#
+# Everything is pinned. The tests only ever ran against these exact versions,
+# and the VPS builds its venv from this file — an unpinned install would put
+# something in production that nothing here has tested.
+#
+# Requires Python >= 3.10 (fastapi, uvicorn and starlette all declare it).
+# The VPS runs 3.12.3; check with `python3 -V` before creating the venv.
+#
+# Author: Trippixn
+# Server: discord.gg/syria
+# ============================================================
+
+
+# --- Runtime ------------------------------------------------
+# The service itself. app.py is a FastAPI app; uvicorn serves it on
+# 127.0.0.1:8091 under systemd, with nginx terminating TLS in front.
+
 fastapi==0.141.1
 uvicorn==0.52.1
+
+
+# --- Tests --------------------------------------------------
+# Deliberately in this same file rather than a separate requirements-dev.txt:
+# one file is one thing to keep pinned, copy to the VPS, and remember.
+#
+# The cost is that production installs ~30MB of test tooling it never imports.
+# That is accepted — nothing here runs unless pytest is invoked, and a single
+# source of truth beats a second file that drifts out of date unnoticed.
+#
+# httpx2, not httpx: starlette's TestClient warns that httpx is deprecated,
+# and a warning in the test output hides the next real one.
+
+pytest==9.1.1
+httpx2==2.9.1
