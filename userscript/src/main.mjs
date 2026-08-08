@@ -28,6 +28,7 @@ import { emptyDoc } from './doc.mjs';
 import { syncSettings, emptySettingsDoc, SETTINGS_DOCUMENT } from './settings-sync.mjs';
 import { checkHealth, describeHealth } from './health.mjs';
 import { syncProgress, emptyProgressDoc, PROGRESS_DOCUMENT } from './progress-history.mjs';
+import { checkWatch, describeWatch } from './watch.mjs';
 
 const BASE_KEY = 'psnppp.base';
 const SETTINGS_BASE_KEY = 'psnppp.settingsBase';
@@ -641,7 +642,7 @@ const INSECURE_ENDPOINT_WARNING =
  * setting the user cannot see, and the fix is two clicks away in the menu this
  * message names.
  */
-export function decorateDetail(detail, endpoint, health = null) {
+export function decorateDetail(detail, endpoint, health = null, watch = null) {
   // Warnings first, sync state after. Both are prefixes rather than separate
   // chip states because neither is about the sync: an insecure endpoint and a
   // full quota are both true whether the last cycle succeeded or failed, and
@@ -650,6 +651,10 @@ export function decorateDetail(detail, endpoint, health = null) {
   if (!isAllowedEndpoint(endpoint)) lines.push(INSECURE_ENDPOINT_WARNING);
   const healthLine = describeHealth(health);
   if (healthLine) lines.push(healthLine);
+  // After health, before the sync state: a closing server is more urgent than
+  // "Synced" and less urgent than "PSNP+ is not running".
+  const watchLine = describeWatch(watch);
+  if (watchLine) lines.push(watchLine);
   if (detail) lines.push(detail);
   return lines.join('\n');
 }
@@ -770,8 +775,13 @@ export async function start() {
       // beside it. Cheap: one enumeration of localStorage, no parsing.
       const health = checkHealth({ storage: window.localStorage, doc: document });
 
+      // Reads PSNP+'s own cached shutdown and unobtainable feeds and joins them
+      // against the lists — no network of its own, and pinned to the PSNP+ this
+      // build ships, so the cache shape cannot move underneath it.
+      const watch = checkWatch({ storage: window.localStorage });
+
       if (!compat.ok) {
-        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint, health));
+        paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint, health, watch));
         return;
       }
 
@@ -783,7 +793,7 @@ export async function start() {
         now: Date.now()
       });
       const { state, detail } = describeSyncResult(result);
-      paint(state, decorateDetail(detail, config.endpoint, health));
+      paint(state, decorateDetail(detail, config.endpoint, health, watch));
 
       // Only cycles that actually wrote are logged. Syncs fire on every load,
       // every tab focus and every debounced edit, and the overwhelming majority

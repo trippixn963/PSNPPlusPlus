@@ -16679,6 +16679,86 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     return { status: result.ok ? "synced" : "conflict", recorded, pushed: result.ok };
   }
 
+  // userscript/src/watch.mjs
+  var SHUTDOWNS_KEY = "psnpp-shutdowns";
+  var UNOBTAINABLES_KEY = "psnpp-unobtainabletrophies";
+  var SHUTDOWN_HORIZON_DAYS = 120;
+  var DAY_MS = 24 * 60 * 60 * 1e3;
+  var isPlainObject3 = (value) => value != null && typeof value === "object" && !Array.isArray(value);
+  function readFeed(storage, key) {
+    try {
+      const raw = storage.getItem(key);
+      if (typeof raw !== "string") return {};
+      const parsed = JSON.parse(raw);
+      const list = parsed?.data?.list;
+      return isPlainObject3(list) ? list : {};
+    } catch {
+      return {};
+    }
+  }
+  function gamesInLists(storage) {
+    const games = /* @__PURE__ */ new Map();
+    for (const list of readLists(storage)) {
+      if (!Array.isArray(list?.games)) continue;
+      for (const game of list.games) {
+        if (!isPlainObject3(game) || game.id == null) continue;
+        const id = String(game.id);
+        const entry = games.get(id) ?? { id, title: game.title ?? "", lists: [] };
+        if (typeof list.name === "string" && !entry.lists.includes(list.name)) {
+          entry.lists.push(list.name);
+        }
+        if (!entry.title && typeof game.title === "string") entry.title = game.title;
+        games.set(id, entry);
+      }
+    }
+    return [...games.values()];
+  }
+  function shutdownWatch(games, feed, now, horizonDays = SHUTDOWN_HORIZON_DAYS) {
+    const soon = [];
+    const passed = [];
+    for (const game of games) {
+      const entry = feed[game.id];
+      if (!isPlainObject3(entry)) continue;
+      const at = Number(entry.shutdownTimestamp);
+      if (!Number.isFinite(at) || at === 0) continue;
+      const days = Math.round((at - now) / DAY_MS);
+      const found = { ...game, at, days, note: typeof entry.note === "string" ? entry.note : "" };
+      if (at <= now) passed.push(found);
+      else if (days <= horizonDays) soon.push(found);
+    }
+    soon.sort((a, b) => a.at - b.at);
+    passed.sort((a, b) => b.at - a.at);
+    return { soon, passed };
+  }
+  function unobtainableWatch(games, feed) {
+    const out = [];
+    for (const game of games) {
+      const trophies = feed[game.id];
+      if (!Array.isArray(trophies) || trophies.length === 0) continue;
+      out.push({ ...game, count: trophies.length });
+    }
+    return out.sort((a, b) => b.count - a.count);
+  }
+  function checkWatch({ storage, now = Date.now(), horizonDays = SHUTDOWN_HORIZON_DAYS }) {
+    try {
+      const games = gamesInLists(storage);
+      const shutdowns = shutdownWatch(games, readFeed(storage, SHUTDOWNS_KEY), now, horizonDays);
+      const unobtainable = unobtainableWatch(games, readFeed(storage, UNOBTAINABLES_KEY));
+      return { shutdowns, unobtainable, gamesChecked: games.length };
+    } catch {
+      return { shutdowns: { soon: [], passed: [] }, unobtainable: [], gamesChecked: 0 };
+    }
+  }
+  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  function describeWatch(watch) {
+    const soon = watch?.shutdowns?.soon ?? [];
+    if (soon.length === 0) return null;
+    const next = soon[0];
+    const when = next.days <= 0 ? "today" : `in ${plural(next.days, "day")}`;
+    const rest = soon.length > 1 ? ` (+${soon.length - 1} more)` : "";
+    return `${next.title || "A game"} in your lists shuts down ${when}${rest}.`;
+  }
+
   // userscript/src/main.mjs
   var BASE_KEY = "psnppp.base";
   var SETTINGS_BASE_KEY = "psnppp.settingsBase";
@@ -16971,11 +17051,13 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     };
   }
   var INSECURE_ENDPOINT_WARNING = "WARNING: this endpoint is not https, so your sync key is sent unencrypted. Right-click the chip and change it on the Sync tab.";
-  function decorateDetail(detail, endpoint, health = null) {
+  function decorateDetail(detail, endpoint, health = null, watch = null) {
     const lines = [];
     if (!isAllowedEndpoint(endpoint)) lines.push(INSECURE_ENDPOINT_WARNING);
     const healthLine = describeHealth(health);
     if (healthLine) lines.push(healthLine);
+    const watchLine = describeWatch(watch);
+    if (watchLine) lines.push(watchLine);
     if (detail) lines.push(detail);
     return lines.join("\n");
   }
@@ -17037,8 +17119,9 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         const compat = checkPsnpPlusCompat(window.localStorage);
         void recordPsnpPlusVersion(compat.version);
         const health = checkHealth({ storage: window.localStorage, doc: document });
+        const watch = checkWatch({ storage: window.localStorage });
         if (!compat.ok) {
-          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint, health));
+          paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint, health, watch));
           return;
         }
         paint("syncing");
@@ -17053,7 +17136,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           now: Date.now()
         });
         const { state, detail } = describeSyncResult(result);
-        paint(state, decorateDetail(detail, config.endpoint, health));
+        paint(state, decorateDetail(detail, config.endpoint, health, watch));
         if (result.status === "synced" && result.changed) {
           try {
             await recordSync({ revision: result.revision, delta: result.delta });
