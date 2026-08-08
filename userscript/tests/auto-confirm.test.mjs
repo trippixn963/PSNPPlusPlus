@@ -21,7 +21,13 @@ import assert from 'node:assert/strict';
 import { installAutoConfirm, extractRemovedTitle, shouldAutoConfirm, REMOVE_PREFIX }
   from '../src/auto-confirm.mjs';
 
-/** The four confirmations PSNP+ v11.14 actually raises, verbatim from vendor/. */
+/**
+ * The four confirmations PSNP+ v11.14 actually raises, transcribed verbatim.
+ *
+ * PSNP+ is a separate, self-updating script now, so there is no vendored copy to
+ * check these against. That makes them load-bearing: three of the four MUST keep
+ * their dialog, and this list is the only place that says so.
+ */
 const PSNP_PLUS_DIALOGS = {
   removeGame: title => `Are you sure you want to remove ${title}?`,
   clearAllData: 'Are you sure you want to clear all your PSNP+ data? This operation is irreversible.',

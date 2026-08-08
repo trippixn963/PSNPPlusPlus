@@ -1,10 +1,12 @@
 # PSNP++
 
-[PSNP+](https://psnp-plus.huskycode.dev) with local patches, plus two-way sync of your game
-lists across devices — in one userscript.
+Two-way sync of your [PSNP+](https://psnp-plus.huskycode.dev) game lists across devices.
 
 PSNP+ keeps its game lists in `localStorage`, so a wishlist built on the desktop does not
 exist on the laptop. PSNP++ syncs them through a small private service on your own server.
+
+It is a **companion** to PSNP+, not a replacement: install both, and PSNP+ keeps updating
+itself from HusKyCode as normal.
 
 ## Install
 
@@ -15,10 +17,8 @@ https://trippixn.com/psnppp.user.js
 Paste that into your browser and Tampermonkey will offer to install it. Install from the
 **URL**, not the file — that is what wires up auto-updates.
 
-> ⚠️ **Disable the standalone PSNP+ script.** PSNP++ contains PSNP+. If both are enabled,
-> two copies run and write to the same storage independently, overwriting each other's list
-> edits. The chip warns you if it detects this, but it is easier to just turn the other one
-> off.
+> **PSNP+ must be installed and enabled.** PSNP++ syncs PSNP+'s lists; on its own it has
+> nothing to sync. Install PSNP+ from <https://psnp-plus.huskycode.dev> first.
 
 Then load any psnprofiles.com page, **right-click the status chip** in the corner, and paste
 your sync key. Repeat on each device.
@@ -27,35 +27,33 @@ your sync key. Repeat on each device.
 
 | Path | |
 |---|---|
-| `vendor/psnp-plus.user.js` | PSNP+ v11.14 by HusKyCode, verbatim. **Never edited.** |
-| `patches/` | Local changes to PSNP+, as find/replace with reasons |
 | `userscript/src/` | PSNP++ itself — `main.mjs` is the entry point |
 | `userscript/tests/` | `npm test` |
 | `sidecar/` | The sync service (FastAPI + SQLite), its tests, and the [deploy runbook](sidecar/deploy/README.md) |
 | `dist/psnppp.user.js` | The built script — this is what you install |
 
-## Patching PSNP+
+## How it touches PSNP+
 
-PSNP+ runs in its own userscript realm, so its behaviour cannot be changed from the outside —
-an override installed on the page's `window` is simply never consulted by it. So PSNP++ ships
-PSNP+ and patches it at build time.
+Only through `localStorage` and the page's own `window` — the two things any userscript on
+the page can reach. There is no copy of PSNP+ here and nothing is patched, so HusKyCode ships
+releases and they just arrive.
 
-`vendor/psnp-plus.user.js` stays byte-identical to what HusKyCode publishes. Every local
-change lives in `patches/` as a find/replace with the reasoning attached, which keeps "what
-did we change on top of upstream?" answerable by reading one directory instead of diffing
-14,000 lines of compiled output.
+Two dependencies on PSNP+'s internals are worth knowing about, because both will eventually
+break when it changes:
 
-**The trade: PSNP+ no longer auto-updates.** Taking a new release is deliberate:
+**The list format.** `compat.mjs` reads the version PSNP+ writes into `psnpp-scriptstate` and
+checks the shape of the saved lists before every cycle. If the shape moves, syncing **halts**
+and the chip says so — nothing is uploaded and nothing local is touched. That is the whole
+point of the check: a format change should freeze your lists, not quietly mangle them on two
+devices.
 
-```bash
-# drop the new bundle into vendor/psnp-plus.user.js, then
-npm run build
-```
-
-Every patch that still fits applies silently. The first one that does not **fails the build
-by name**, so an upstream change is a build error at merge time rather than a behaviour that
-quietly stopped working weeks later. Never loosen a patch's match to make the build pass —
-go and read what changed.
+**The remove dialog.** `auto-confirm.mjs` replaces `window.confirm` so PSNP+'s
+"Are you sure you want to remove X?" answers itself. It works because PSNP+ declares
+`@inject-into page` and calls a bare `confirm(...)` at click time, so it resolves against the
+page's global — which this script shares via `unsafeWindow`. It matches the exact message
+**and** checks the named game is really in your lists, so if PSNP+ rewords anything the match
+simply stops and the dialog comes back. That is the intended failure: a returning dialog is
+an annoyance, a loose match that auto-confirmed "delete this list" would not be recoverable.
 
 ## Working on it
 
@@ -82,6 +80,6 @@ silently keeps running the old code.
 
 ## Credit
 
-PSNP+ is by **HusKyCode** — <https://psnp-plus.huskycode.dev>. This repository vendors it
-unmodified and patches it at build time; all of its functionality, and the work behind it,
-is theirs.
+PSNP+ is by **HusKyCode** — <https://psnp-plus.huskycode.dev>. This repository contains no
+part of it and modifies none of it; all of that functionality, and the work behind it, is
+theirs. PSNP++ only syncs the lists PSNP+ saves.

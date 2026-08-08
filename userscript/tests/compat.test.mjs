@@ -19,7 +19,11 @@ import { start, recordPsnpPlusVersion, createIndicatorPainter } from '../src/mai
  * tests pin what happens on the day HusKyCode changes that shape — the sync
  * must PAUSE and say so, not quietly act on a shape it does not understand.
  *
- * Every fixture below is the real v11.14 shape, read off vendor/psnp-plus.user.js
+ * Every fixture below is the real PSNP+ v11.14 shape, transcribed from its
+ * bundle. There is no vendor/ copy any more — PSNP+ is installed separately and
+ * updates itself — so these fixtures ARE the record of what this code expects.
+ * When PSNP+ changes shape, the honest fix is to add the new fixture beside the
+ * old one, not to edit this one until it passes
  * (ListCreatePanel's newList for lists, ListScraper.getFromTrophiesPage for
  * games), not a shape invented for the test.
  */
