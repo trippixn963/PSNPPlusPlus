@@ -1,6 +1,6 @@
 {
   "name": "psnppp",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "description": "Two-way sync for PSNP+ game lists",
