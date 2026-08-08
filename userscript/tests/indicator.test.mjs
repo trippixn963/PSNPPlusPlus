@@ -961,3 +961,26 @@ test('the hosted layout survives a state change', () => {
     uninstallFakeDocument();
   }
 });
+
+test('rehost moves the drag listeners onto the new host', () => {
+  // The reported bug: the menu looked draggable but only the thin chip row
+  // responded, because the listeners stayed on the chip while the MENU moved.
+  installFakeDocument();
+  try {
+    const chip = createIndicator({ onSyncNow() {}, onSettings() {}, onReload() {}, onUpdate() {} });
+    const menu = globalThis.document.createElement('div');
+    const bound = [];
+    const unbound = [];
+    menu.addEventListener = (type) => bound.push(type);
+    chip.element.removeEventListener = (type) => unbound.push(type);
+
+    chip.rehost(menu);
+
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+      assert.equal(bound.includes(type), true, `${type} moved to the host`);
+      assert.equal(unbound.includes(type), true, `${type} released from the chip`);
+    }
+  } finally {
+    uninstallFakeDocument();
+  }
+});

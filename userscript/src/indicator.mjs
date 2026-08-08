@@ -425,7 +425,20 @@ export function createIndicator({
   // instant you finished moving it.
   let suppressClick = false;
 
-  element.addEventListener('pointerdown', event => {
+  /**
+   * The drag listeners live on whatever is currently the SURFACE, not on the
+   * chip.
+   *
+   * Hosted, the surface is PSNP+'s menu, and the chip is one row inside it — so
+   * listening on the chip alone made the menu look draggable while only a thin
+   * strip of it responded. Everything else about the menu (its title, its
+   * padding, PSNP+'s own rows) did nothing, which reads as broken rather than
+   * as a small hit area.
+   *
+   * Clicks still work: a pointerdown on the chip bubbles to the surface, and the
+   * DRAG_THRESHOLD_PX check below is what separates a click from a drag.
+   */
+  const onPointerDown = event => {
     // Left button / touch / pen only. `button` is undefined on synthetic events
     // in the tests, which is treated as the primary button.
     if ((event.button ?? 0) !== 0) return;
@@ -448,24 +461,26 @@ export function createIndicator({
       size,
       moved: false
     };
-    // Capture keeps the whole gesture on this element, so no listener of ours
-    // ever lands on the host document — a fast drag off the chip still tracks,
+    // Capture keeps the whole gesture on the surface, so no listener of ours
+    // ever lands on the host document — a fast drag off the edge still tracks,
     // and nothing we install can interfere with the page's own pointer handling.
+    // It goes on the SURFACE, which is where the listeners are; capturing on the
+    // chip instead would leave the moves reaching us only by bubbling.
     // Best-effort: it throws for a pointer id the browser no longer considers
     // active, and that must not abort a drag that is otherwise fine.
     try {
-      element.setPointerCapture?.(event.pointerId);
+      surface.setPointerCapture?.(event.pointerId);
     } catch { /* capture is an optimisation, not a requirement */ }
-  });
+  };
 
-  element.addEventListener('pointermove', event => {
+  const onPointerMove = event => {
     if (drag == null || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
     const dx = (event.clientX ?? 0) - drag.originX;
     const dy = (event.clientY ?? 0) - drag.originY;
     if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
     place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
-  });
+  };
 
   // Set by snapToNearestSide, cleared once the transition class has done its
   // job. Held here rather than inside the function so a second drop before the
@@ -509,15 +524,30 @@ export function createIndicator({
     const { moved, pointerId, size } = drag;
     drag = null;
     try {
-      element.releasePointerCapture?.(pointerId);
+      surface.releasePointerCapture?.(pointerId);
     } catch { /* already released, or never captured */ }
     if (!commit || !moved) return;
     suppressClick = true;
     snapToNearestSide(size);
   };
 
-  element.addEventListener('pointerup', endDrag);
-  element.addEventListener('pointercancel', event => endDrag(event, { commit: false }));
+  const onPointerUp = endDrag;
+  const onPointerCancel = event => endDrag(event, { commit: false });
+
+  const bindDrag = target => {
+    target.addEventListener?.('pointerdown', onPointerDown);
+    target.addEventListener?.('pointermove', onPointerMove);
+    target.addEventListener?.('pointerup', onPointerUp);
+    target.addEventListener?.('pointercancel', onPointerCancel);
+  };
+  const unbindDrag = target => {
+    target.removeEventListener?.('pointerdown', onPointerDown);
+    target.removeEventListener?.('pointermove', onPointerMove);
+    target.removeEventListener?.('pointerup', onPointerUp);
+    target.removeEventListener?.('pointercancel', onPointerCancel);
+  };
+
+  bindDrag(surface);
 
   // --- clicks --------------------------------------------------------------
 
@@ -631,7 +661,13 @@ export function createIndicator({
     rehost(newHost) {
       if (newHost == null || newHost === surface) return false;
       try {
+        // Hand the drag over with the position. Without this the listeners stay
+        // on the chip while the MENU is what moves, so only a thin row of a much
+        // larger box responds to a grab — which reads as broken, not as a small
+        // hit area.
+        unbindDrag(surface);
         newHost.appendChild(element);
+        bindDrag(newHost);
         hosted = true;
         paintClasses();
         // Release the positioning the chip had applied to ITSELF, or it keeps

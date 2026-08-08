@@ -15355,7 +15355,7 @@ ${litTiers} {
     globalThis.window?.addEventListener?.("resize", handleResize);
     let drag = null;
     let suppressClick = false;
-    element.addEventListener("pointerdown", (event) => {
+    const onPointerDown = (event) => {
       if ((event.button ?? 0) !== 0) return;
       const size = measure();
       const rect = rectOf();
@@ -15374,18 +15374,18 @@ ${litTiers} {
         moved: false
       };
       try {
-        element.setPointerCapture?.(event.pointerId);
+        surface.setPointerCapture?.(event.pointerId);
       } catch {
       }
-    });
-    element.addEventListener("pointermove", (event) => {
+    };
+    const onPointerMove = (event) => {
       if (drag == null || event.pointerId != null && event.pointerId !== drag.pointerId) return;
       const dx = (event.clientX ?? 0) - drag.originX;
       const dy = (event.clientY ?? 0) - drag.originY;
       if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
       drag.moved = true;
       place({ left: drag.startLeft + dx, top: drag.startTop + dy }, drag.size);
-    });
+    };
     let snapTimer = null;
     function snapToNearestSide(size) {
       const side = sideFor(
@@ -15408,15 +15408,28 @@ ${litTiers} {
       const { moved, pointerId, size } = drag;
       drag = null;
       try {
-        element.releasePointerCapture?.(pointerId);
+        surface.releasePointerCapture?.(pointerId);
       } catch {
       }
       if (!commit || !moved) return;
       suppressClick = true;
       snapToNearestSide(size);
     };
-    element.addEventListener("pointerup", endDrag);
-    element.addEventListener("pointercancel", (event) => endDrag(event, { commit: false }));
+    const onPointerUp = endDrag;
+    const onPointerCancel = (event) => endDrag(event, { commit: false });
+    const bindDrag = (target) => {
+      target.addEventListener?.("pointerdown", onPointerDown);
+      target.addEventListener?.("pointermove", onPointerMove);
+      target.addEventListener?.("pointerup", onPointerUp);
+      target.addEventListener?.("pointercancel", onPointerCancel);
+    };
+    const unbindDrag = (target) => {
+      target.removeEventListener?.("pointerdown", onPointerDown);
+      target.removeEventListener?.("pointermove", onPointerMove);
+      target.removeEventListener?.("pointerup", onPointerUp);
+      target.removeEventListener?.("pointercancel", onPointerCancel);
+    };
+    bindDrag(surface);
     const activate = () => {
       if (current.action === "reload") onReload();
       else if (current.action === "update") onUpdate();
@@ -15484,7 +15497,9 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       rehost(newHost) {
         if (newHost == null || newHost === surface) return false;
         try {
+          unbindDrag(surface);
           newHost.appendChild(element);
+          bindDrag(newHost);
           hosted = true;
           paintClasses();
           element.style.left = "";
