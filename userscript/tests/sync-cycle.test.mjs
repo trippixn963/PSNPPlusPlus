@@ -1546,3 +1546,37 @@ test('a cycle with no adoption leaves the bookmark alone', async () => {
   await runSyncCycle(harness(storage, server).args);
   assert.equal(JSON.parse(storage.getItem('psnpp-scriptstate')).lastActiveGameList, 'A');
 });
+
+test('a purely local add reports itself in localDelta even though nothing was written locally', async () => {
+  // The end-to-end shape of the logging bug: the user adds a game, the cycle
+  // PUSHES it, writes nothing to localStorage, and `changed` is false. Only
+  // localDelta can see that anything happened.
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer();
+  const h = harness(storage, server);
+  await runSyncCycle(h.args);            // settle: base now matches storage
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1'), gameTitled('g2', 'Bloodborne')])]);
+  const result = await runSyncCycle(h.args);
+
+  assert.equal(result.status, 'synced');
+  assert.equal(result.changed, false, 'a pure push writes nothing locally');
+  assert.equal(result.delta.gamesAdded, 0, 'and the sync delta cannot see it');
+  assert.equal(result.localDelta.gamesAdded, 1, 'but localDelta can');
+  assert.deepEqual(result.localDelta.addedGames, [{ title: 'Bloodborne', list: 'Wishlist' }]);
+});
+
+test('a purely local removal is named too', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1'), gameTitled('g2', 'Returnal')])]);
+  const server = fakeServer();
+  const h = harness(storage, server);
+  await runSyncCycle(h.args);
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const result = await runSyncCycle(h.args);
+
+  assert.equal(result.localDelta.gamesRemoved, 1);
+  assert.deepEqual(result.localDelta.removedGames, [{ title: 'Returnal', list: 'Wishlist' }]);
+});

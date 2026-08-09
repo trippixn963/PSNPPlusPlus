@@ -1069,6 +1069,11 @@ test('a failing settings or progress sync does not repaint a good lists sync as 
  * It had no coverage at all — deleting the call site left the suite green.
  */
 
+const ZERO_D = {
+  listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0,
+  addedGames: [], removedGames: []
+};
+
 const collect = () => {
   const trees = [];
   return { trees, log: (title, items, emoji) => trees.push({ title, items, emoji }) };
@@ -1077,7 +1082,7 @@ const collect = () => {
 test('a quiet-but-changed cycle reports only the summary', async () => {
   const { logCycle } = await import('../src/main.mjs');
   const { trees, log } = collect();
-  logCycle(log, { revision: 9, delta: { listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0, addedGames: [], removedGames: [] } });
+  logCycle(log, { revision: 9, delta: ZERO_D, localDelta: ZERO_D });
   assert.deepEqual(trees.map(t => t.title), ['Sync Completed']);
   assert.equal(trees[0].emoji, '🔄');
   assert.deepEqual(trees[0].items[0], ['Revision', 9]);
@@ -1088,7 +1093,8 @@ test('added and removed games are named, one row each, with their list', async (
   const { trees, log } = collect();
   logCycle(log, {
     revision: 10,
-    delta: {
+    delta: ZERO_D,
+    localDelta: {
       listsAdded: 0, listsRemoved: 0, gamesAdded: 2, gamesRemoved: 1, listsLinked: 0,
       addedGames: [{ title: 'Bloodborne', list: 'Backlog' }, { title: 'Returnal', list: 'Backlog' }],
       removedGames: [{ title: 'Road 96: Mile 0', list: 'Wishlist' }]
@@ -1107,7 +1113,8 @@ test('a big sync still tells the truth about scale when the names are capped', a
   const { trees, log } = collect();
   logCycle(log, {
     revision: 11,
-    delta: {
+    delta: ZERO_D,
+    localDelta: {
       listsAdded: 1, listsRemoved: 0, gamesAdded: 200, gamesRemoved: 0, listsLinked: 0,
       addedGames: [{ title: 'One', list: 'Backlog' }], removedGames: []
     }
@@ -1125,4 +1132,56 @@ test('logCycle never throws on a malformed delta', async () => {
   const { log } = collect();
   logCycle(log, { revision: 1, delta: undefined });
   logCycle(log, {});
+});
+
+test('adding a game locally is logged even though the cycle wrote nothing locally', async () => {
+  // The bug this replaced: the gate was `result.changed`, which is only true
+  // when something arrives FROM another device. Your own add is pushed up and
+  // writes nothing locally, so the most obvious event there is logged nothing.
+  const { logCycle, deltaIsEmpty } = await import('../src/main.mjs');
+  const { trees, log } = collect();
+  const localDelta = {
+    ...ZERO_D, gamesAdded: 1, addedGames: [{ title: 'Bloodborne', list: 'Backlog' }]
+  };
+  assert.equal(deltaIsEmpty(localDelta), false, 'this must be enough to trigger a log');
+
+  logCycle(log, { revision: 12, changed: false, delta: ZERO_D, localDelta });
+
+  const added = trees.find(t => t.title === 'Games Added');
+  assert.ok(added, 'your own add must be logged');
+  assert.deepEqual(added.items[1], ['Game', 'Bloodborne (Backlog)']);
+  const summary = Object.fromEntries(trees[0].items);
+  assert.equal(summary['You changed'], '+1 game');
+  assert.equal(summary.Received, 'nothing');
+});
+
+test('what arrived from another device is reported separately from what you did', async () => {
+  const { logCycle } = await import('../src/main.mjs');
+  const { trees, log } = collect();
+  logCycle(log, {
+    revision: 13,
+    changed: true,
+    delta: { ...ZERO_D, gamesAdded: 1, addedGames: [{ title: 'Returnal', list: 'Backlog' }] },
+    localDelta: ZERO_D
+  });
+  assert.ok(trees.some(t => t.title === 'Received From Another Device'));
+  assert.equal(trees.some(t => t.title === 'Games Added'), false,
+    'an arrival is not something you did');
+});
+
+test('a cycle is logged when YOU changed something, not only when something arrived', async () => {
+  const { shouldLogCycle } = await import('../src/main.mjs');
+  const localAdd = { ...ZERO_D, gamesAdded: 1, addedGames: [{ title: 'X', list: 'L' }] };
+
+  // The bug: a pure local add pushes, writes nothing locally, changed === false.
+  assert.equal(shouldLogCycle({ status: 'synced', changed: false, localDelta: localAdd }), true,
+    'your own edit must be logged');
+  assert.equal(shouldLogCycle({ status: 'synced', changed: true, localDelta: ZERO_D }), true,
+    'so must an arrival');
+  assert.equal(shouldLogCycle({ status: 'synced', changed: false, localDelta: ZERO_D }), false,
+    'a quiet cycle must stay quiet — these fire on every load and focus');
+  assert.equal(shouldLogCycle({ status: 'conflict', changed: false, localDelta: localAdd }), false,
+    'a cycle that did not settle has nothing to report');
+  assert.equal(shouldLogCycle(null), false);
+  assert.equal(shouldLogCycle({ status: 'synced' }), false, 'a missing localDelta is not a change');
 });

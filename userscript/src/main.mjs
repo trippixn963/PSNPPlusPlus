@@ -509,31 +509,70 @@ export function decorateDetail(detail, endpoint) {
  * the exact number regardless, so a big first sync still tells the truth
  * about scale without reproducing the library.
  */
+const gameRows = named => (named ?? []).map(g => ['Game', `${g.title} (${g.list})`]);
+
+/** Does this delta describe anything at all? */
+export function deltaIsEmpty(d) {
+  if (d == null) return true;
+  return !(d.gamesAdded || d.gamesRemoved || d.listsAdded || d.listsRemoved || d.listsLinked);
+}
+
+/**
+ * Is there anything about this cycle worth a log line?
+ *
+ * Exported and named rather than inlined at the call site because the FIRST
+ * version of this was `result.changed` alone, and that silently excluded the
+ * single most obvious event — you adding a game. `changed` means the cycle
+ * wrote to localStorage, which only happens on the receiving end; a local edit
+ * is pushed up and writes nothing. Being a function means a test can hold it
+ * to that.
+ */
+export function shouldLogCycle(result) {
+  if (result == null || result.status !== 'synced') return false;
+  return result.changed === true || !deltaIsEmpty(result.localDelta);
+}
+
 export function logCycle(log, result) {
-  const d = result.delta ?? {};
+  // TWO deltas, because they answer different questions and only one of them
+  // is about the person reading the log.
+  //
+  //   localDelta — what YOU did on this device since it last settled.
+  //   delta      — what the cycle WROTE locally, i.e. what arrived from
+  //                another device.
+  //
+  // The first version of this logged only `delta`, gated on `changed`, and so
+  // said nothing at all when you added a game: your edit is PUSHED, it writes
+  // nothing locally, `changed` stays false, and the edit is already on both
+  // sides of `delta` so even a forced log would have reported zero. Adding a
+  // game is the single most obvious thing to log and it was the one case that
+  // could not appear.
+  const local = result.localDelta ?? {};
+  const received = result.delta ?? {};
+
   log('Sync Completed', [
     ['Revision', result.revision],
-    ['Changed', describeDelta(d)]
+    ['You changed', deltaIsEmpty(local) ? 'nothing' : describeDelta(local)],
+    ['Received', deltaIsEmpty(received) ? 'nothing' : describeDelta(received)]
   ], '🔄');
 
-  if (d.gamesAdded > 0) {
-    log('Games Added', [
-      ['Count', d.gamesAdded],
-      ...(d.addedGames ?? []).map(g => ['Game', `${g.title} (${g.list})`])
-    ], '➕');
+  if (local.gamesAdded > 0) {
+    log('Games Added', [['Count', local.gamesAdded], ...gameRows(local.addedGames)], '➕');
   }
-  if (d.gamesRemoved > 0) {
-    log('Games Removed', [
-      ['Count', d.gamesRemoved],
-      ...(d.removedGames ?? []).map(g => ['Game', `${g.title} (${g.list})`])
-    ], '➖');
+  if (local.gamesRemoved > 0) {
+    log('Games Removed', [['Count', local.gamesRemoved], ...gameRows(local.removedGames)], '➖');
   }
-  if (d.listsAdded > 0 || d.listsRemoved > 0 || d.listsLinked > 0) {
+  if (local.listsAdded > 0 || local.listsRemoved > 0) {
     log('Lists Changed', [
-      ['Added', d.listsAdded ?? 0],
-      ['Removed', d.listsRemoved ?? 0],
-      ['Linked', d.listsLinked ?? 0]
+      ['Added', local.listsAdded ?? 0],
+      ['Removed', local.listsRemoved ?? 0]
     ], '📋');
+  }
+  if (!deltaIsEmpty(received)) {
+    log('Received From Another Device', [
+      ['Summary', describeDelta(received)],
+      ...gameRows(received.addedGames),
+      ...gameRows(received.removedGames).map(([, v]) => ['Removed', v])
+    ], '📥');
   }
 }
 
@@ -750,7 +789,7 @@ export async function start() {
       // Its own try/catch, INSIDE the state update: the history is a nicety and
       // the sync is the product, so a failure to write a log line must never
       // repaint a successful sync as "Offline".
-      if (result.status === 'synced' && result.changed) {
+      if (shouldLogCycle(result)) {
         // Same rule as the history above, and for the same reason: only cycles
         // that WROTE are logged. Syncs fire on every load, focus and debounced
         // edit, and logging the quiet ones would post to Discord every couple
@@ -764,7 +803,7 @@ export async function start() {
           // The named games are for the log only. The history is a 20-entry
           // window meant to stay small, and the panel never renders them.
           const { addedGames, removedGames, ...counts } = result.delta ?? {};
-          await recordSync({ revision: result.revision, delta: counts });
+          if (result.changed) await recordSync({ revision: result.revision, delta: counts });
         } catch (error) {
           console.error('[psnppp] could not record sync history:', error);
         }

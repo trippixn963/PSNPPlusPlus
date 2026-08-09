@@ -373,6 +373,21 @@ export async function runSyncCycle({
     // just says so without the pass.
     const delta = changed ? summarizeDelta(currentLists, mergedLists, renames) : zeroDelta();
 
+    // What the USER did on this device since it last settled, which is a
+    // different question from `delta` and the one a human actually asks.
+    //
+    // `delta` compares the local snapshot to the merge, so it describes what
+    // the CYCLE wrote to localStorage — i.e. what ARRIVED from elsewhere. A
+    // game you add here is already in both sides of that comparison, so it
+    // reports nothing: your own edits, the thing most worth reporting, are
+    // exactly what it cannot see. This compares BASE to the snapshot instead.
+    //
+    // An EMPTY rename map, deliberately: both sides here still carry this
+    // device's own list ids (the snapshot is pre-adoption and base records
+    // what this device last settled), so applying the adoption's map would
+    // rewrite one side's ids and invent a removal plus an addition.
+    const localDelta = summarizeDelta(fromDoc(workingBase), currentLists, new Map());
+
     // Say nothing when there is nothing to say.
     //
     // The server stores the document and bumps the revision for every PUT it
@@ -513,7 +528,7 @@ export async function runSyncCycle({
     // because no bytes went over the wire would make the next cycle read the
     // difference as a local deletion.
     await saveBase(dropLists(merged, frozenIds));
-    return { status: 'synced', revision: settledRevision, changed, delta };
+    return { status: 'synced', revision: settledRevision, changed, delta, localDelta };
   }
 
   // Every attempt was rejected: nothing was ever written to storage, so there
