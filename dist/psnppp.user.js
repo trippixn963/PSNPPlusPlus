@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.16
+// @version      2.3.17
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -1817,6 +1817,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       const currentLists = snapshot.syncable;
       const changed = fingerprint(fromDoc(toDoc(currentLists))) !== fingerprint(mergedLists);
       const delta = changed ? summarizeDelta(currentLists, mergedLists, renames) : zeroDelta();
+      const localDelta = summarizeDelta(fromDoc(workingBase), currentLists, /* @__PURE__ */ new Map());
       let settledRevision = remote.revision;
       if (!sameDoc(merged, remote.doc)) {
         const result = await client.putState(remote.revision, merged);
@@ -1842,7 +1843,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
         if (adopt) repointActiveList(storage, adoptions);
       }
       await saveBase2(dropLists(merged, frozenIds));
-      return { status: "synced", revision: settledRevision, changed, delta };
+      return { status: "synced", revision: settledRevision, changed, delta, localDelta };
     }
     return { status: "conflict", revision: remote.revision, changed: false, delta: zeroDelta() };
   }
@@ -2332,30 +2333,41 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     if (detail) lines.push(detail);
     return lines.join("\n");
   }
+  var gameRows = (named) => (named ?? []).map((g) => ["Game", `${g.title} (${g.list})`]);
+  function deltaIsEmpty(d) {
+    if (d == null) return true;
+    return !(d.gamesAdded || d.gamesRemoved || d.listsAdded || d.listsRemoved || d.listsLinked);
+  }
+  function shouldLogCycle(result) {
+    if (result == null || result.status !== "synced") return false;
+    return result.changed === true || !deltaIsEmpty(result.localDelta);
+  }
   function logCycle(log, result) {
-    const d = result.delta ?? {};
+    const local = result.localDelta ?? {};
+    const received = result.delta ?? {};
     log("Sync Completed", [
       ["Revision", result.revision],
-      ["Changed", describeDelta(d)]
+      ["You changed", deltaIsEmpty(local) ? "nothing" : describeDelta(local)],
+      ["Received", deltaIsEmpty(received) ? "nothing" : describeDelta(received)]
     ], "\u{1F504}");
-    if (d.gamesAdded > 0) {
-      log("Games Added", [
-        ["Count", d.gamesAdded],
-        ...(d.addedGames ?? []).map((g) => ["Game", `${g.title} (${g.list})`])
-      ], "\u2795");
+    if (local.gamesAdded > 0) {
+      log("Games Added", [["Count", local.gamesAdded], ...gameRows(local.addedGames)], "\u2795");
     }
-    if (d.gamesRemoved > 0) {
-      log("Games Removed", [
-        ["Count", d.gamesRemoved],
-        ...(d.removedGames ?? []).map((g) => ["Game", `${g.title} (${g.list})`])
-      ], "\u2796");
+    if (local.gamesRemoved > 0) {
+      log("Games Removed", [["Count", local.gamesRemoved], ...gameRows(local.removedGames)], "\u2796");
     }
-    if (d.listsAdded > 0 || d.listsRemoved > 0 || d.listsLinked > 0) {
+    if (local.listsAdded > 0 || local.listsRemoved > 0) {
       log("Lists Changed", [
-        ["Added", d.listsAdded ?? 0],
-        ["Removed", d.listsRemoved ?? 0],
-        ["Linked", d.listsLinked ?? 0]
+        ["Added", local.listsAdded ?? 0],
+        ["Removed", local.listsRemoved ?? 0]
       ], "\u{1F4CB}");
+    }
+    if (!deltaIsEmpty(received)) {
+      log("Received From Another Device", [
+        ["Summary", describeDelta(received)],
+        ...gameRows(received.addedGames),
+        ...gameRows(received.removedGames).map(([, v]) => ["Removed", v])
+      ], "\u{1F4E5}");
     }
   }
   async function start() {
@@ -2468,11 +2480,11 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         const { state, detail } = describeSyncResult(result);
         paint(state, decorateDetail(detail, config.endpoint));
         lastFaultLogged = null;
-        if (result.status === "synced" && result.changed) {
+        if (shouldLogCycle(result)) {
           try {
             logCycle(treeLog, result);
             const { addedGames, removedGames, ...counts } = result.delta ?? {};
-            await recordSync({ revision: result.revision, delta: counts });
+            if (result.changed) await recordSync({ revision: result.revision, delta: counts });
           } catch (error) {
             console.error("[psnppp] could not record sync history:", error);
           }
