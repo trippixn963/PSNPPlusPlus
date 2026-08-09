@@ -112,7 +112,19 @@ if [ "$DRY_RUN" = "--dry-run" ]; then
 fi
 
 echo "=== 6. commit the release ==="
-git add -A
+# Name the paths. `git add -A` here would sweep in whatever else happens to be
+# sitting in the tree — editor scratch, tooling working directories, notes —
+# and this repo is public, so "whatever else" gets published permanently. Step 1
+# already guarantees the tree was clean before we started, so these four are the
+# only things that can legitimately have changed.
+git add package.json package-lock.json dist/psnppp.user.js dist/psnppp.meta.js
+if [ -n "$(git status --porcelain --untracked-files=all | grep -v '^M ')" ]; then
+  echo "ABORT: the release touched files outside package.json/package-lock.json/dist/."
+  echo "Nothing has been published. Review, then either commit them yourself or add them to .gitignore:"
+  git status --short --untracked-files=all | grep -v '^M '
+  git reset -q
+  exit 1
+fi
 git commit -q -m "Release v$NEW_VERSION"
 
 echo "=== 7. publish ==="
