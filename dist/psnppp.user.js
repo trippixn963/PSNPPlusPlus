@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.11
+// @version      2.3.12
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @author       Trippixn
 // @match        https://psnprofiles.com/*
@@ -2291,6 +2291,41 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     return typeof window !== "undefined" ? window : null;
   }
   var autoConfirm = null;
+  var UNREADABLE = Symbol("unreadable");
+  function logConfirmEnvironment(enabled, installed, target) {
+    const read2 = (fn, fallback = "unknown") => {
+      try {
+        return fn();
+      } catch {
+        return fallback;
+      }
+    };
+    const page = read2(() => typeof unsafeWindow === "undefined" ? null : unsafeWindow, UNREADABLE);
+    const own = read2(() => typeof window === "undefined" ? null : window, UNREADABLE);
+    const describePage = () => {
+      if (page === UNREADABLE) return "present but threw on access";
+      if (page == null) return "absent \u2014 sandbox window only";
+      if (read2(() => typeof page.confirm === "function", false)) return "usable";
+      return "present but carries no callable confirm";
+    };
+    const known = page !== UNREADABLE && own !== UNREADABLE;
+    try {
+      console.info("[psnppp] remove-prompt override:", {
+        setting: enabled ? "on" : "OFF \u2014 right-click the chip to turn it on",
+        installed,
+        // 'js' means the raw request was downgraded, which is expected here and
+        // fine: unsafeWindow still reaches the page. 'dom' would NOT be fine —
+        // no page globals, so the override could never see PSNP+'s confirm.
+        sandboxMode: read2(() => typeof GM_info === "undefined" ? "no GM_info" : GM_info?.sandboxMode ?? "unset"),
+        unsafeWindow: describePage(),
+        sandboxed: known ? page != null && page !== own : "unknown",
+        // The one that actually decides whether PSNP+ can see us: we must have
+        // patched the same object its bare confirm() resolves against.
+        targetIsPageWindow: page == null || page === UNREADABLE ? "unknown" : target === page
+      });
+    } catch {
+    }
+  }
   async function applyAutoConfirm(enabled, { target = confirmTarget() } = {}) {
     try {
       autoConfirm?.uninstall();
@@ -2298,7 +2333,10 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       console.error("[psnppp] could not remove the auto-confirm override:", error);
     }
     autoConfirm = null;
-    if (!enabled) return true;
+    if (!enabled) {
+      logConfirmEnvironment(false, false, target);
+      return true;
+    }
     try {
       autoConfirm = installAutoConfirm({
         target,
@@ -2306,9 +2344,12 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         // so a set captured at install would go stale within one click.
         knownTitles: () => readGameTitles(window.localStorage)
       });
-      return autoConfirm.installed === true;
+      const installed = autoConfirm.installed === true;
+      logConfirmEnvironment(true, installed, target);
+      return installed;
     } catch (error) {
       console.error("[psnppp] could not install the auto-confirm override:", error);
+      logConfirmEnvironment(true, false, target);
       return false;
     }
   }
