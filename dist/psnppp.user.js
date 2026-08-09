@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.15
+// @version      2.3.16
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -1666,6 +1666,26 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
     return out;
   }
+  var SCRIPT_STATE_KEY = "psnpp-scriptstate";
+  var ACTIVE_LIST_FIELD = "lastActiveGameList";
+  function repointActiveList(storage, adoptions) {
+    if (!Array.isArray(adoptions) || adoptions.length === 0) return false;
+    try {
+      const raw = storage.getItem(SCRIPT_STATE_KEY);
+      if (raw == null) return false;
+      const state = JSON.parse(raw);
+      if (state == null || typeof state !== "object" || Array.isArray(state)) return false;
+      const current = state[ACTIVE_LIST_FIELD];
+      if (typeof current !== "string" || current === "") return false;
+      const renamed = adoptions.find((a) => a.localId === current);
+      if (renamed == null) return false;
+      state[ACTIVE_LIST_FIELD] = renamed.remoteId;
+      storage.setItem(SCRIPT_STATE_KEY, JSON.stringify(state));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   // userscript/src/sync-cycle.mjs
   var DEFAULT_MAX_ATTEMPTS = 3;
@@ -1819,6 +1839,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
           return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
         }
         writeSyncable(storage, mergedLists);
+        if (adopt) repointActiveList(storage, adoptions);
       }
       await saveBase2(dropLists(merged, frozenIds));
       return { status: "synced", revision: settledRevision, changed, delta };
@@ -1950,7 +1971,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   }
 
   // userscript/src/compat.mjs
-  var SCRIPT_STATE_KEY = "psnpp-scriptstate";
+  var SCRIPT_STATE_KEY2 = "psnpp-scriptstate";
   var isIdentity = (value) => typeof value === "string" || typeof value === "number";
   var isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   function readRaw(storage, key) {
@@ -1962,7 +1983,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
   }
   function readPsnpPlusVersion(storage) {
-    const raw = readRaw(storage, SCRIPT_STATE_KEY);
+    const raw = readRaw(storage, SCRIPT_STATE_KEY2);
     if (raw == null) return null;
     try {
       const state = JSON.parse(raw);
