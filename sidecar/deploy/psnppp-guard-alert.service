@@ -1,0 +1,27 @@
+# Pushes a failed publish-guard run to a Discord webhook. Started by systemd via
+# OnFailure= on psnppp-guard.service — never scheduled, never enabled.
+#
+# Deliberately has NO OnFailure of its own: an alerter that alerts on its own
+# failure is a loop. psnppp-alert.sh exits 0 even when it cannot send, for the
+# same reason.
+[Unit]
+Description=PSNP++ publish guard — alert on failure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# %i is not used: this is a plain unit, wired to one guard. The argument names
+# the unit to read the journal from, so the alert carries the actual failure
+# text rather than "something went wrong".
+ExecStart=/usr/local/sbin/psnppp-alert psnppp-guard.service
+TimeoutStartSec=120
+
+# Reads the webhook, which is a credential: anyone holding it can post to the
+# channel. Its own file, mode 600, outside the repo — which is public.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -5,6 +5,18 @@ Description=PSNP++ publish guard — keep the install/auto-update URL serving
 After=network-online.target
 Wants=network-online.target
 
+# Push, not pull. systemd starts this on ANY non-zero exit — including failures
+# the guard cannot report itself, such as ExecStart being missing or
+# non-executable (203/EXEC). Without it the only signal is
+# `systemctl list-units --failed`, which nobody runs, and the whole point of the
+# guard is that the thing it watches fails silently.
+#
+# MUST live in [Unit]. systemd accepts an OnFailure= in [Service] by parsing it,
+# warning to the journal, and IGNORING it — so the alert never fires and nothing
+# in the running system says so. Caught by `systemd-analyze verify`; run that
+# after editing this file.
+OnFailure=psnppp-guard-alert.service
+
 [Service]
 Type=oneshot
 # No SuccessExitStatus= or Restart= on purpose. A non-zero exit must leave this

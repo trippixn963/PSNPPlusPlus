@@ -15,3 +15,6 @@ dist/.psnppp-inner.js
 scripts/deploy.env
 scripts/*.local.sh
 *.local.md
+
+# The alert webhook is a credential; only the .example ships.
+sidecar/deploy/alert.env
