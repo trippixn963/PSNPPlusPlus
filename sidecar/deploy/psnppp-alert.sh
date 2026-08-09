@@ -57,6 +57,16 @@ host="$(hostname 2>/dev/null || echo unknown)"
 #     the payload came back empty and the script reported "could not build the
 #     payload" as though it were an ordinary edge case. Only stdout is captured,
 #     so a Python traceback lands in the journal where it belongs.
+#
+# The body carries `content` and nothing else. No `username`, no `avatar_url`:
+# Discord lets a payload override both per message, so either one hard-coded
+# here would silently beat whatever the webhook is set to in the server
+# settings, undoing that change on every alert with nothing on screen to say
+# why. The name and the picture belong to whoever owns the channel.
+#
+# Note for editors: everything between the single quotes below is one shell
+# string, so an apostrophe anywhere inside it — including in a comment — ends
+# the string and breaks the script. Keep prose out here, above the quote.
 payload="$(UNIT="$UNIT" RESULT="$result" HOST="$host" DETAIL="$detail" python3 -c '
 import json, os
 
@@ -73,11 +83,7 @@ content = (
     "```\n" + detail + "\n```"
 )
 
-print(json.dumps({
-    "username": "PSNP++ guard",
-    "avatar_url": "https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png",
-    "content": content[:1990]
-}))')"
+print(json.dumps({"content": content[:1990]}))')"
 
 [ -n "$payload" ] || { log "could not build the payload; not sending."; exit 0; }
 
