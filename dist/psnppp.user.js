@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.17
+// @version      2.3.18
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -1686,6 +1686,27 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       return false;
     }
   }
+  function reconcileActiveList(storage, idsBefore, idsAfter) {
+    try {
+      const before = new Set(idsBefore ?? []);
+      const after = new Set(idsAfter ?? []);
+      const raw = storage.getItem(SCRIPT_STATE_KEY);
+      if (raw == null) return null;
+      const state = JSON.parse(raw);
+      if (state == null || typeof state !== "object" || Array.isArray(state)) return null;
+      const current = state[ACTIVE_LIST_FIELD];
+      if (typeof current !== "string" || current === "") return null;
+      if (after.has(current)) return null;
+      if (!before.has(current)) return null;
+      const survivor = (idsAfter ?? [])[0] ?? null;
+      if (survivor == null) return null;
+      state[ACTIVE_LIST_FIELD] = survivor;
+      storage.setItem(SCRIPT_STATE_KEY, JSON.stringify(state));
+      return { from: current, to: survivor };
+    } catch {
+      return null;
+    }
+  }
 
   // userscript/src/sync-cycle.mjs
   var DEFAULT_MAX_ATTEMPTS = 3;
@@ -1799,6 +1820,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     const adopt = adoptions.length > 0 && await confirmAdoptions2(adoptions);
     const renames = new Map(adopt ? adoptions.map((a) => [String(a.localId), String(a.remoteId)]) : []);
     let pushed = false;
+    let activeListRepair = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const snapshot = readSnapshot(storage);
       if (snapshot.raw == null && Object.values(base.lists).some((n) => n.deletedAt == null)) {
@@ -1839,11 +1861,17 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
           if (pushed && attempt < maxAttempts) continue;
           return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
         }
+        const idsBefore = currentLists.map((l) => String(l.id));
         writeSyncable(storage, mergedLists);
         if (adopt) repointActiveList(storage, adoptions);
+        activeListRepair = reconcileActiveList(
+          storage,
+          idsBefore,
+          mergedLists.map((l) => String(l.id))
+        );
       }
       await saveBase2(dropLists(merged, frozenIds));
-      return { status: "synced", revision: settledRevision, changed, delta, localDelta };
+      return { status: "synced", revision: settledRevision, changed, delta, localDelta, activeListRepair };
     }
     return { status: "conflict", revision: remote.revision, changed: false, delta: zeroDelta() };
   }
@@ -2361,6 +2389,13 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         ["Added", local.listsAdded ?? 0],
         ["Removed", local.listsRemoved ?? 0]
       ], "\u{1F4CB}");
+    }
+    if (result.activeListRepair) {
+      log("Active List Repaired", [
+        ["Reason", "our write removed the list PSNP+ had bookmarked"],
+        ["Was", result.activeListRepair.from],
+        ["Now", result.activeListRepair.to]
+      ], "\u26A0\uFE0F");
     }
     if (!deltaIsEmpty(received)) {
       log("Received From Another Device", [
