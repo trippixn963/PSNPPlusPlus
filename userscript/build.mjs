@@ -15,13 +15,16 @@
  * touches it the way any other userscript could: through `localStorage`, and
  * through the page's own `window`.
  *
- * THE ONE THING THAT DEPENDS ON REACHING IT is auto-confirm.mjs, which replaces
- * `window.confirm` so the remove dialog answers itself. That works because
- * PSNP+ declares `@inject-into page` and calls a bare `confirm(...)` at click
- * time rather than capturing it at load — so it resolves against the PAGE's
- * global, which this script also has via `unsafeWindow`. Our banner keeps
- * `@sandbox raw` / `@inject-into page` for exactly that reason; changing either
- * would put us in a different realm and silently break it.
+ * Nothing left in this build reaches into PSNP+'s own realm. There was one
+ * attempt — an override of `window.confirm` that answered the "remove <game>?"
+ * dialog — and it could not work: PSNP+ runs in Tampermonkey's own
+ * `userscript.html` realm, not the page's, so a `confirm` we replace anywhere
+ * is never the one it calls. It has been removed rather than left in place
+ * pretending. The banner still declares `@sandbox raw` / `@inject-into page`,
+ * which is now only about running at `document-start`. Nothing left in the
+ * script needs to reach PSNP+'s CODE — but the realm still matters to
+ * watchLists: our `Storage.prototype.setItem` patch only sees writes made in
+ * OUR realm, so PSNP+'s own writes are caught by the 2s poll, not the patch.
  *
  * Author: Trippixn
  * Server: discord.gg/syria

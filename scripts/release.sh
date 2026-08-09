@@ -104,6 +104,20 @@ done
 grep -q "typeof document" dist/psnppp.user.js || { echo "ABORT: auto-start guard missing from bundle"; exit 1; }
 echo "auto-start guard present"
 
+# The built metadata must be banner.txt with the version filled in, exactly.
+# The unit suite cannot check this: it runs at step 2, BEFORE the build, so it
+# only ever sees the PREVIOUS release's dist and a banner edit is invisible to
+# it. That is not hypothetical — removing `@grant unsafeWindow` from the banner
+# left a committed dist still declaring it, and every existing test passed,
+# because they assert directives are PRESENT and none assert the two files
+# agree. A dropped @grant or @connect builds a script that installs and then
+# fails on its first request.
+sed "s/{{VERSION}}/$NEW_VERSION/g" userscript/banner.txt > /tmp/psnppp-banner-expected.txt
+sed -n '1,/==\/UserScript==/p' dist/psnppp.meta.js > /tmp/psnppp-banner-actual.txt
+diff -q /tmp/psnppp-banner-expected.txt /tmp/psnppp-banner-actual.txt >/dev/null \
+  || { echo "ABORT: dist metadata does not match banner.txt:"; diff /tmp/psnppp-banner-expected.txt /tmp/psnppp-banner-actual.txt; exit 1; }
+echo "metadata matches banner.txt"
+
 if [ "$DRY_RUN" = "--dry-run" ]; then
   echo "=== DRY RUN: stopping before publish. Reverting the version bump. ==="
   git checkout -- package.json package-lock.json 2>/dev/null || git checkout -- package.json

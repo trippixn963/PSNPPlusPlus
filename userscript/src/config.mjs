@@ -32,43 +32,6 @@ export async function saveConfig({ endpoint, key }) {
   await GM.setValue(SECRET_KEY, key);
 }
 
-const AUTO_CONFIRM_REMOVE_KEY = 'psnppp.autoConfirmRemove';
-
-/** On, because the owner asked for it (see auto-confirm.mjs). */
-export const AUTO_CONFIRM_REMOVE_DEFAULT = true;
-
-/**
- * Should PSNP+'s "Are you sure you want to remove X?" answer itself?
- *
- * Read and written on its OWN key rather than folded into loadConfig/saveConfig.
- * Those two are the credential record: loadConfig runs on every sync cycle and
- * feeds `isAllowedEndpoint`, and saveConfig is the settings form's write. A
- * display preference riding in that object would have to survive every
- * validation branch in applyConfig — including the "blank key keeps the stored
- * one" rule — for no benefit, and a bug there costs the user their sync key.
- *
- * Only an explicit `false` turns it off. Anything else in storage — absent,
- * null, a string left by some other build — reads as on, which is the state the
- * owner asked for and the one whose failure mode is "a dialog I did not want",
- * never "a dialog I needed and did not get".
- */
-export async function loadAutoConfirmRemove() {
-  const stored = await GM.getValue(AUTO_CONFIRM_REMOVE_KEY, AUTO_CONFIRM_REMOVE_DEFAULT);
-  return stored !== false;
-}
-
-/**
- * Store the toggle as a real boolean, never as whatever the caller passed.
- *
- * `=== true` rather than a truthiness coercion: the read above turns on for
- * anything that is not exactly `false`, so writing a truthy non-boolean (a
- * string 'off', say) would store a value that reads back as ON forever with no
- * way to switch it off from the panel.
- */
-export async function saveAutoConfirmRemove(enabled) {
-  await GM.setValue(AUTO_CONFIRM_REMOVE_KEY, enabled === true);
-}
-
 /**
  * Is this an endpoint the sync key can safely be sent to?
  *

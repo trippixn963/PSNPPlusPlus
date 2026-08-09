@@ -36,45 +36,6 @@ export function writeLists(storage, lists) {
   storage.setItem(LISTS_KEY, JSON.stringify(lists));
 }
 
-/**
- * Every game title currently saved, across every list.
- *
- * Read-only, and the only thing it is for is auto-confirm.mjs's second
- * condition: the name PSNP+ interpolated into "Are you sure you want to remove
- * X?" must be a game that is really in the user's lists, so a reworded
- * destructive prompt ("remove this list?") can never satisfy the matcher. It
- * lives here because this is the only module that touches the lists key.
- *
- * Remote (📡) lists are INCLUDED. They are never synced, but their rows carry
- * the same delete button and raise the same dialog, so excluding them would
- * hand the owner back the confirmation on exactly those rows for no reason.
- *
- * Returns a Set, always, and never throws: readLists already swallows a
- * missing, unparseable or hostile storage, and everything below tolerates the
- * malformed entries readLists deliberately lets through. An empty Set means "I
- * cannot tell", which the caller reads as "show the dialog".
- *
- * A title PSNP+ stopped storing under `title` simply stops matching, which
- * restores the confirmation. That is the safe direction and is why this
- * dependency is NOT a compatibility halt (see compat.mjs).
- */
-export function readGameTitles(storage) {
-  const titles = new Set();
-  for (const list of readLists(storage)) {
-    const games = list.games;
-    if (!Array.isArray(games)) continue;
-    for (const game of games) {
-      if (game == null || typeof game !== 'object') continue;
-      const title = game.title;
-      // A non-string title is not coerced. `String(game.title)` would turn a
-      // structured title into "[object Object]" and start matching a dialog
-      // that literally said that.
-      if (typeof title === 'string' && title !== '') titles.add(title);
-    }
-  }
-  return titles;
-}
-
 export function readSyncable(storage) {
   return splitRemote(readLists(storage));
 }
@@ -106,9 +67,14 @@ export function writeSyncable(storage, syncedLists) {
 /**
  * Watch for changes to the lists key.
  *
- * Same-tab writes do not fire `storage` events, and PSNP+ writes from the same
- * tab, so patching setItem is the primary signal. The poll is a backstop, and
- * the cross-tab `storage` listener catches a second PSNP+ tab.
+ * Same-tab writes do not fire `storage` events, so three signals are stacked.
+ *
+ * The setItem patch only observes writes made in OUR realm. PSNP+ was found
+ * (2026-08-09) to run inside Tampermonkey's own `userscript.html` realm, which
+ * has its own Storage prototype — so PSNP+'s writes, the ones that matter most,
+ * reach us through the 2s POLL rather than the patch. Treat the poll as the
+ * primary signal and the patch as the fast path for our own writes; the
+ * cross-tab `storage` listener catches a second PSNP+ tab.
  */
 export function watchLists(storage, onChange, { intervalMs = 2000, target = globalThis } = {}) {
   let last = storage.getItem(LISTS_KEY);

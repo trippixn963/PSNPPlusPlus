@@ -12,12 +12,10 @@
  */
 
 import { createSyncClient, gmRequest } from './sync-client.mjs';
-import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT,
-  loadAutoConfirmRemove, saveAutoConfirmRemove, AUTO_CONFIRM_REMOVE_DEFAULT } from './config.mjs';
+import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT } from './config.mjs';
 import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
 import { recordSync, listSyncHistory } from './history.mjs';
-import { watchLists, writeSyncable, readSyncable, readGameTitles } from './lists-bridge.mjs';
-import { installAutoConfirm } from './auto-confirm.mjs';
+import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { createSettingsPanel, describeFailure } from './panel.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
@@ -134,170 +132,6 @@ async function confirmAdoptions(adoptions) {
 }
 
 /**
- * Which window object PSNP+'s bare `confirm(...)` actually resolves against.
- *
- * This is the whole reason auto-confirm.mjs takes its target as a parameter.
- * PSNP+ declares `@sandbox raw` / `@inject-into page`, so it runs in the PAGE's
- * JavaScript context and its unqualified `confirm(...)` reads the page's global.
- * This script declares `@grant`s, which puts it in the manager's sandbox, where
- * `window` is a wrapper — assigning `window.confirm` there is visible to us and
- * to nothing else. `unsafeWindow` is the page's real window and is the only
- * object an override can be installed on that PSNP+ will ever see.
- *
- * `typeof` rather than a bare reference: `unsafeWindow` is an undeclared
- * identifier under Node's test runner and in any manager that does not provide
- * it, and reading one directly is a ReferenceError. Falling back to `window`
- * costs nothing — in a manager without a sandbox the two ARE the same object,
- * and in one with a sandbox the fallback is simply inert (the dialog keeps
- * appearing, which is the harmless direction).
- *
- * NOT VERIFIED IN A BROWSER. Everything above is read off the two metadata
- * blocks and the managers' documented sandbox behaviour; none of it is
- * observable from Node. See the report.
- */
-export function confirmTarget() {
-  try {
-    if (typeof unsafeWindow !== 'undefined' && unsafeWindow != null
-        && typeof unsafeWindow.confirm === 'function') {
-      return unsafeWindow;
-    }
-  } catch (error) {
-    console.error('[psnppp] could not reach unsafeWindow:', error);
-  }
-  return typeof window !== 'undefined' ? window : null;
-}
-
-/**
- * The live auto-confirm override, or null when the setting is off.
- *
- * Null is the honest representation of "off": the override is UNINSTALLED, not
- * left in place answering `false` to everything. `confirm` goes back to exactly
- * the function it was, so nothing of ours remains in the chain to reason about
- * — which is what "off behaves normally" has to mean on a page we share.
- */
-let autoConfirm = null;
-
-/**
- * One line, every load, saying which realm we actually got and whether the
- * override is live.
- *
- * Written because the question "why did the remove dialog come back?" was not
- * answerable from the page. See confirmTarget above for why the realm was
- * never verified. `GM_info.sandboxMode` reports what Tampermonkey actually
- * granted, which is the only version that counts: `@sandbox raw` is a REQUEST,
- * and a script granting GM_* APIs (this one grants four) cannot be given raw,
- * so the manager silently downgrades it.
- *
- * Logged for the OFF case too, and that is the point. Turning the setting off
- * uninstalls the override and returns early, so the previous behaviour was
- * total silence — identical, from the console, to an override that failed to
- * install. One line distinguishes "you switched it off" from "it is broken".
- *
- * console.info, not debug: debug lands on DevTools' Verbose level, which is
- * hidden by default — auto-confirm.mjs already learned that once. Every read is
- * guarded; a diagnostic that throws would take out the caller it explains.
- *
- * Deliberately does NOT report a title count. auto-confirm.mjs already logs one
- * at click time, which is the moment that decides, and a count taken here would
- * read 0 on a device whose first sync has not run — a fault indication where
- * there is no fault.
- */
-const UNREADABLE = Symbol('unreadable');
-
-function logConfirmEnvironment(enabled, installed, target) {
-  const read = (fn, fallback = 'unknown') => {
-    try {
-      return fn();
-    } catch {
-      return fallback;
-    }
-  };
-
-  // `typeof` alone is not enough and the try is not redundant: typeof on an
-  // UNDECLARED name is safe, but on a declared getter that throws it performs
-  // the get and throws with it. The two outcomes are kept distinct because
-  // "the manager never provided this" and "it is there and unreadable" send
-  // you to different places.
-  const page = read(() => (typeof unsafeWindow === 'undefined' ? null : unsafeWindow), UNREADABLE);
-  const own = read(() => (typeof window === 'undefined' ? null : window), UNREADABLE);
-
-  // confirmTarget accepts unsafeWindow ONLY when it carries a callable confirm.
-  // Reporting merely "sandboxed" would hide the reason it fell back, which is
-  // the actionable half.
-  const describePage = () => {
-    if (page === UNREADABLE) return 'present but threw on access';
-    if (page == null) return 'absent — sandbox window only';
-    if (read(() => typeof page.confirm === 'function', false)) return 'usable';
-    return 'present but carries no callable confirm';
-  };
-
-  const known = page !== UNREADABLE && own !== UNREADABLE;
-
-  try {
-    console.info('[psnppp] remove-prompt override:', {
-      setting: enabled ? 'on' : 'OFF — right-click the chip to turn it on',
-      installed,
-      // 'js' means the raw request was downgraded, which is expected here and
-      // fine: unsafeWindow still reaches the page. 'dom' would NOT be fine —
-      // no page globals, so the override could never see PSNP+'s confirm.
-      sandboxMode: read(() => (typeof GM_info === 'undefined' ? 'no GM_info' : GM_info?.sandboxMode ?? 'unset')),
-      unsafeWindow: describePage(),
-      sandboxed: known ? page != null && page !== own : 'unknown',
-      // The one that actually decides whether PSNP+ can see us: we must have
-      // patched the same object its bare confirm() resolves against.
-      targetIsPageWindow: page == null || page === UNREADABLE ? 'unknown' : target === page
-    });
-  } catch { /* a console that throws must not break the feature it describes */ }
-}
-
-/**
- * Switch the override on or off, right now. Answers whether the requested state
- * was actually reached.
- *
- * Never rejects and never throws: it is called from start() (which must reach
- * the chip) and from the settings panel's checkbox (whose own failure path
- * reverts the box). A failure here costs a convenience and nothing else, so it
- * is logged and reported as a return value rather than allowed to reach either
- * caller as a rejection.
- *
- * Returning `false` for a switch-on that did not take is what stops the panel
- * from ticking a box for a feature that is not running. Switching OFF always
- * succeeds: `uninstall` is specified to stop the override deciding anything even
- * when it cannot physically detach.
- *
- * Contains no `await` between reading and writing `autoConfirm`, so it cannot
- * interleave with itself. Exported so the wiring can be exercised without a
- * browser.
- */
-export async function applyAutoConfirm(enabled, { target = confirmTarget() } = {}) {
-  try {
-    autoConfirm?.uninstall();
-  } catch (error) {
-    console.error('[psnppp] could not remove the auto-confirm override:', error);
-  }
-  autoConfirm = null;
-  if (!enabled) {
-    logConfirmEnvironment(false, false, target);
-    return true;
-  }
-  try {
-    autoConfirm = installAutoConfirm({
-      target,
-      // Read at click time, not snapshotted here: the user is deleting games,
-      // so a set captured at install would go stale within one click.
-      knownTitles: () => readGameTitles(window.localStorage)
-    });
-    const installed = autoConfirm.installed === true;
-    logConfirmEnvironment(true, installed, target);
-    return installed;
-  } catch (error) {
-    console.error('[psnppp] could not install the auto-confirm override:', error);
-    logConfirmEnvironment(true, false, target);
-    return false;
-  }
-}
-
-/**
  * The one panel that may be open at a time, so a second right-click closes the
  * panel instead of stacking another copy of it on the page.
  */
@@ -354,7 +188,7 @@ export async function openSettings({ chip = null } = {}) {
     // Read together, and independently. Sharing one try meant an unreadable
     // backup index also skipped loadConfig, so the form rendered the DEFAULT
     // endpoint over the user's real one — and saving would have committed it.
-    const [backups, history, config, autoConfirmRemove, loadError] = await loadPanelData();
+    const [backups, history, config, loadError] = await loadPanelData();
 
     await new Promise(resolve => {
       let settled = false;
@@ -379,39 +213,6 @@ export async function openSettings({ chip = null } = {}) {
         backups,
         history,
         describeDelta,
-        autoConfirmRemove,
-        // Three things have to agree afterwards: the checkbox, GM storage, and
-        // what is actually installed on `confirm`. So switch the override
-        // first, only record it once that worked, and undo it if the record
-        // fails — every early exit reports `{ ok: false }`, which is what makes
-        // the panel put the checkbox back.
-        onToggleAutoConfirm: async next => {
-          try {
-            if (!await applyAutoConfirm(next)) {
-              // `confirm` could not be replaced — a manager or a page that will
-              // not allow it. Nothing was stored, so nothing disagrees, and the
-              // user is told rather than shown a ticked box for a feature that
-              // is not running.
-              return {
-                ok: false,
-                message: 'PSNP++ could not take over that PSNP+ prompt on this page, ' +
-                  'so it will keep asking. Nothing was changed.'
-              };
-            }
-            try {
-              await saveAutoConfirmRemove(next);
-            } catch (error) {
-              // Put the override back rather than leave this page behaving one
-              // way and every future page the other.
-              await applyAutoConfirm(!next);
-              throw error;
-            }
-            return { ok: true };
-          } catch (error) {
-            console.error('[psnppp] could not save the auto-confirm setting:', error);
-            return { ok: false, message: describeFailure(error, 'Could not save that setting') };
-          }
-        },
         onSave: async ({ endpoint, key }) => {
           try {
             return await applyConfig({ endpoint, key });
@@ -483,20 +284,16 @@ export async function openSettings({ chip = null } = {}) {
  * credentials is a plausible fix for exactly that.
  */
 async function loadPanelData() {
-  const [backups, history, config, autoConfirmRemove] = await Promise.allSettled([
-    listBackups(), listSyncHistory(), loadConfig(), loadAutoConfirmRemove()
+  const [backups, history, config] = await Promise.allSettled([
+    listBackups(), listSyncHistory(), loadConfig()
   ]);
-  const failures = [backups, history, config, autoConfirmRemove]
+  const failures = [backups, history, config]
     .filter(result => result.status === 'rejected')
     .map(result => describeFailure(result.reason, 'Could not read your saved settings'));
   return [
     backups.status === 'fulfilled' ? backups.value : [],
     history.status === 'fulfilled' ? history.value : [],
     config.status === 'fulfilled' ? config.value : { endpoint: DEFAULT_ENDPOINT, key: '' },
-    // Falls back to the DEFAULT, not to `false`: an unreadable toggle must not
-    // render a box that says the feature is off while it is actually running.
-    autoConfirmRemove.status === 'fulfilled'
-      ? autoConfirmRemove.value : AUTO_CONFIRM_REMOVE_DEFAULT,
     failures[0] ?? ''
   ];
 }
@@ -713,17 +510,6 @@ export async function start() {
     await migrateGmStorage();
   } catch (error) {
     console.error('[psnppp] GM storage migration failed:', error);
-  }
-
-  // Before the chip, and independently of it. This only ever affects PSNP+'s
-  // own "remove <game>?" dialog (see auto-confirm.mjs); every failure mode —
-  // an unreadable setting, a `confirm` that will not be replaced — is caught
-  // and costs nothing but the convenience, so it can never stop start() from
-  // reaching the indicator or the sync.
-  try {
-    await applyAutoConfirm(await loadAutoConfirmRemove());
-  } catch (error) {
-    console.error('[psnppp] could not set up the remove-prompt setting:', error);
   }
 
   // `let`, and the handlers below read it rather than close over a value: they

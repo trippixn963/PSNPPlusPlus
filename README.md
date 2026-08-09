@@ -72,8 +72,8 @@ Only through `localStorage` and the page's own `window` — the two things any u
 the page can reach. There is no copy of PSNP+ here and nothing is patched, so HusKyCode ships
 releases and they just arrive.
 
-Two dependencies on PSNP+'s internals are worth knowing about, because both will eventually
-break when it changes:
+One dependency on PSNP+'s internals is worth knowing about, because it will eventually break
+when PSNP+ changes:
 
 **The list format.** `compat.mjs` reads the version PSNP+ writes into `psnpp-scriptstate` and
 checks the shape of the saved lists before every cycle. If the shape moves, syncing **halts**
@@ -81,13 +81,10 @@ and the chip says so — nothing is uploaded and nothing local is touched. That 
 point of the check: a format change should freeze your lists, not quietly mangle them on two
 devices.
 
-**The remove dialog.** `auto-confirm.mjs` replaces `window.confirm` so PSNP+'s
-"Are you sure you want to remove X?" answers itself. It works because PSNP+ declares
-`@inject-into page` and calls a bare `confirm(...)` at click time, so it resolves against the
-page's global — which this script shares via `unsafeWindow`. It matches the exact message
-**and** checks the named game is really in your lists, so if PSNP+ rewords anything the match
-simply stops and the dialog comes back. That is the intended failure: a returning dialog is
-an annoyance, a loose match that auto-confirmed "delete this list" would not be recoverable.
+There used to be a second one: an override of `window.confirm` that answered PSNP+'s
+"Are you sure you want to remove X?" for you. It has been **removed** — PSNP+ runs inside
+Tampermonkey's own `userscript.html` realm, not the page's, so a `confirm` this script
+replaces is never the one PSNP+ calls. Verified live. The dialog stays.
 
 ## Working on it
 

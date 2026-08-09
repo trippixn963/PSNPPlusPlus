@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LISTS_KEY, readLists, writeLists, readSyncable, writeSyncable, watchLists, readGameTitles } from '../src/lists-bridge.mjs';
+import { LISTS_KEY, readLists, writeLists, readSyncable, writeSyncable, watchLists } from '../src/lists-bridge.mjs';
 
 /** Minimal in-memory stand-in for the Storage interface. */
 const fakeStorage = (initial = {}) => {
@@ -327,47 +327,3 @@ function createFakeTarget() {
   };
   return target;
 }
-
-// --- game titles, for the auto-confirm matcher ------------------------------
-
-test('readGameTitles collects every game title across every list', () => {
-  const storage = fakeStorage({
-    [LISTS_KEY]: JSON.stringify([
-      list('a', { games: [{ id: 1, title: 'Bloodborne' }, { id: 2, title: 'Portal 2' }] }),
-      list('b', { games: [{ id: 3, title: 'Bloodborne' }] })
-    ])
-  });
-  const titles = readGameTitles(storage);
-  assert.equal(titles instanceof Set, true);
-  assert.deepEqual([...titles].sort(), ['Bloodborne', 'Portal 2']);
-});
-
-test('readGameTitles includes games in remote (📡) lists, which are also removable rows', () => {
-  const storage = fakeStorage({
-    [LISTS_KEY]: JSON.stringify([
-      list('r', { url: 'https://example.test/feed.json', games: [{ id: 9, title: 'Journey' }] })
-    ])
-  });
-  assert.deepEqual([...readGameTitles(storage)], ['Journey']);
-});
-
-test('readGameTitles never throws and never invents a title', () => {
-  const hostile = {
-    getItem() { throw new Error('storage is gone'); },
-    setItem() {}, removeItem() {}
-  };
-  assert.deepEqual([...readGameTitles(hostile)], []);
-  assert.deepEqual([...readGameTitles(fakeStorage())], []);
-  assert.deepEqual([...readGameTitles(fakeStorage({ [LISTS_KEY]: 'not json' }))], []);
-  assert.deepEqual([...readGameTitles(fakeStorage({ [LISTS_KEY]: '{}' }))], []);
-
-  const messy = fakeStorage({
-    [LISTS_KEY]: JSON.stringify([
-      list('a', { games: 'not an array' }),
-      list('b', { games: [null, 7, 'x', { id: 1 }, { id: 2, title: '' }, { id: 3, title: 5 },
-        { id: 4, title: 'Real Game' }] }),
-      list('c', { games: null })
-    ])
-  });
-  assert.deepEqual([...readGameTitles(messy)], ['Real Game']);
-});
