@@ -46,7 +46,7 @@ The sync service is a single FastAPI app over SQLite. It holds one document per 
 does not care what is in it.
 
 1. Deploy `sidecar/` behind a reverse proxy on a host you control —
-   see [the deploy guide](sidecar/deploy/README.md).
+   see [the deploy guide](sidecar/deploy/DEPLOY.md).
 2. Point the userscript at it. `DEFAULT_ENDPOINT` in
    [`userscript/src/config.mjs`](userscript/src/config.mjs) is the build-time default, and
    `@downloadURL`/`@updateURL` in [`userscript/banner.txt`](userscript/banner.txt) are where
@@ -63,7 +63,7 @@ set the endpoint — so you do not have to rebuild just to test against a differ
 |---|---|
 | `userscript/src/` | PSNP++ itself — `main.mjs` is the entry point |
 | `userscript/tests/` | `npm test` |
-| `sidecar/` | The sync service (FastAPI + SQLite), its tests, and the [deploy runbook](sidecar/deploy/README.md) |
+| `sidecar/` | The sync service (FastAPI + SQLite), its tests, and the [deploy guide](sidecar/deploy/DEPLOY.md) |
 | `dist/psnppp.user.js` | The built script — this is what you install |
 
 ## How it touches PSNP+
@@ -99,8 +99,8 @@ npm run build               # writes dist/
 ```
 
 Releases are one command. It refuses a dirty tree, gates on both suites, bumps the version,
-builds, publishes, then verifies the live version and that the neighbouring services on the
-server are unharmed:
+builds, publishes, then verifies that what the live URL actually serves is byte-identical to
+what it just built:
 
 ```bash
 npm run release                        # patch

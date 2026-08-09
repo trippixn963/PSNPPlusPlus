@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
  * and a full-sync deploy of the portfolio deleted them as extraneous. The
  * failure is silent — Tampermonkey reads the resulting 404 as "no update
  * available", so a release can print all green and reach nobody. See
- * "Serving the userscript for auto-update" in sidecar/deploy/README.md.
+ * "The publish guard" in sidecar/deploy/DEPLOY.md.
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');

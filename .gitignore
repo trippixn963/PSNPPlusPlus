@@ -11,7 +11,7 @@ dist/.psnppp-inner.js
 # Deployment target, host-specific checks, and the operator's own runbook.
 # This repo is public; nobody's server address, key path, or neighbouring
 # services belong in it. sidecar/deploy/RUNBOOK.local.md is the real one, with
-# real hostnames; sidecar/deploy/README.md is the generic guide that ships.
+# real hostnames; sidecar/deploy/DEPLOY.md is the generic guide that ships.
 scripts/deploy.env
 scripts/*.local.sh
 *.local.md
