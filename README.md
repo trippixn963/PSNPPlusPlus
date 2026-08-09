@@ -3,12 +3,29 @@
 Two-way sync of your [PSNP+](https://psnp-plus.huskycode.dev) game lists across devices.
 
 PSNP+ keeps its game lists in `localStorage`, so a wishlist built on the desktop does not
-exist on the laptop. PSNP++ syncs them through a small private service on your own server.
+exist on the laptop. PSNP++ syncs them through a small service on your own server.
 
 It is a **companion** to PSNP+, not a replacement: install both, and PSNP+ keeps updating
 itself from HusKyCode as normal.
 
+> ### No support
+>
+> This is published because the code may be useful to read, not because it is a product.
+> **Issues and pull requests are not monitored, and there is no support of any kind** —
+> no bug triage, no feature requests, no help getting it running, no guarantee it keeps
+> working or that it stays online.
+>
+> It is built for one person's setup and is developed entirely to suit that. Breaking
+> changes ship without notice or a migration path. If it is useful to you, **fork it** and
+> run your own copy — that is the intended way to use this repository.
+>
+> It touches your saved lists. Read [How it touches PSNP+](#how-it-touches-psnp) and keep
+> your own backups. MIT licensed, which means as-is and with no warranty. See [LICENSE](LICENSE).
+
 ## Install
+
+This installs from the author's server and syncs against it, which requires a key you
+will not have. **To actually use PSNP++, [run your own](#running-your-own).**
 
 ```
 https://trippixn.com/psnppp.user.js
@@ -22,6 +39,23 @@ Paste that into your browser and Tampermonkey will offer to install it. Install 
 
 Then load any psnprofiles.com page, **right-click the status chip** in the corner, and paste
 your sync key. Repeat on each device.
+
+## Running your own
+
+The sync service is a single FastAPI app over SQLite. It holds one document per key and
+does not care what is in it.
+
+1. Deploy `sidecar/` behind a reverse proxy on a host you control —
+   see [the deploy guide](sidecar/deploy/README.md).
+2. Point the userscript at it. `DEFAULT_ENDPOINT` in
+   [`userscript/src/config.mjs`](userscript/src/config.mjs) is the build-time default, and
+   `@downloadURL`/`@updateURL` in [`userscript/banner.txt`](userscript/banner.txt) are where
+   your build will publish. **Change all three before building**, or your users poll the
+   author's server instead of yours.
+3. `cp scripts/deploy.env.example scripts/deploy.env`, fill it in, then `npm run release`.
+
+An installed copy can also be pointed anywhere at runtime — right-click the status chip and
+set the endpoint — so you do not have to rebuild just to test against a different host.
 
 ## Layout
 

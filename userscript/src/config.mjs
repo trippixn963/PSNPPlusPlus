@@ -14,6 +14,11 @@
 const ENDPOINT_KEY = 'psnppp.endpoint';
 const SECRET_KEY = 'psnppp.key';
 
+// FORKING? CHANGE THIS. It is the author's server, and a build that keeps it
+// points every one of your users at a host they have no key for and you do not
+// control. Change @connect in userscript/banner.txt to match, or Tampermonkey
+// blocks the request. An installed copy can also be repointed at runtime from
+// the status chip's right-click menu, which is enough for testing.
 export const DEFAULT_ENDPOINT = 'https://trippixn.com/api/psnppp';
 
 export async function loadConfig() {

@@ -1,18 +1,24 @@
-# systemd unit for the PSNP++ sync sidecar (John's VPS, your-server.example).
+# systemd unit for the PSNP++ sync sidecar. TEMPLATE — set the paths and user
+# to match your host before installing.
 [Unit]
 Description=PSNP++ list sync sidecar
 After=network.target
 
 [Service]
 Type=simple
-User=root
+# A dedicated unprivileged user, which needs to own the working directory, the
+# venv, and the .env. Running this as root works and is what makes the
+# sandboxing below worth having, but it is not the better answer.
+User=psnppp
 WorkingDirectory=/opt/psnppp
 EnvironmentFile=/opt/psnppp/.env
+# Loopback only. The auth is one static secret with no rate limiting, which is
+# fine behind a reverse proxy you control and not fine facing the internet.
 ExecStart=/opt/psnppp/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8091
 Restart=always
 RestartSec=5
 
-# Sandboxing. This process is reachable (via nginx) from the public internet
+# Sandboxing. This process is reachable (via the proxy) from the public internet
 # and holds one secret, so the blast radius of a bug in it is worth shrinking.
 #
 # ProtectSystem=strict mounts the ENTIRE filesystem read-only, which is why
@@ -23,11 +29,12 @@ RestartSec=5
 # configurations stay covered.
 #
 # PrivateTmp gives the unit its own /tmp, so nothing it writes there can be read
-# by, or collide with, the other services sharing this host.
+# by, or collide with, anything else sharing the host.
 #
-# NOT changed here: User=root. Dropping privileges is a separate decision with
-# its own migration (file ownership of state.db, the venv, and the .env) and has
-# not been asked for.
+# Keep the publish guard's script and its pristine copy OUT of ReadWritePaths.
+# Anything this service can write to is something a file-write bug in it can
+# reach, and one of those is executed as root on a timer while the other is
+# published to a JavaScript URL that browsers auto-execute.
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
