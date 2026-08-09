@@ -639,9 +639,7 @@ test('the retry is bounded — storage changing on every attempt exhausts maxAtt
   assert.equal(pushes, 3, 'exactly maxAttempts attempts, then stop');
   assert.equal(result.status, 'synced');
   assert.equal(result.changed, false, 'no write ever reached storage');
-  assert.deepEqual(result.delta, {
-    listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0
-  });
+  assert.deepEqual(result.delta, ZERO);
   // The other tab's last write survives untouched, and base did not advance
   // past a write that never happened.
   assert.deepEqual(readLists(storage).map(l => l.id), ['L1']);
@@ -1037,7 +1035,12 @@ test('[null] is corruption — the length check is what stops it reading as "eve
 // The delta describes what the cycle DID — so every path that writes nothing
 // reports zeros, and the counts are only ever non-zero when `changed` is true.
 
-const ZERO = { listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0 };
+const ZERO = {
+  listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0,
+  // Named alongside the counts so the log can say WHICH game moved. Empty here
+  // and asserted explicitly in the tests where something actually moved.
+  addedGames: [], removedGames: []
+};
 
 test('a cycle that pulls in a remote game reports it as one game added', async () => {
   const storage = fakeStorage();
@@ -1046,7 +1049,9 @@ test('a cycle that pulls in a remote game reports it as one game added', async (
 
   const result = await runSyncCycle(harness(storage, server).args);
   assert.equal(result.changed, true);
-  assert.deepEqual(result.delta, { ...ZERO, gamesAdded: 1 });
+  assert.deepEqual(result.delta, {
+    ...ZERO, gamesAdded: 1, addedGames: [{ title: 'Game g2', list: 'Wishlist' }]
+  });
 });
 
 test('a cycle that receives a whole new list counts the list AND its games', async () => {
@@ -1057,7 +1062,10 @@ test('a cycle that receives a whole new list counts the list AND its games', asy
   );
 
   const result = await runSyncCycle(harness(storage, server).args);
-  assert.deepEqual(result.delta, { ...ZERO, listsAdded: 1, gamesAdded: 2 });
+  assert.deepEqual(result.delta, {
+    ...ZERO, listsAdded: 1, gamesAdded: 2,
+    addedGames: [{ title: 'Game g8', list: 'Backlog' }, { title: 'Game g9', list: 'Backlog' }]
+  });
 });
 
 test('a deletion arriving from another device is reported as a removal', async () => {
@@ -1072,7 +1080,10 @@ test('a deletion arriving from another device is reported as a removal', async (
   const result = await runSyncCycle({ ...h.args, now: 6000 });
   assert.equal(result.changed, true);
   assert.deepEqual(readLists(storage).map(l => l.id), ['A'], 'B really was removed locally');
-  assert.deepEqual(result.delta, { ...ZERO, listsRemoved: 1, gamesRemoved: 1 });
+  assert.deepEqual(result.delta, {
+    ...ZERO, listsRemoved: 1, gamesRemoved: 1,
+    removedGames: [{ title: 'Game g8', list: 'Backlog' }]
+  });
 });
 
 test('an adoption is reported as a link, not as a list removed and re-added', async () => {
@@ -1084,7 +1095,10 @@ test('an adoption is reported as a link, not as a list removed and re-added', as
   // local-1 became remote-1. Reading that as "a list vanished and another
   // appeared" would be the single most alarming thing this log could say, and
   // it would be wrong — it is the same list under the id the server already had.
-  assert.deepEqual(result.delta, { ...ZERO, listsLinked: 1, gamesAdded: 1 });
+  assert.deepEqual(result.delta, {
+    ...ZERO, listsLinked: 1, gamesAdded: 1,
+    addedGames: [{ title: 'Game g2', list: 'Wishlist' }]
+  });
 });
 
 test('a cycle that writes nothing reports a zero delta', async () => {
@@ -1148,7 +1162,10 @@ test('a cycle aborted by the CAS reports the delta of the write that actually la
   assert.equal(result.changed, true);
   // The retry's snapshot was [F, A]; what it wrote is [F, A, B]. Exactly one
   // list and its one game arrived, and nothing was removed.
-  assert.deepEqual(result.delta, { ...ZERO, listsAdded: 1, gamesAdded: 1 });
+  assert.deepEqual(result.delta, {
+    ...ZERO, listsAdded: 1, gamesAdded: 1,
+    addedGames: [{ title: 'Game g9', list: 'Backlog' }]
+  });
   const after = readLists(storage);
   assert.deepEqual(after.map(l => l.id).sort(), ['A', 'B', 'F'],
     'the delta must match the bytes actually in storage');
@@ -1241,7 +1258,9 @@ test('a cycle that only RECEIVES skips the push but still writes locally', async
   assert.equal(h.backups.length, 1, 'and the pre-merge backup must still be taken');
   assert.deepEqual(h.backups[0][0].games.map(g => g.id), ['g1'], 'of the pre-merge lists');
   assert.deepEqual(Object.keys(h.base.lists), ['A'], 'and base must still advance');
-  assert.deepEqual(result.delta, { ...ZERO, gamesAdded: 1 });
+  assert.deepEqual(result.delta, {
+    ...ZERO, gamesAdded: 1, addedGames: [{ title: 'Game g2', list: 'Wishlist' }]
+  });
 });
 
 test('a brand-new device still pulls the whole server down without pushing', async () => {
@@ -1454,4 +1473,39 @@ test('pinned: a getState version failure leaves storage untouched', async () => 
 
   await assert.rejects(() => runSyncCycle(h.args), /Unsupported document version/);
   assert.equal(storage.getItem(LISTS_KEY), before);
+});
+
+test('two cycles never share one named-games array', async () => {
+  // ZERO_DELTA is spread to build every delta. If it held the arrays, a shallow
+  // copy would hand every delta the SAME array and one cycle's games would
+  // accumulate into the next one's log — invisibly, and only in production
+  // where cycles actually run more than once.
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(
+    stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 500), 1
+  );
+  const h = harness(storage, server);
+
+  const first = await runSyncCycle(h.args);
+  const second = await runSyncCycle(h.args);
+
+  assert.deepEqual(first.delta.addedGames, [{ title: 'Game g2', list: 'Wishlist' }]);
+  assert.deepEqual(second.delta.addedGames, [], 'the second cycle added nothing');
+  assert.notEqual(first.delta.addedGames, second.delta.addedGames, 'must not be the same array');
+});
+
+test('a huge first sync names a bounded number of games, not the whole library', async () => {
+  // A first sync, or deleting a list, can move hundreds at once. The log wants
+  // to say what changed, not reproduce the library into a Discord message.
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist')]);
+  const many = Array.from({ length: 200 }, (_, i) => game(`g${i}`));
+  const server = fakeServer(
+    stampChanges(emptyDoc(), toDoc([list('B', 'Backlog', many)]), 500), 1
+  );
+
+  const result = await runSyncCycle(harness(storage, server).args);
+  assert.equal(result.delta.gamesAdded, 200, 'the COUNT stays exact');
+  assert.equal(result.delta.addedGames.length, 20, 'only the names are capped');
 });

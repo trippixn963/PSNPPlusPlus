@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import threading
 import time
 import urllib.error
@@ -67,19 +66,28 @@ MAX_ITEMS = 25
 MAX_VALUE_CHARS = 300
 
 
+def _flat(text: Any) -> str:
+    """Strip what could break out of the code block or forge structure.
+
+    A backtick can close the fence early and spill the rest of the batch into
+    the channel as markdown — which is also how an escaped @everyone would get
+    rendered. A newline lets a value forge its own tree rows, so a game title
+    could fake a "Sync Failed" line. Applied to the title and emoji too, not
+    just values: those are interpolated into the first line of every tree.
+    """
+    return str(text).replace("`", "'").replace("\n", " ").replace("\r", " ")
+
+
 def render_tree(title: str, items: list[tuple[str, Any]], emoji: str = "📦") -> str:
     """One tree, exactly as it will appear inside the code block."""
-    lines = [f"{emoji} {title}"]
+    lines = [f"{_flat(emoji)} {_flat(title)}"]
     rows = list(items)[:MAX_ITEMS]
     for index, (key, value) in enumerate(rows):
         prefix = LAST if index == len(rows) - 1 else BRANCH
-        text = str(value)
+        text = _flat(value)
         if len(text) > MAX_VALUE_CHARS:
             text = text[: MAX_VALUE_CHARS - 1] + "…"
-        # Backticks would close the code block early and spill the rest of the
-        # batch into the message as markdown.
-        text = text.replace("`", "'")
-        lines.append(f"  {prefix} {key}: {text}")
+        lines.append(f"  {prefix} {_flat(key)}: {text}")
     return "\n".join(lines)
 
 
@@ -211,14 +219,16 @@ class TreeLogger:
                     self._circuit.trip()
                     break
                 time.sleep(SEND_SPACING_S)
-            with self._lock:
-                empty = not self._pending
-            if empty:
-                continue
 
 
 def _post_webhook(url: str, content: str) -> int:
-    data = json.dumps({"content": content}).encode("utf-8")
+    # allowed_mentions disarms every ping. Belt and braces with _flat above: if
+    # anything ever does escape the code fence, it must not be able to notify a
+    # server full of people.
+    data = json.dumps({
+        "content": content,
+        "allowed_mentions": {"parse": []},
+    }).encode("utf-8")
     request = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"}, method="POST"
     )

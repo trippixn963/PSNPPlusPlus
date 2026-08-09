@@ -100,3 +100,37 @@ def test_a_logging_failure_never_surfaces_as_an_error_to_the_browser(client, mon
     )
     assert response.status_code == 200
     assert response.json() == {"logged": True}
+
+
+def test_a_title_cannot_escape_the_code_block_or_forge_rows() -> None:
+    out = treelog.render_tree("Evil```\n@everyone", [("k", "v")], "🔄")
+    assert "`" not in out
+    assert out.count("\n") == 1, "a newline in the title would forge a tree row"
+
+
+def test_an_emoji_field_cannot_escape_either() -> None:
+    assert "`" not in treelog.render_tree("T", [("k", "v")], "```x")
+
+
+def test_a_value_cannot_forge_a_tree_row() -> None:
+    out = treelog.render_tree("T", [("k", "one\n  └─ Fake: forged")])
+    assert out.count("\n") == 1
+
+
+def test_the_webhook_body_disarms_mentions() -> None:
+    sent = {}
+
+    class FakeResponse:
+        status = 204
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    import urllib.request as ur
+    real = ur.urlopen
+    try:
+        ur.urlopen = lambda req, timeout=None: (sent.update(body=req.data), FakeResponse())[1]
+        treelog._post_webhook("https://example.invalid/x", "hi")
+    finally:
+        ur.urlopen = real
+    import json as _json
+    assert _json.loads(sent["body"])["allowed_mentions"] == {"parse": []}

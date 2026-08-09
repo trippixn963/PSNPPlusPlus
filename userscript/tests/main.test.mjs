@@ -1062,3 +1062,67 @@ test('a failing settings or progress sync does not repaint a good lists sync as 
   assert.equal(painted.includes('offline'), false);
   assert.equal(painted[painted.length - 1], 'synced');
 });
+
+/**
+ * logCycle: what a changed sync actually says in Discord.
+ *
+ * It had no coverage at all — deleting the call site left the suite green.
+ */
+
+const collect = () => {
+  const trees = [];
+  return { trees, log: (title, items, emoji) => trees.push({ title, items, emoji }) };
+};
+
+test('a quiet-but-changed cycle reports only the summary', async () => {
+  const { logCycle } = await import('../src/main.mjs');
+  const { trees, log } = collect();
+  logCycle(log, { revision: 9, delta: { listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0, addedGames: [], removedGames: [] } });
+  assert.deepEqual(trees.map(t => t.title), ['Sync Completed']);
+  assert.equal(trees[0].emoji, '🔄');
+  assert.deepEqual(trees[0].items[0], ['Revision', 9]);
+});
+
+test('added and removed games are named, one row each, with their list', async () => {
+  const { logCycle } = await import('../src/main.mjs');
+  const { trees, log } = collect();
+  logCycle(log, {
+    revision: 10,
+    delta: {
+      listsAdded: 0, listsRemoved: 0, gamesAdded: 2, gamesRemoved: 1, listsLinked: 0,
+      addedGames: [{ title: 'Bloodborne', list: 'Backlog' }, { title: 'Returnal', list: 'Backlog' }],
+      removedGames: [{ title: 'Road 96: Mile 0', list: 'Wishlist' }]
+    }
+  });
+  assert.deepEqual(trees.map(t => t.title), ['Sync Completed', 'Games Added', 'Games Removed']);
+  const added = trees[1];
+  assert.equal(added.emoji, '➕');
+  assert.deepEqual(added.items[0], ['Count', 2]);
+  assert.deepEqual(added.items[1], ['Game', 'Bloodborne (Backlog)']);
+  assert.deepEqual(trees[2].items[1], ['Game', 'Road 96: Mile 0 (Wishlist)']);
+});
+
+test('a big sync still tells the truth about scale when the names are capped', async () => {
+  const { logCycle } = await import('../src/main.mjs');
+  const { trees, log } = collect();
+  logCycle(log, {
+    revision: 11,
+    delta: {
+      listsAdded: 1, listsRemoved: 0, gamesAdded: 200, gamesRemoved: 0, listsLinked: 0,
+      addedGames: [{ title: 'One', list: 'Backlog' }], removedGames: []
+    }
+  });
+  const added = trees.find(t => t.title === 'Games Added');
+  assert.deepEqual(added.items[0], ['Count', 200], 'the count is exact even though one name is shown');
+  assert.equal(added.items.length, 2);
+  assert.ok(trees.some(t => t.title === 'Lists Changed'));
+});
+
+test('logCycle never throws on a malformed delta', async () => {
+  // It runs after a cycle that already wrote. Anything it throws would repaint
+  // a successful sync as Offline.
+  const { logCycle } = await import('../src/main.mjs');
+  const { log } = collect();
+  logCycle(log, { revision: 1, delta: undefined });
+  logCycle(log, {});
+});

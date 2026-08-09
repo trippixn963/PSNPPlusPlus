@@ -87,6 +87,9 @@ const ZERO_DELTA = {
   listsAdded: 0, listsRemoved: 0, gamesAdded: 0, gamesRemoved: 0, listsLinked: 0
 };
 
+/** How many game titles a single delta will name. See summarizeDelta. */
+const NAMED_GAME_LIMIT = 20;
+
 /**
  * The delta for a cycle that wrote nothing.
  *
@@ -95,7 +98,9 @@ const ZERO_DELTA = {
  * a cycle that abandoned its write has nothing to report, and saying otherwise
  * would make the history log lie in exactly the situation it exists to explain.
  */
-const zeroDelta = () => ({ ...ZERO_DELTA });
+// Fresh arrays every call. ZERO_DELTA deliberately holds none, so no spread of
+// it can hand two deltas the same array.
+const zeroDelta = () => ({ ...ZERO_DELTA, addedGames: [], removedGames: [] });
 
 /**
  * What a cycle did, in the only terms the user thinks in.
@@ -115,28 +120,61 @@ const zeroDelta = () => ({ ...ZERO_DELTA });
  */
 function summarizeDelta(before, after, renames) {
   const gameIds = list => new Set((list.games ?? []).map(g => String(g.id)));
+  const titlesById = list => new Map(
+    (list.games ?? []).map(g => [String(g.id), typeof g.title === 'string' ? g.title : ''])
+  );
   const beforeById = new Map(before.map(l => [renames.get(String(l.id)) ?? String(l.id), l]));
   const afterById = new Map(after.map(l => [String(l.id), l]));
 
-  const delta = { ...ZERO_DELTA, listsLinked: renames.size };
+  // The counts are the contract every caller already relies on; the named
+  // arrays are additive and purely for the log. Built here rather than by a
+  // second pass elsewhere for the reason the docblock above gives — a delta
+  // derived from a different read than the write it describes is a second
+  // source of truth about the same cycle, and that has destroyed data twice.
+  //
+  // Arrays are created per call, never spread out of ZERO_DELTA: a shallow
+  // copy of a frozen-looking constant holding an array shares the SAME array
+  // with every delta ever made, so one cycle's games would accumulate into the
+  // next one's log.
+  const delta = { ...ZERO_DELTA, listsLinked: renames.size, addedGames: [], removedGames: [] };
+
+  // Bounded because a first sync, or a list deletion, can move hundreds at
+  // once. The log wants to name what changed, not reproduce the library.
+  const note = (bucket, title, listName) => {
+    if (bucket.length >= NAMED_GAME_LIMIT || !title) return;
+    bucket.push({ title, list: listName });
+  };
+  const nameOf = list => (typeof list.name === 'string' && list.name ? list.name : 'a list');
 
   for (const [listId, list] of afterById) {
     const previous = beforeById.get(listId);
+    const titles = titlesById(list);
+    const listName = nameOf(list);
     if (previous == null) {
       delta.listsAdded += 1;
-      delta.gamesAdded += gameIds(list).size;
+      delta.gamesAdded += titles.size;
+      for (const [, title] of titles) note(delta.addedGames, title, listName);
       continue;
     }
     const had = gameIds(previous);
-    const has = gameIds(list);
-    for (const gameId of has) if (!had.has(gameId)) delta.gamesAdded += 1;
-    for (const gameId of had) if (!has.has(gameId)) delta.gamesRemoved += 1;
+    const hadTitles = titlesById(previous);
+    for (const gameId of titles.keys()) {
+      if (had.has(gameId)) continue;
+      delta.gamesAdded += 1;
+      note(delta.addedGames, titles.get(gameId), listName);
+    }
+    for (const gameId of had) {
+      if (titles.has(gameId)) continue;
+      delta.gamesRemoved += 1;
+      note(delta.removedGames, hadTitles.get(gameId), listName);
+    }
   }
 
   for (const [listId, list] of beforeById) {
     if (afterById.has(listId)) continue;
     delta.listsRemoved += 1;
     delta.gamesRemoved += gameIds(list).size;
+    for (const [, title] of titlesById(list)) note(delta.removedGames, title, nameOf(list));
   }
 
   return delta;

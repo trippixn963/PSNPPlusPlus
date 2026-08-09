@@ -11,6 +11,11 @@
  * Server: discord.gg/syria
  */
 
+import { createTreeLog } from './treelog.mjs';
+
+/** One "Script Started" per this window, not one per page view. */
+const STARTUP_LOG_KEY = 'psnppp.lastStartupLog';
+const STARTUP_LOG_INTERVAL_MS = 6 * 60 * 60 * 1000;
 import { createSyncClient, gmRequest } from './sync-client.mjs';
 import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT } from './config.mjs';
 import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
@@ -21,7 +26,7 @@ import { createSettingsPanel, describeFailure } from './panel.mjs';
 import { runSyncCycle } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
-import { checkPsnpPlusCompat, describeIncompatibility } from './compat.mjs';
+import { checkPsnpPlusCompat, describeIncompatibility, readPsnpPlusVersion } from './compat.mjs';
 import { emptyDoc } from './doc.mjs';
 import { installStorageGuard, describeStorageFailure } from './storage-guard.mjs';
 
@@ -492,6 +497,46 @@ export function decorateDetail(detail, endpoint) {
   return lines.join('\n');
 }
 
+/**
+ * Turn one cycle's delta into the trees the log should carry.
+ *
+ * Split into up to four so a busy cycle reads as short trees rather than one
+ * long one — the server batches them into a single message anyway, and a tree
+ * per kind of change survives truncation far better than one that lists
+ * everything.
+ *
+ * Named games are already bounded by the delta (20 per kind); `Count` carries
+ * the exact number regardless, so a big first sync still tells the truth
+ * about scale without reproducing the library.
+ */
+export function logCycle(log, result) {
+  const d = result.delta ?? {};
+  log('Sync Completed', [
+    ['Revision', result.revision],
+    ['Changed', describeDelta(d)]
+  ], '🔄');
+
+  if (d.gamesAdded > 0) {
+    log('Games Added', [
+      ['Count', d.gamesAdded],
+      ...(d.addedGames ?? []).map(g => ['Game', `${g.title} (${g.list})`])
+    ], '➕');
+  }
+  if (d.gamesRemoved > 0) {
+    log('Games Removed', [
+      ['Count', d.gamesRemoved],
+      ...(d.removedGames ?? []).map(g => ['Game', `${g.title} (${g.list})`])
+    ], '➖');
+  }
+  if (d.listsAdded > 0 || d.listsRemoved > 0 || d.listsLinked > 0) {
+    log('Lists Changed', [
+      ['Added', d.listsAdded ?? 0],
+      ['Removed', d.listsRemoved ?? 0],
+      ['Linked', d.listsLinked ?? 0]
+    ], '📋');
+  }
+}
+
 export async function start() {
   // Before anything reads GM storage. An install that predates the PSNP++
   // rename has its endpoint, key, base and backups under the old psnpsync.*
@@ -568,6 +613,17 @@ export async function start() {
     }
   });
 
+  // A no-op until the first config load. The catch below logs through this, so
+
+  // a throw BEFORE the first assignment — loadConfig itself failing — would
+
+  // otherwise ReferenceError inside the handler and replace the real failure
+
+  // with a logger bug, which is the exact inversion this whole module avoids.
+
+  let treeLog = () => {};
+  let lastFaultLogged = null;
+
   let running = false;
   let pending = false;
   let timer = null;
@@ -581,6 +637,25 @@ export async function start() {
   // applyAdoptions inside runSyncCycle, which is allowed to propagate here on
   // purpose so a single bad cycle fails loudly (visible "Offline" state, retried
   // on the next trigger) rather than being swallowed and silently skipped.
+  /**
+   * Has it been long enough since the last "Script Started" to log another?
+   *
+   * Stored rather than remembered, because every navigation on psnprofiles.com
+   * is a new page and a new module instance. Never throws: a storage failure
+   * degrades to not logging the line, which is the harmless direction.
+   */
+  async function shouldLogStartup() {
+    try {
+      const last = Number(await GM.getValue(STARTUP_LOG_KEY, 0)) || 0;
+      if (Date.now() - last < STARTUP_LOG_INTERVAL_MS) return false;
+      await GM.setValue(STARTUP_LOG_KEY, Date.now());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+
   async function sync() {
     if (running) {
       // A trigger arrived mid-cycle — the client allows up to a 15s timeout,
@@ -595,9 +670,28 @@ export async function start() {
     running = true;
     try {
       const config = await loadConfig();
+      // Rebound each cycle: the endpoint or key can change from the settings
+      // panel between one sync and the next, and a logger closed over the old
+      // pair would post to the previous server or 401 forever.
+      treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key });
       if (!config.key) {
         paint('unconfigured', 'Click to set up sync (or right-click for settings)');
         return;
+      }
+
+      // Once per page load, not once per cycle: syncs fire on focus and on
+      // every debounced edit, and a startup line per cycle would drown the
+      // events worth reading.
+      // Gated on STORAGE, not an in-memory flag. psnprofiles.com is a classic
+      // multi-page site: every navigation is a fresh page load and a fresh
+      // module, so a per-load flag would post this 100+ times a day and bury
+      // the events worth reading under identical noise.
+      if (await shouldLogStartup()) {
+        treeLog('Script Started', [
+          ['Version', currentScriptVersion() ?? 'unknown'],
+          ['PSNP+ Version', readPsnpPlusVersion(window.localStorage) ?? 'unknown'],
+          ['Endpoint', config.endpoint]
+        ], '🚀');
       }
       // Before anything is read for a merge, pushed, or written back: does
       // PSNP+ still save its lists in a shape this build understands? An
@@ -616,6 +710,21 @@ export async function start() {
 
       if (!compat.ok) {
         paint('incompatible', decorateDetail(describeIncompatibility(compat), config.endpoint));
+        // ⚠️ marks a fault, per the emoji set the server routes on. A halt is
+        // the loudest ordinary event there is: syncing has stopped and the user
+        // will not necessarily notice a chip colour change.
+        // Deduped on the reason, not merely rate-limited. Cycles fire on load,
+        // on every tab focus and on every debounced edit, so a PSNP+ update
+        // that breaks compat would otherwise emit ⚠️ forever, on every device,
+        // for as long as the user browses. A CHANGING reason still reports.
+        if (lastFaultLogged !== `halt:${compat.code}`) {
+          lastFaultLogged = `halt:${compat.code}`;
+          treeLog('Sync Halted', [
+            ['Reason', compat.reason ?? compat.code ?? 'unknown'],
+            ['Code', compat.code ?? 'none'],
+            ['PSNP+ Version', compat.version ?? 'unknown']
+          ], '⚠️');
+        }
         return;
       }
 
@@ -628,6 +737,9 @@ export async function start() {
       });
       const { state, detail } = describeSyncResult(result);
       paint(state, decorateDetail(detail, config.endpoint));
+      // A clean cycle clears the latch, so the NEXT occurrence of the same
+      // fault is reported rather than suppressed for the life of the page.
+      lastFaultLogged = null;
 
       // Only cycles that actually wrote are logged. Syncs fire on every load,
       // every tab focus and every debounced edit, and the overwhelming majority
@@ -639,8 +751,20 @@ export async function start() {
       // the sync is the product, so a failure to write a log line must never
       // repaint a successful sync as "Offline".
       if (result.status === 'synced' && result.changed) {
+        // Same rule as the history above, and for the same reason: only cycles
+        // that WROTE are logged. Syncs fire on every load, focus and debounced
+        // edit, and logging the quiet ones would post to Discord every couple
+        // of minutes while the user simply browses.
         try {
-          await recordSync({ revision: result.revision, delta: result.delta });
+          // INSIDE the guard, not beside it. This block runs after a cycle
+          // that already WROTE to localStorage; anything thrown out here
+          // reaches the outer catch and repaints a successful sync as
+          // "Offline", which is the one lie the chip must never tell.
+          logCycle(treeLog, result);
+          // The named games are for the log only. The history is a 20-entry
+          // window meant to stay small, and the panel never renders them.
+          const { addedGames, removedGames, ...counts } = result.delta ?? {};
+          await recordSync({ revision: result.revision, delta: counts });
         } catch (error) {
           console.error('[psnppp] could not record sync history:', error);
         }
@@ -651,6 +775,23 @@ export async function start() {
       // the next load or focus retries. String(), not error.message: a thrown
       // non-Error (e.g. `throw null`) must not itself make sync() reject.
       paint('offline', describeFailure(error, 'Sync failed'));
+      // Its own try, and that is not paranoia: this runs INSIDE the catch, so
+      // anything thrown here escapes past sync()'s handler as an unhandled
+      // rejection — the logger destroying the report of the failure it exists
+      // to report. `error.message` is a property read on an object we did not
+      // construct and can be a getter that throws.
+      try {
+        // Same dedupe as the halt above: a sidecar that is down produces one
+        // failure per load and per focus, indefinitely.
+        const reason = String(error && error.message ? error.message : error);
+        if (lastFaultLogged !== `fail:${reason}`) {
+          lastFaultLogged = `fail:${reason}`;
+          treeLog('Sync Failed', [
+            ['Error', reason],
+            ['Type', error && error.name ? error.name : typeof error]
+          ], '❌');
+        }
+      } catch { /* the paint above already told the user */ }
     } finally {
       running = false;
       if (pending) {
@@ -697,6 +838,10 @@ export async function start() {
       });
       if (available) {
         paint('update', `Version ${latest} is available`);
+        treeLog('Update Available', [
+          ['Installed', currentScriptVersion() ?? 'unknown'],
+          ['Latest', latest]
+        ], '🆙');
       }
     } catch (error) {
       console.error('[psnppp] update check failed:', error);

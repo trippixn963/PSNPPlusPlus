@@ -508,7 +508,19 @@ test('an incompatible PSNP+ pauses the sync: no push, no write, and the chip say
       await start();
       await settle();
 
-      assert.deepEqual(browser.requests, [], 'an incompatible PSNP+ must never reach the server');
+      // The guarantee is that no LIST DATA leaves, not that the socket stays
+      // shut. A halt is the loudest ordinary event there is — sync has stopped
+      // and a chip colour is easy to miss — so it is logged. The log carries
+      // the compat code and PSNP+'s version and nothing read out of storage,
+      // which is checked here rather than assumed: this is the one path where
+      // the shape of the user's data is explicitly not understood.
+      const syncRequests = browser.requests.filter(r => !r.url.endsWith('/log'));
+      assert.deepEqual(syncRequests, [], 'an incompatible PSNP+ must never reach the sync API');
+      for (const logged of browser.requests) {
+        assert.equal(logged.data.includes('Wishlist'), false, 'no list name may leave');
+        assert.equal(logged.data.includes(before), false, 'no list payload may leave');
+        assert.match(logged.data, /99\.0/, 'but the version that stopped it must');
+      }
       assert.deepEqual(storage.writes, [], 'an incompatible PSNP+ must never write localStorage');
       assert.equal(storage.getItem(LISTS_KEY), before, "the user's lists are untouched");
       assert.equal(browser.label(), 'Sync paused');
@@ -546,5 +558,38 @@ test('the same harness DOES push when PSNP+ is compatible', async () => {
   } finally {
     browser.restore();
     uninstallFakeGM();
+  }
+});
+
+
+test('the halt path logs a tree, not just a chip colour', async () => {
+  // Pins the CALL SITE. Deleting the `Sync Halted` log from sync() left the
+  // whole suite green: the test above only iterates browser.requests and
+  // asserts negatives, so an empty list satisfies it vacuously.
+  installFakeGM();
+  await saveConfig({ endpoint: DEFAULT_ENDPOINT, key: 'a-real-key' });
+  const storage = recordingStorage({
+    [LISTS_KEY]: JSON.stringify([realList('a', 'Wishlist', [realGame('1', { updatedAt: 7 })])]),
+    [SCRIPT_STATE_KEY]: JSON.stringify({ version: '11.16' })
+  });
+  const browser = installFakeBrowser(storage);
+  try {
+    await start();
+    await settle();
+    await settle();
+
+    const logged = browser.requests
+      .filter(r => r.url.endsWith('/log'))
+      .map(r => JSON.parse(r.data));
+    const halt = logged.find(t => t.title === 'Sync Halted');
+    assert.ok(halt, `the halt must be logged; got ${JSON.stringify(logged.map(t => t.title))}`);
+    assert.equal(halt.emoji, '⚠️', 'a halt is a fault, and must carry a fault glyph');
+    const rows = Object.fromEntries(halt.items);
+    assert.equal(rows.Code, 'game-updated-at');
+    assert.equal(rows['PSNP+ Version'], '11.16');
+    assert.equal(JSON.stringify(halt).includes('Wishlist'), false,
+      'the halt path must still not leak list contents');
+  } finally {
+    browser.uninstall?.();
   }
 });
