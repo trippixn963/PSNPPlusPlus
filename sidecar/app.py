@@ -44,6 +44,8 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import treelog
+
 DOC_VERSION = 1
 DB_BUSY_TIMEOUT_SECONDS = 10.0
 
@@ -90,6 +92,10 @@ EMPTY_DOCUMENTS: dict[str, dict[str, Any]] = {
 }
 
 app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None)
+
+# Reads PSNPPP_LOG_WEBHOOK from the environment. Unset means logging is simply
+# off — no webhook, no queue, no thread — rather than an error on every event.
+TREE_LOG = treelog.TreeLogger()
 
 # Guards one-time cold-start setup per database file (see _ensure_ready).
 # Keyed by path rather than initialized once at import time, so it stays
@@ -377,6 +383,41 @@ class PutState(BaseModel):
 class RestoreState(BaseModel):
     baseRevision: int
     revision: int
+
+
+class LogTree(BaseModel):
+    """One structured event from the browser.
+
+    `items` is a list of [key, value] pairs rather than an object because the
+    ORDER of a tree's rows is part of its meaning — the identifying rows come
+    first — and JSON object key order is not something to rely on across
+    engines.
+    """
+
+    title: str
+    items: list[list[Any]] = []
+    emoji: str = "📦"
+
+
+@app.post("/api/psnppp/log")
+def post_log(
+    body: LogTree,
+    x_sync_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Accept an event from the browser and stream it to the log webhook.
+
+    Behind the same key as everything else: this posts to a Discord channel, so
+    an unauthenticated caller could flood it.
+
+    Always answers 200 with whether logging is on. The browser must never treat
+    a logging failure as a sync failure — the events worth logging are the ones
+    that happen while something is already going wrong, and turning that into a
+    second error would bury the first.
+    """
+    _require_key(x_sync_key)
+    items = [(str(pair[0]), pair[1]) for pair in body.items if len(pair) >= 2]
+    TREE_LOG.log(body.title[:200], items, body.emoji[:8] or "📦")
+    return {"logged": TREE_LOG.enabled}
 
 
 @app.get("/api/psnppp/health")
