@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.14
+// @version      2.3.15
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -155,6 +155,45 @@
         }
         return { ok: true, revision: parseBody(response).revision };
       }
+    };
+  }
+
+  // userscript/src/treelog.mjs
+  var REQUEST_TIMEOUT_MS = 1e4;
+  async function sendTree({ endpoint, key, title, items = [], emoji = "\u{1F4E6}", request = gmRequest }) {
+    if (!endpoint || !key || !title) return false;
+    try {
+      const response = await request({
+        method: "POST",
+        url: `${String(endpoint).replace(/\/+$/, "")}/log`,
+        headers: { "Content-Type": "application/json", "X-Sync-Key": key },
+        data: JSON.stringify({
+          title: String(title),
+          emoji: String(emoji),
+          // Values are stringified HERE rather than server-side so a value that
+          // cannot serialise costs one row, not the whole tree.
+          items: items.map(([k, v]) => [String(k), safeValue(v)])
+        }),
+        timeout: REQUEST_TIMEOUT_MS
+      });
+      return response?.status >= 200 && response?.status < 300;
+    } catch {
+      return false;
+    }
+  }
+  function safeValue(value) {
+    try {
+      if (value == null) return "";
+      if (typeof value === "string") return value;
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      return JSON.stringify(value) ?? String(value);
+    } catch {
+      return "<unrenderable>";
+    }
+  }
+  function createTreeLog({ endpoint, key, request = gmRequest } = {}) {
+    return function log(title, items, emoji = "\u{1F4E6}") {
+      void sendTree({ endpoint, key, title, items, emoji, request });
     };
   }
 
@@ -1653,28 +1692,49 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     gamesRemoved: 0,
     listsLinked: 0
   };
-  var zeroDelta = () => ({ ...ZERO_DELTA });
+  var NAMED_GAME_LIMIT = 20;
+  var zeroDelta = () => ({ ...ZERO_DELTA, addedGames: [], removedGames: [] });
   function summarizeDelta(before, after, renames) {
     const gameIds = (list) => new Set((list.games ?? []).map((g) => String(g.id)));
+    const titlesById = (list) => new Map(
+      (list.games ?? []).map((g) => [String(g.id), typeof g.title === "string" ? g.title : ""])
+    );
     const beforeById = new Map(before.map((l) => [renames.get(String(l.id)) ?? String(l.id), l]));
     const afterById = new Map(after.map((l) => [String(l.id), l]));
-    const delta = { ...ZERO_DELTA, listsLinked: renames.size };
+    const delta = { ...ZERO_DELTA, listsLinked: renames.size, addedGames: [], removedGames: [] };
+    const note = (bucket, title, listName) => {
+      if (bucket.length >= NAMED_GAME_LIMIT || !title) return;
+      bucket.push({ title, list: listName });
+    };
+    const nameOf = (list) => typeof list.name === "string" && list.name ? list.name : "a list";
     for (const [listId, list] of afterById) {
       const previous = beforeById.get(listId);
+      const titles = titlesById(list);
+      const listName = nameOf(list);
       if (previous == null) {
         delta.listsAdded += 1;
-        delta.gamesAdded += gameIds(list).size;
+        delta.gamesAdded += titles.size;
+        for (const [, title] of titles) note(delta.addedGames, title, listName);
         continue;
       }
       const had = gameIds(previous);
-      const has = gameIds(list);
-      for (const gameId of has) if (!had.has(gameId)) delta.gamesAdded += 1;
-      for (const gameId of had) if (!has.has(gameId)) delta.gamesRemoved += 1;
+      const hadTitles = titlesById(previous);
+      for (const gameId of titles.keys()) {
+        if (had.has(gameId)) continue;
+        delta.gamesAdded += 1;
+        note(delta.addedGames, titles.get(gameId), listName);
+      }
+      for (const gameId of had) {
+        if (titles.has(gameId)) continue;
+        delta.gamesRemoved += 1;
+        note(delta.removedGames, hadTitles.get(gameId), listName);
+      }
     }
     for (const [listId, list] of beforeById) {
       if (afterById.has(listId)) continue;
       delta.listsRemoved += 1;
       delta.gamesRemoved += gameIds(list).size;
+      for (const [, title] of titlesById(list)) note(delta.removedGames, title, nameOf(list));
     }
     return delta;
   }
@@ -1830,7 +1890,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
 
   // userscript/src/update-check.mjs
   var THROTTLE_MS = 30 * 60 * 1e3;
-  var REQUEST_TIMEOUT_MS = 8e3;
+  var REQUEST_TIMEOUT_MS2 = 8e3;
   function parseVersion(metaText) {
     if (typeof metaText !== "string") return null;
     const match = metaText.match(/@version\s+(\S+)/);
@@ -1873,7 +1933,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
     let result = { available: false, latest: null };
     try {
-      const response = await request({ method: "GET", url: metaUrl, timeout: REQUEST_TIMEOUT_MS });
+      const response = await request({ method: "GET", url: metaUrl, timeout: REQUEST_TIMEOUT_MS2 });
       if (response && response.status === 200) {
         const latest = parseVersion(response.responseText);
         if (latest != null) {
@@ -2035,6 +2095,8 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   }
 
   // userscript/src/main.mjs
+  var STARTUP_LOG_KEY = "psnppp.lastStartupLog";
+  var STARTUP_LOG_INTERVAL_MS = 6 * 60 * 60 * 1e3;
   var BASE_KEY = "psnppp.base";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
@@ -2249,6 +2311,32 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     if (detail) lines.push(detail);
     return lines.join("\n");
   }
+  function logCycle(log, result) {
+    const d = result.delta ?? {};
+    log("Sync Completed", [
+      ["Revision", result.revision],
+      ["Changed", describeDelta(d)]
+    ], "\u{1F504}");
+    if (d.gamesAdded > 0) {
+      log("Games Added", [
+        ["Count", d.gamesAdded],
+        ...(d.addedGames ?? []).map((g) => ["Game", `${g.title} (${g.list})`])
+      ], "\u2795");
+    }
+    if (d.gamesRemoved > 0) {
+      log("Games Removed", [
+        ["Count", d.gamesRemoved],
+        ...(d.removedGames ?? []).map((g) => ["Game", `${g.title} (${g.list})`])
+      ], "\u2796");
+    }
+    if (d.listsAdded > 0 || d.listsRemoved > 0 || d.listsLinked > 0) {
+      log("Lists Changed", [
+        ["Added", d.listsAdded ?? 0],
+        ["Removed", d.listsRemoved ?? 0],
+        ["Linked", d.listsLinked ?? 0]
+      ], "\u{1F4CB}");
+    }
+  }
   async function start() {
     try {
       await migrateGmStorage();
@@ -2295,9 +2383,22 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
       }
     });
+    let treeLog = () => {
+    };
+    let lastFaultLogged = null;
     let running = false;
     let pending = false;
     let timer = null;
+    async function shouldLogStartup() {
+      try {
+        const last = Number(await GM.getValue(STARTUP_LOG_KEY, 0)) || 0;
+        if (Date.now() - last < STARTUP_LOG_INTERVAL_MS) return false;
+        await GM.setValue(STARTUP_LOG_KEY, Date.now());
+        return true;
+      } catch {
+        return false;
+      }
+    }
     async function sync() {
       if (running) {
         pending = true;
@@ -2306,14 +2407,30 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       running = true;
       try {
         const config = await loadConfig();
+        treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key });
         if (!config.key) {
           paint("unconfigured", "Click to set up sync (or right-click for settings)");
           return;
+        }
+        if (await shouldLogStartup()) {
+          treeLog("Script Started", [
+            ["Version", currentScriptVersion() ?? "unknown"],
+            ["PSNP+ Version", readPsnpPlusVersion(window.localStorage) ?? "unknown"],
+            ["Endpoint", config.endpoint]
+          ], "\u{1F680}");
         }
         const compat = checkPsnpPlusCompat(window.localStorage);
         void recordPsnpPlusVersion(compat.version);
         if (!compat.ok) {
           paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint));
+          if (lastFaultLogged !== `halt:${compat.code}`) {
+            lastFaultLogged = `halt:${compat.code}`;
+            treeLog("Sync Halted", [
+              ["Reason", compat.reason ?? compat.code ?? "unknown"],
+              ["Code", compat.code ?? "none"],
+              ["PSNP+ Version", compat.version ?? "unknown"]
+            ], "\u26A0\uFE0F");
+          }
           return;
         }
         paint("syncing");
@@ -2329,15 +2446,29 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         });
         const { state, detail } = describeSyncResult(result);
         paint(state, decorateDetail(detail, config.endpoint));
+        lastFaultLogged = null;
         if (result.status === "synced" && result.changed) {
           try {
-            await recordSync({ revision: result.revision, delta: result.delta });
+            logCycle(treeLog, result);
+            const { addedGames, removedGames, ...counts } = result.delta ?? {};
+            await recordSync({ revision: result.revision, delta: counts });
           } catch (error) {
             console.error("[psnppp] could not record sync history:", error);
           }
         }
       } catch (error) {
         paint("offline", describeFailure(error, "Sync failed"));
+        try {
+          const reason = String(error && error.message ? error.message : error);
+          if (lastFaultLogged !== `fail:${reason}`) {
+            lastFaultLogged = `fail:${reason}`;
+            treeLog("Sync Failed", [
+              ["Error", reason],
+              ["Type", error && error.name ? error.name : typeof error]
+            ], "\u274C");
+          }
+        } catch {
+        }
       } finally {
         running = false;
         if (pending) {
@@ -2367,6 +2498,10 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         });
         if (available) {
           paint("update", `Version ${latest} is available`);
+          treeLog("Update Available", [
+            ["Installed", currentScriptVersion() ?? "unknown"],
+            ["Latest", latest]
+          ], "\u{1F199}");
         }
       } catch (error) {
         console.error("[psnppp] update check failed:", error);
