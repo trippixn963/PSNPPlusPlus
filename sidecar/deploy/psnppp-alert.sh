@@ -44,21 +44,40 @@ detail="$(journalctl -u "$UNIT" -n "$JOURNAL_LINES" --no-pager -o cat 2>/dev/nul
 result="$(systemctl show "$UNIT" -p Result --value 2>/dev/null || echo unknown)"
 host="$(hostname 2>/dev/null || echo unknown)"
 
-# Built with python3 rather than string-concatenated: the journal carries quotes,
-# backslashes and newlines, and a hand-rolled JSON body would break on the first
-# one — silently, at the moment something is already wrong.
+# JSON is built by python3, not concatenated in shell: the journal carries
+# quotes, backslashes and newlines, and a hand-rolled body would break on the
+# first one — silently, at the moment something is already wrong.
+#
+# Values arrive as ENVIRONMENT variables and are bound to plain locals before
+# use. Two traps this avoids, both of which shipped here once:
+#   - `f"{os.environ[\"HOST\"]}"` needs an escaped quote inside the expression,
+#     which the surrounding single-quoted shell turns into a backslash Python
+#     rejects outright. Concatenation and bare locals need no escaping at all.
+#   - stderr is NOT discarded. It was, and that hid the SyntaxError completely:
+#     the payload came back empty and the script reported "could not build the
+#     payload" as though it were an ordinary edge case. Only stdout is captured,
+#     so a Python traceback lands in the journal where it belongs.
 payload="$(UNIT="$UNIT" RESULT="$result" HOST="$host" DETAIL="$detail" python3 -c '
 import json, os
+
+unit = os.environ["UNIT"]
+result = os.environ["RESULT"]
+host = os.environ["HOST"]
+detail = os.environ["DETAIL"]
+
+content = (
+    "**PSNP++ publish guard FAILED** on `" + host + "`\n"
+    "unit `" + unit + "` - result `" + result + "`\n"
+    "The install/auto-update URL may be down. Check "
+    "<https://trippixn.com/psnppp.meta.js>\n"
+    "```\n" + detail + "\n```"
+)
+
 print(json.dumps({
     "username": "PSNP++ guard",
-    "content": (
-        f"**PSNP++ publish guard FAILED** on `{os.environ[\"HOST\"]}`\n"
-        f"unit `{os.environ[\"UNIT\"]}` — result `{os.environ[\"RESULT\"]}`\n"
-        f"The install/auto-update URL may be down. Check "
-        f"<https://trippixn.com/psnppp.meta.js>\n"
-        f"```\n{os.environ[\"DETAIL\"]}\n```"
-    )[:1990]
-}))' 2>/dev/null)"
+    "avatar_url": "https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png",
+    "content": content[:1990]
+}))')"
 
 [ -n "$payload" ] || { log "could not build the payload; not sending."; exit 0; }
 

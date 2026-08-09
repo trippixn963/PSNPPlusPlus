@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PSNP++ icon</title>
+<style>
+  /* Everything derives from --size, so one stylesheet renders every export
+     crisply instead of upscaling a bitmap. Colours are theme.mjs's tokens
+     verbatim — the icon and the in-page chip must not drift apart. */
+  :root {
+    --size: 512px;
+    --plate:    #1b1d1f;
+    --sunken:   #141618;
+    --control:  #24272a;
+    --gold:     #f0c117;
+    --platinum: #a9d6ea;
+  }
+
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body { width: var(--size); height: var(--size); }
+
+  .plate {
+    position: relative;
+    width: var(--size);
+    height: var(--size);
+    border-radius: calc(var(--size) * 0.22);
+    overflow: hidden;
+    /* Lit from the top-left, like the chip. */
+    background:
+      radial-gradient(120% 100% at 22% 8%, rgba(255,255,255,0.075), rgba(255,255,255,0) 55%),
+      linear-gradient(158deg, var(--control) 0%, var(--plate) 48%, var(--sunken) 100%);
+    box-shadow:
+      inset 0 0 0 calc(var(--size) * 0.004) rgba(169,214,234,0.16),   /* platinum hairline */
+      inset 0 calc(var(--size) * 0.006) 0 rgba(255,255,255,0.055),     /* top bevel */
+      inset 0 calc(var(--size) * -0.008) 0 rgba(0,0,0,0.55);           /* bottom shadow */
+  }
+  body.circle .plate { border-radius: 50%; }
+
+  /* Brushed metal. Very low contrast — at 64px it should read as texture, not
+     as stripes. */
+  .plate::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      98deg,
+      rgba(255,255,255,0.018) 0 calc(var(--size) * 0.004),
+      rgba(0,0,0,0.018) calc(var(--size) * 0.004) calc(var(--size) * 0.008)
+    );
+  }
+
+  /* Vignette, so the plate has a body rather than sitting flat. */
+  .plate::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(78% 78% at 50% 42%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.42) 100%);
+  }
+
+  .mark {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: calc(var(--size) * 0.05);
+    /* Kept inside ~58% of the canvas so a circular crop never clips it. */
+    filter: drop-shadow(0 calc(var(--size) * 0.012) calc(var(--size) * 0.02) rgba(0,0,0,0.6));
+  }
+
+  .plus {
+    position: relative;
+    width: calc(var(--size) * 0.285);
+    height: calc(var(--size) * 0.285);
+  }
+
+  /* Drawn as boxes, not a font glyph: no font dependency, so the export is
+     byte-identical on any machine and the geometry is exact. */
+  .plus i {
+    position: absolute;
+    border-radius: calc(var(--size) * 0.012);
+    background: linear-gradient(180deg, #ffdf72 0%, var(--gold) 46%, #c8960b 100%);
+    box-shadow:
+      inset 0 calc(var(--size) * 0.004) 0 rgba(255,255,255,0.42),
+      inset 0 calc(var(--size) * -0.004) 0 rgba(0,0,0,0.30);
+  }
+  .plus .h {
+    left: 0;
+    top: calc(50% - var(--size) * 0.049);
+    width: 100%;
+    height: calc(var(--size) * 0.098);
+  }
+  .plus .v {
+    top: 0;
+    left: calc(50% - var(--size) * 0.049);
+    height: 100%;
+    width: calc(var(--size) * 0.098);
+  }
+</style>
+<div class="plate">
+  <div class="mark">
+    <span class="plus"><i class="h"></i><i class="v"></i></span>
+    <span class="plus"><i class="h"></i><i class="v"></i></span>
+  </div>
+</div>

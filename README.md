@@ -1,3 +1,5 @@
+<img src="assets/icon-128.png" alt="" width="88" height="88" align="left">
+
 # PSNP++
 
 Two-way sync of your [PSNP+](https://psnp-plus.huskycode.dev) game lists across devices.
@@ -65,6 +67,7 @@ set the endpoint — so you do not have to rebuild just to test against a differ
 | `userscript/tests/` | `npm test` |
 | `sidecar/` | The sync service (FastAPI + SQLite), its tests, and the [deploy guide](sidecar/deploy/DEPLOY.md) |
 | `dist/psnppp.user.js` | The built script — this is what you install |
+| `assets/` | The icon. Regenerate with `npm i -D playwright && npx playwright install chromium && node scripts/make-icon.mjs` |
 
 ## How it touches PSNP+
 
