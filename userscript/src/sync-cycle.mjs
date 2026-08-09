@@ -14,7 +14,7 @@
 import { toDoc, fromDoc, emptyDoc } from './doc.mjs';
 import { stampChanges, mergeDoc, gcTombstones } from './merger.mjs';
 import { readSyncable, writeSyncable, LISTS_KEY } from './lists-bridge.mjs';
-import { planAdoptions, applyAdoptions, repointActiveList } from './adopt.mjs';
+import { planAdoptions, applyAdoptions, repointActiveList, reconcileActiveList } from './adopt.mjs';
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -285,6 +285,8 @@ export async function runSyncCycle({
   // that only touches fields `toDoc` ignores changes the raw bytes, aborting
   // the CAS without changing the merge.)
   let pushed = false;
+  // Set by the write below when it stranded PSNP+'s bookmark and we moved it.
+  let activeListRepair = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     // ONE read of localStorage per attempt. Which lists are frozen, what the
@@ -501,6 +503,7 @@ export async function runSyncCycle({
         if (pushed && attempt < maxAttempts) continue;
         return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
       }
+      const idsBefore = currentLists.map(l => String(l.id));
       writeSyncable(storage, mergedLists);
 
       // AFTER the write, and only on the attempt that actually landed. An
@@ -508,6 +511,15 @@ export async function runSyncCycle({
       // for it would create the same dangling bookmark in the other direction.
       // Returns a boolean and never throws — see repointActiveList.
       if (adopt) repointActiveList(storage, adoptions);
+
+      // Then the general case: any write of ours that REMOVED the bookmarked
+      // list — a deletion arriving from another device — strands it just as
+      // effectively as a rename, and PSNP+'s add-to-list buttons vanish
+      // mid-session with nothing said. Reported so the log can name it rather
+      // than leaving it as "the buttons keep disappearing sometimes".
+      activeListRepair = reconcileActiveList(
+        storage, idsBefore, mergedLists.map(l => String(l.id))
+      );
     }
     // Frozen (📡) lists are deliberately kept OUT of base. `merged` carries
     // the server's own node for them (the merge had nothing local to weigh it
@@ -528,7 +540,7 @@ export async function runSyncCycle({
     // because no bytes went over the wire would make the next cycle read the
     // difference as a local deletion.
     await saveBase(dropLists(merged, frozenIds));
-    return { status: 'synced', revision: settledRevision, changed, delta, localDelta };
+    return { status: 'synced', revision: settledRevision, changed, delta, localDelta, activeListRepair };
   }
 
   // Every attempt was rejected: nothing was ever written to storage, so there

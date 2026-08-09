@@ -567,6 +567,17 @@ export function logCycle(log, result) {
       ['Removed', local.listsRemoved ?? 0]
     ], '📋');
   }
+  if (result.activeListRepair) {
+    // ⚠️ on purpose. Nothing is broken now — we fixed it — but this is the
+    // mechanism behind "the add-to-list button keeps disappearing", and it is
+    // worth seeing every time it happens rather than only when someone thinks
+    // to look.
+    log('Active List Repaired', [
+      ['Reason', 'our write removed the list PSNP+ had bookmarked'],
+      ['Was', result.activeListRepair.from],
+      ['Now', result.activeListRepair.to]
+    ], '⚠️');
+  }
   if (!deltaIsEmpty(received)) {
     log('Received From Another Device', [
       ['Summary', describeDelta(received)],

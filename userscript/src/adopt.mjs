@@ -143,3 +143,54 @@ export function repointActiveList(storage, adoptions) {
     return false;
   }
 }
+
+/**
+ * Keep PSNP+'s active-list bookmark valid across ANY write of ours, not just a
+ * rename.
+ *
+ * `repointActiveList` above handles an adoption, where we know the new id. This
+ * handles the general case: the merge removed the bookmarked list, because
+ * another device deleted it. PSNP+ has no recovery for that. Its profile page
+ * reads
+ *
+ *     if (!new ListStorage().has(lastActiveGameList)) return;
+ *
+ * on every row enhancement, so the moment our write lands the add-to-list
+ * buttons stop appearing — mid-session, with no reload and nothing said. It
+ * self-heals a NULL bookmark (`allLists[0].id`) but not a stale one.
+ *
+ * Only acts when the list was present BEFORE our write and absent after, which
+ * is the proof that our write is what stranded it. A bookmark already dangling
+ * when we arrived is left alone: that is someone else's doing and possibly the
+ * user's own, and quietly choosing a different active list for them is not
+ * ours to decide.
+ *
+ * Repoints to the first surviving list, which is exactly what PSNP+ itself does
+ * when the bookmark is null — so we leave it in a state its own code handles.
+ * Returns what happened, for the log, or null if it did nothing. Never throws.
+ */
+export function reconcileActiveList(storage, idsBefore, idsAfter) {
+  try {
+    const before = new Set(idsBefore ?? []);
+    const after = new Set(idsAfter ?? []);
+
+    const raw = storage.getItem(SCRIPT_STATE_KEY);
+    if (raw == null) return null;
+    const state = JSON.parse(raw);
+    if (state == null || typeof state !== 'object' || Array.isArray(state)) return null;
+
+    const current = state[ACTIVE_LIST_FIELD];
+    if (typeof current !== 'string' || current === '') return null;
+    if (after.has(current)) return null;          // still valid, nothing to do
+    if (!before.has(current)) return null;        // already dangling; not ours
+
+    const survivor = (idsAfter ?? [])[0] ?? null;
+    if (survivor == null) return null;            // no list to point at
+
+    state[ACTIVE_LIST_FIELD] = survivor;
+    storage.setItem(SCRIPT_STATE_KEY, JSON.stringify(state));
+    return { from: current, to: survivor };
+  } catch {
+    return null;
+  }
+}

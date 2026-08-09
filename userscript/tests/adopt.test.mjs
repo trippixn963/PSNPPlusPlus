@@ -143,3 +143,51 @@ test('no adoptions, no bookmark, or unreadable state all no-op instead of throwi
     getItem: () => { throw new Error('storage denied'); }, setItem: () => {}
   }, [{ localId: 'a', remoteId: 'b' }]), false, 'a courtesy repair must never fail a sync');
 });
+
+import { reconcileActiveList } from '../src/adopt.mjs';
+
+test('a write of ours that deletes the bookmarked list moves the bookmark on', () => {
+  // The "buttons keep disappearing" mechanism: another device deletes the list,
+  // our merge removes it here, and PSNP+ silently stops rendering the button.
+  const storage = stateStorage({
+    [SCRIPT_STATE_KEY]: JSON.stringify({ [ACTIVE_LIST_FIELD]: 'gone' })
+  });
+  assert.deepEqual(
+    reconcileActiveList(storage, ['gone', 'kept'], ['kept']),
+    { from: 'gone', to: 'kept' }
+  );
+  assert.equal(storage.read()[ACTIVE_LIST_FIELD], 'kept');
+});
+
+test('a bookmark that was ALREADY dangling before our write is left alone', () => {
+  // Not our doing, and possibly the user's own deliberate state. Choosing a
+  // different active list for them is not ours to decide.
+  const storage = stateStorage({
+    [SCRIPT_STATE_KEY]: JSON.stringify({ [ACTIVE_LIST_FIELD]: 'stale' })
+  });
+  assert.equal(reconcileActiveList(storage, ['a'], ['a']), null);
+  assert.equal(storage.read()[ACTIVE_LIST_FIELD], 'stale');
+});
+
+test('a still-valid bookmark is never touched', () => {
+  const storage = stateStorage({
+    [SCRIPT_STATE_KEY]: JSON.stringify({ [ACTIVE_LIST_FIELD]: 'a' })
+  });
+  assert.equal(reconcileActiveList(storage, ['a', 'b'], ['a']), null);
+  assert.equal(storage.read()[ACTIVE_LIST_FIELD], 'a');
+});
+
+test('deleting the last list leaves the bookmark rather than inventing a target', () => {
+  const storage = stateStorage({
+    [SCRIPT_STATE_KEY]: JSON.stringify({ [ACTIVE_LIST_FIELD]: 'only' })
+  });
+  assert.equal(reconcileActiveList(storage, ['only'], []), null);
+  assert.equal(storage.read()[ACTIVE_LIST_FIELD], 'only');
+});
+
+test('reconcile never throws, whatever storage does', () => {
+  assert.equal(reconcileActiveList({
+    getItem: () => { throw new Error('denied'); }, setItem: () => {}
+  }, ['a'], []), null);
+  assert.equal(reconcileActiveList(stateStorage({ [SCRIPT_STATE_KEY]: 'not json' }), ['a'], []), null);
+});

@@ -1580,3 +1580,24 @@ test('a purely local removal is named too', async () => {
   assert.equal(result.localDelta.gamesRemoved, 1);
   assert.deepEqual(result.localDelta.removedGames, [{ title: 'Returnal', list: 'Wishlist' }]);
 });
+
+test('a deletion from another device repoints the bookmark and reports it', async () => {
+  // End to end: B is deleted elsewhere, our merge removes it here, and the
+  // bookmark pointing at B would otherwise kill the add-to-list button.
+  const storage = fakeStorage({
+    'psnpp-scriptstate': JSON.stringify({ lastActiveGameList: 'B' })
+  });
+  const before = [list('A', 'Wishlist', [game('g1')]), list('B', 'Backlog', [game('g8')])];
+  writeLists(storage, before);
+  const base = toDoc(before);
+  const server = fakeServer(
+    stampChanges(base, toDoc([list('A', 'Wishlist', [game('g1')])]), 5000), 1
+  );
+  const h = harness(storage, server, base);
+
+  const result = await runSyncCycle({ ...h.args, now: 6000 });
+
+  assert.deepEqual(readLists(storage).map(l => l.id), ['A'], 'B really was removed');
+  assert.deepEqual(result.activeListRepair, { from: 'B', to: 'A' });
+  assert.equal(JSON.parse(storage.getItem('psnpp-scriptstate')).lastActiveGameList, 'A');
+});
