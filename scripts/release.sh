@@ -10,6 +10,7 @@
 #
 # Usage:  scripts/release.sh [patch|minor|major]   (default: patch)
 #         scripts/release.sh patch --dry-run       (everything except publishing)
+#         npm run release -- patch --dry-run       (the `--` matters: see below)
 #
 # Every step is chained with && or guarded by `set -e`: a failing test or a
 # failing build can never reach the publish step. That is deliberate — an
@@ -18,12 +19,51 @@
 
 set -euo pipefail
 
-BUMP="${1:-patch}"
-DRY_RUN="${2:-}"
+BUMP="patch"
+DRY_RUN=""
+# Order-independent, and it also honours npm_config_dry_run. That last part is
+# not a nicety: `npm run release patch --dry-run` — the form this repo's README
+# documented — has npm CONSUME the flag, so the script saw only "patch" and
+# published for real. A dry run that silently publishes is the worst possible
+# failure here, so accept every spelling rather than rely on the caller getting
+# `npm run release -- patch --dry-run` exactly right.
+[ "${npm_config_dry_run:-}" = "true" ] && DRY_RUN="--dry-run"
+for arg in "$@"; do
+  case "$arg" in
+    patch|minor|major) BUMP="$arg" ;;
+    --dry-run|-n)      DRY_RUN="--dry-run" ;;
+    *) echo "ABORT: unknown argument '$arg'. Usage: release.sh [patch|minor|major] [--dry-run]"; exit 1 ;;
+  esac
+done
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS="user@your-server.example"
-KEY="$HOME/.ssh/your-ssh-key"
-WEBROOT="/var/www/trippixn.com"
+
+# Host-specific settings live in scripts/deploy.env, which is gitignored — this
+# script is public and must not carry anyone's server address or key path.
+# See scripts/deploy.env.example.
+# shellcheck source=/dev/null
+[ -f "$REPO/scripts/deploy.env" ] && . "$REPO/scripts/deploy.env"
+
+VPS="${PSNPPP_VPS:-}"
+KEY="${PSNPPP_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+BASE_URL="${PSNPPP_BASE_URL:-}"
+# The artifacts get their OWN directory, deliberately NOT the site's document
+# root (2026-08-09). They used to sit in the portfolio's web root and a
+# full-sync deploy of the portfolio (rsync --delete) deleted them as extraneous,
+# 404'ing the install URL and silently freezing every client's auto-update.
+# nginx maps the unchanged public URLs here via `location =` blocks.
+WEBROOT="${PSNPPP_WEBROOT:-/var/www/psnppp}"
+# The guard's pristine copy. Deliberately outside the sidecar's ReadWritePaths,
+# so a file-write bug in an internet-facing service cannot reach the bytes that
+# get published to a JavaScript URL every browser auto-executes.
+PRISTINE="${PSNPPP_PRISTINE:-/var/lib/psnppp/published}"
+CURL_TIMEOUT=20
+
+[ -n "$VPS" ] && [ -n "$BASE_URL" ] || {
+  echo "ABORT: no deploy target configured."
+  echo "  cp scripts/deploy.env.example scripts/deploy.env  and fill it in,"
+  echo "  or set PSNPPP_VPS and PSNPPP_BASE_URL in the environment."
+  exit 1
+}
 
 cd "$REPO"
 
@@ -36,8 +76,14 @@ fi
 echo "clean"
 
 echo "=== 2. tests (gate) ==="
-npm test 2>&1 | grep -E "^. (pass|fail)"
-npm test >/dev/null 2>&1 || { echo "ABORT: JS suite failed"; exit 1; }
+# One run, not two. The old shape piped the first run into grep and put the
+# ABORT on a second run — so a failure tripped set -e on the pipeline and the
+# ABORT message never printed, while a passing suite was executed twice.
+if ! npm test >/tmp/psnppp-jstest.log 2>&1; then
+  tail -30 /tmp/psnppp-jstest.log
+  echo "ABORT: JS suite failed (full output: /tmp/psnppp-jstest.log)"; exit 1
+fi
+grep -E "^. (pass|fail)" /tmp/psnppp-jstest.log || echo "(test reporter format changed — summary not parsed)"
 ( cd sidecar && .venv/bin/python -m pytest tests/ -q ) || { echo "ABORT: Python suite failed"; exit 1; }
 
 echo "=== 3. bump version ($BUMP) ==="
@@ -67,30 +113,71 @@ fi
 
 echo "=== 6. commit the release ==="
 git add -A
-git -c user.name="Trippixn" -c user.email="90400991+trippixn963@users.noreply.github.com" \
-    commit -q -m "Release v$NEW_VERSION"
+git commit -q -m "Release v$NEW_VERSION"
 
 echo "=== 7. publish ==="
-scp -q -i "$KEY" dist/psnppp.user.js dist/psnppp.meta.js "$VPS:$WEBROOT/"
+# ORDER MATTERS. The on-box guard treats $PRISTINE as authoritative and restores
+# the web root from it within 15 minutes, so the pristine copy is refreshed
+# FIRST. Publishing first meant any failure in between — a dropped connection,
+# a timeout — left live=new and pristine=old, and the guard then rolled
+# production back to the previous release and logged it as a successful repair.
+# This order makes a half-finished publish fail upwards instead.
+#
+# Both copies come from local dist/. Never cp the web root into the pristine
+# dir: a truncated upload would become the copy the guard enforces forever.
+#
+# mkdir -p, because scp into a missing directory silently writes a FILE named
+# after it instead of failing — publishing to /var/www/psnppp as a regular file
+# would 404 every request while every step here still looked fine.
+ssh -i "$KEY" "$VPS" "mkdir -p '$PRISTINE' '$WEBROOT'"
+scp -q -i "$KEY" dist/psnppp.user.js dist/psnppp.meta.js "$VPS:$PRISTINE/"
+
+# Stage then rename, so nginx never serves a half-written file and a failure
+# between the two uploads cannot leave user.js new while meta.js is still old
+# (Tampermonkey polls meta.js, so that pairing decides whether anyone updates).
+ssh -i "$KEY" "$VPS" "set -e
+  install -m 644 '$PRISTINE'/psnppp.user.js '$WEBROOT'/.psnppp.user.js.tmp
+  install -m 644 '$PRISTINE'/psnppp.meta.js '$WEBROOT'/.psnppp.meta.js.tmp
+  mv -f '$WEBROOT'/.psnppp.user.js.tmp '$WEBROOT'/psnppp.user.js
+  mv -f '$WEBROOT'/.psnppp.meta.js.tmp '$WEBROOT'/psnppp.meta.js"
 
 echo "=== 8. verify live ==="
-LIVE="$(curl -s --max-time 20 https://trippixn.com/psnppp.meta.js | grep '@version' | tr -s ' ' | cut -d' ' -f3)"
-[ "$LIVE" = "$NEW_VERSION" ] || { echo "ABORT: live meta.js is $LIVE, expected $NEW_VERSION"; exit 1; }
+# `|| true` on the substitution, or a 404 (grep matches nothing) trips set -e
+# right here and the ABORT below — the one message that names the actual
+# problem — never prints. The failure this step exists to catch was the one it
+# could not report.
+LIVE="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.meta.js" 2>/dev/null | grep -m1 '@version' | tr -s ' ' | cut -d' ' -f3 || true)"
+[ "$LIVE" = "$NEW_VERSION" ] \
+  || { echo "ABORT: live meta.js is '${LIVE:-<nothing — 404, or the SPA fallback answered with HTML>}', expected $NEW_VERSION"; exit 1; }
 echo "live meta.js = $LIVE"
-curl -s --max-time 20 https://trippixn.com/psnppp.user.js | grep -q "@version      $NEW_VERSION" \
-  && echo "live user.js = $NEW_VERSION"
 
-echo "=== 9. sidecar + neighbours unharmed ==="
-# A 200 proves nothing on this host: nginx has a catch-all SPA fallback that
-# serves the portfolio's HTML for any unmatched path. Assert bodies instead.
-curl -s --max-time 20 https://trippixn.com/api/psnppp/health | grep -q '"status":"ok"' \
-  && echo "psnppp   = ROUTED" || { echo "ABORT: sync API not routed"; exit 1; }
-curl -s -o /dev/null -w 'portfolio = %{http_code}\n' --max-time 20 https://trippixn.com/
-curl -s --max-time 20 https://trippixn.com/api/stats | grep -q '"success":' \
-  && echo "syria    = ROUTED" || echo "WARNING: a neighbouring service API not routed"
-# 405/404 is healthy here — only the SPA fallback can return 200.
-curl -s -o /dev/null -w 'neighbour    = %{http_code} (405/404 healthy, 200 = fell through)\n' \
-  --max-time 20 https://trippixn.com/api/neighbour/games
+# NOT `curl | grep -q`. grep -q exits on the first match while curl still has
+# ~96 KB to push; curl dies on the closed pipe (exit 23) and pipefail promotes
+# it, so the check reported failure on success — and because it sat on the left
+# of &&, set -e exempted it and the release sailed past. It could neither pass
+# nor fail. cmp reads all of stdin, so no early exit, and it catches truncation
+# too — a body cut off after the metadata block passes any @version check.
+curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.user.js" | cmp -s - dist/psnppp.user.js \
+  || { echo "ABORT: live user.js is not byte-identical to dist/psnppp.user.js (served $(curl -s -o /dev/null -w '%{http_code}, %{size_download} bytes' "$BASE_URL/psnppp.user.js"), expected $(wc -c < dist/psnppp.user.js) bytes)"; exit 1; }
+echo "live user.js = byte-identical to dist ($(wc -c < dist/psnppp.user.js) bytes)"
+
+echo "=== 9. sync API still routed ==="
+# Assert the BODY, not the status. If the host puts an SPA catch-all in front of
+# this domain, any unmatched path answers 200 with HTML — a status-code check
+# there cannot distinguish "routed" from "gone".
+HEALTH="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/api/psnppp/health" 2>/dev/null || true)"
+case $HEALTH in
+  *'"status":"ok"'*) echo "sync API = ROUTED" ;;
+  *) echo "ABORT: sync API not routed — $BASE_URL/api/psnppp/health returned '${HEALTH:0:80}'"; exit 1 ;;
+esac
+
+# If this host runs other services behind the same nginx, check them here.
+# Kept out of the repo on purpose: which neighbours exist is deployment detail,
+# and one of them belongs to someone else.
+if [ -x "$REPO/scripts/post-release.local.sh" ]; then
+  echo "=== 9b. local post-release checks ==="
+  "$REPO/scripts/post-release.local.sh" "$NEW_VERSION"
+fi
 
 echo
 echo "=== v$NEW_VERSION released. Tampermonkey will pick it up on its next poll. ==="

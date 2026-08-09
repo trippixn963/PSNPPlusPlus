@@ -1,0 +1,20 @@
+# Schedules the PSNP++ publish guard.
+[Unit]
+Description=Run the PSNP++ publish guard periodically
+
+[Timer]
+# 15 minutes is chosen against the damage, not the detection speed: the window
+# that matters is "a deploy broke the URL and nobody noticed", which historically
+# lasted a day. Anything under an hour collapses that to nothing, and the check
+# is two small requests.
+#
+# OnCalendar rather than OnUnitActiveSec so that Persistent= below actually
+# means something — it is a documented no-op on monotonic timers.
+OnCalendar=*:0/15
+# Do not let every timer on the box fire on the same second.
+RandomizedDelaySec=60s
+# Catch up a run missed while the box was down. Only has any effect with OnCalendar=.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

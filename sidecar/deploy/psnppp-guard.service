@@ -1,0 +1,27 @@
+# Verifies (and repairs) the PSNP++ install/auto-update URL. See psnppp-guard.sh
+# for why an unmonitored userscript URL is a silent single point of failure.
+[Unit]
+Description=PSNP++ publish guard — keep the install/auto-update URL serving
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# No SuccessExitStatus= or Restart= on purpose. A non-zero exit must leave this
+# unit in `systemctl list-units --failed`, which Type=oneshot gives for free and
+# which is the only passive signal until an alert webhook exists. Note it is a
+# LEVEL signal, not an edge one: the next successful run 15 minutes later clears
+# it, so a flapping failure can disappear before anyone looks.
+ExecStart=/usr/local/sbin/psnppp-guard
+TimeoutStartSec=180
+
+# This runs as root on a timer forever, on a box that also serves other people's
+# services. Its sibling psnppp.service carries the same block.
+# ProtectHome is NOT set: it would hide nothing we need today, but ProtectHome=true
+# would break the pristine read if that ever moves back under /root.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/www/psnppp /var/lib/psnppp
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -69,10 +69,14 @@ builds, publishes, then verifies the live version and that the neighbouring serv
 server are unharmed:
 
 ```bash
-npm run release             # patch
+npm run release                        # patch
 npm run release minor
-npm run release patch --dry-run
+npm run release -- patch --dry-run     # everything except publishing
 ```
+
+The `--` is how npm passes a flag through instead of eating it. The script also
+reads `npm_config_dry_run`, so the form without it is safe too — but write the
+`--`, because that is the only version that works for any other flag.
 
 The version bump is why the script exists: Tampermonkey only updates when `@version`
 increases, and the build reads it from `package.json`. Ship without a bump and every install

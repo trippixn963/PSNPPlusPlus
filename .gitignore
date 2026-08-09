@@ -7,3 +7,8 @@ sidecar/.env
 __pycache__/
 .DS_Store
 dist/.psnppp-inner.js
+
+# Deployment target and host-specific checks. This repo is public; nobody's
+# server address, key path, or neighbouring services belong in it.
+scripts/deploy.env
+scripts/*.local.sh
