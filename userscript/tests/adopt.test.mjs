@@ -91,3 +91,55 @@ test('applyAdoptions preserves the document version field', () => {
   const out = applyAdoptions(local, [{ localId: 'local-1', remoteId: 'remote-1', name: 'Wishlist' }]);
   assert.equal(out.version, local.version);
 });
+
+/**
+ * The bookmark PSNP+ keeps to the list you last used.
+ *
+ * Renaming a list id strands it, and PSNP+ does not survive that: the green
+ * add-to-list button beside every game is built from
+ * `getById(id).name` with no guard, so a dead id throws in the constructor and
+ * the button silently never renders. Observed live on 2026-08-09.
+ */
+
+import { repointActiveList, SCRIPT_STATE_KEY, ACTIVE_LIST_FIELD } from '../src/adopt.mjs';
+
+const stateStorage = initial => {
+  const store = { ...initial };
+  return {
+    getItem: k => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = v; },
+    read: () => JSON.parse(store[SCRIPT_STATE_KEY])
+  };
+};
+
+test('a bookmark naming a renamed list follows the rename', () => {
+  const storage = stateStorage({
+    [SCRIPT_STATE_KEY]: JSON.stringify({ version: '11.16', [ACTIVE_LIST_FIELD]: 'local-1' })
+  });
+  assert.equal(repointActiveList(storage, [{ localId: 'local-1', remoteId: 'remote-1' }]), true);
+  assert.equal(storage.read()[ACTIVE_LIST_FIELD], 'remote-1');
+  assert.equal(storage.read().version, '11.16', 'the rest of PSNP+ state is untouched');
+});
+
+test('a bookmark to a list we did NOT rename is left alone', () => {
+  // A list the user genuinely deleted has a legitimately dead bookmark.
+  // Choosing a new active list for them is not ours to decide.
+  const storage = stateStorage({
+    [SCRIPT_STATE_KEY]: JSON.stringify({ [ACTIVE_LIST_FIELD]: 'something-else' })
+  });
+  assert.equal(repointActiveList(storage, [{ localId: 'local-1', remoteId: 'remote-1' }]), false);
+  assert.equal(storage.read()[ACTIVE_LIST_FIELD], 'something-else');
+});
+
+test('no adoptions, no bookmark, or unreadable state all no-op instead of throwing', () => {
+  const ok = stateStorage({ [SCRIPT_STATE_KEY]: JSON.stringify({ [ACTIVE_LIST_FIELD]: 'local-1' }) });
+  assert.equal(repointActiveList(ok, []), false);
+  assert.equal(repointActiveList(stateStorage({}), [{ localId: 'a', remoteId: 'b' }]), false);
+  assert.equal(repointActiveList(stateStorage({ [SCRIPT_STATE_KEY]: 'not json' }),
+    [{ localId: 'a', remoteId: 'b' }]), false);
+  assert.equal(repointActiveList(stateStorage({ [SCRIPT_STATE_KEY]: '[]' }),
+    [{ localId: 'a', remoteId: 'b' }]), false);
+  assert.equal(repointActiveList({
+    getItem: () => { throw new Error('storage denied'); }, setItem: () => {}
+  }, [{ localId: 'a', remoteId: 'b' }]), false, 'a courtesy repair must never fail a sync');
+});

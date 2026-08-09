@@ -89,3 +89,57 @@ export function applyAdoptions(localDoc, adoptions) {
   }
   return out;
 }
+
+/**
+ * PSNP+ bookmarks the list you last used, by id, in its own storage key.
+ *
+ * Renaming a list id — which is exactly what an adoption does — leaves that
+ * bookmark pointing at an id that no longer exists. PSNP+ does not survive
+ * that: the small green add-to-list button beside every game is built with
+ *
+ *     const name = this._listStorage.getById(this._listId).name;
+ *
+ * and `getById` returns undefined for an id that is gone, so `.name` throws
+ * inside the constructor and the button silently never renders. On every row,
+ * on every page, until the user happens to open the lists page and click a
+ * list. (Its lists page has a `?? lists[0]` fallback for this; the button path
+ * does not.) Observed on one device and not another, which is the signature of
+ * per-device state going stale — the two devices adopt at different times, so
+ * only the one whose ids LOST the adoption ends up dangling.
+ *
+ * We caused it, so we repair it: the pointer follows the rename we performed.
+ *
+ * Deliberately narrow. It rewrites the bookmark ONLY when it names a list this
+ * very adoption renamed, and never repoints a bookmark that dangles for any
+ * other reason — a list the user genuinely deleted has a legitimately dead
+ * bookmark, and silently choosing a different active list for them would be us
+ * deciding something that is theirs to decide.
+ *
+ * Never throws. This is a courtesy repair to another script's private state on
+ * a path that has already done the work that matters; failing the sync over it
+ * would be absurd.
+ */
+export const SCRIPT_STATE_KEY = 'psnpp-scriptstate';
+export const ACTIVE_LIST_FIELD = 'lastActiveGameList';
+
+export function repointActiveList(storage, adoptions) {
+  if (!Array.isArray(adoptions) || adoptions.length === 0) return false;
+  try {
+    const raw = storage.getItem(SCRIPT_STATE_KEY);
+    if (raw == null) return false;
+    const state = JSON.parse(raw);
+    if (state == null || typeof state !== 'object' || Array.isArray(state)) return false;
+
+    const current = state[ACTIVE_LIST_FIELD];
+    if (typeof current !== 'string' || current === '') return false;
+
+    const renamed = adoptions.find(a => a.localId === current);
+    if (renamed == null) return false;
+
+    state[ACTIVE_LIST_FIELD] = renamed.remoteId;
+    storage.setItem(SCRIPT_STATE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    return false;
+  }
+}

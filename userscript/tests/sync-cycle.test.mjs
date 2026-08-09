@@ -1509,3 +1509,40 @@ test('a huge first sync names a bounded number of games, not the whole library',
   assert.equal(result.delta.gamesAdded, 200, 'the COUNT stays exact');
   assert.equal(result.delta.addedGames.length, 20, 'only the names are capped');
 });
+
+test("an adoption carries PSNP+'s active-list bookmark across the rename", async () => {
+  // Pins the CALL SITE: deleting the repointActiveList call from the cycle left
+  // the whole suite green, and this is the bug it exists to stop. A stranded
+  // bookmark makes PSNP+ throw while building its green add-to-list button, so
+  // the button vanishes from every row with nothing in the UI to explain it.
+  const storage = fakeStorage({
+    'psnpp-scriptstate': JSON.stringify({ version: '11.16', lastActiveGameList: 'local-1' })
+  });
+  writeLists(storage, [list('local-1', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(
+    stampChanges(emptyDoc(), toDoc([list('remote-1', 'Wishlist', [game('g2')])]), 500), 1
+  );
+
+  const result = await runSyncCycle(harness(storage, server).args);
+
+  assert.equal(result.delta.listsLinked, 1, 'the list really was adopted');
+  assert.deepEqual(readLists(storage).map(l => l.id), ['remote-1']);
+  assert.equal(
+    JSON.parse(storage.getItem('psnpp-scriptstate')).lastActiveGameList,
+    'remote-1',
+    'the bookmark must follow the id we renamed'
+  );
+});
+
+test('a cycle with no adoption leaves the bookmark alone', async () => {
+  const storage = fakeStorage({
+    'psnpp-scriptstate': JSON.stringify({ lastActiveGameList: 'A' })
+  });
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer(
+    stampChanges(emptyDoc(), toDoc([list('A', 'Wishlist', [game('g1'), game('g2')])]), 500), 1
+  );
+
+  await runSyncCycle(harness(storage, server).args);
+  assert.equal(JSON.parse(storage.getItem('psnpp-scriptstate')).lastActiveGameList, 'A');
+});

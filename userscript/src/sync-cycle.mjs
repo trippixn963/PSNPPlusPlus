@@ -14,7 +14,7 @@
 import { toDoc, fromDoc, emptyDoc } from './doc.mjs';
 import { stampChanges, mergeDoc, gcTombstones } from './merger.mjs';
 import { readSyncable, writeSyncable, LISTS_KEY } from './lists-bridge.mjs';
-import { planAdoptions, applyAdoptions } from './adopt.mjs';
+import { planAdoptions, applyAdoptions, repointActiveList } from './adopt.mjs';
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -487,6 +487,12 @@ export async function runSyncCycle({
         return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
       }
       writeSyncable(storage, mergedLists);
+
+      // AFTER the write, and only on the attempt that actually landed. An
+      // adoption whose push was rejected never reaches storage, so repointing
+      // for it would create the same dangling bookmark in the other direction.
+      // Returns a boolean and never throws — see repointActiveList.
+      if (adopt) repointActiveList(storage, adoptions);
     }
     // Frozen (📡) lists are deliberately kept OUT of base. `merged` carries
     // the server's own node for them (the merge had nothing local to weigh it
