@@ -1270,3 +1270,155 @@ test('a failing settings or progress sync does not repaint a good lists sync as 
   assert.equal(painted.includes('offline'), false);
   assert.equal(painted[painted.length - 1], 'synced');
 });
+
+/**
+ * The realm diagnostic.
+ *
+ * These exist because a returning remove-dialog was, from the console,
+ * indistinguishable between three causes: the setting is off, the override
+ * failed to install, or we patched a window PSNP+ cannot see. The off case was
+ * the worst — it logged nothing at all.
+ */
+
+const captureInfo = async run => {
+  const lines = [];
+  const original = console.info;
+  console.info = (...args) => lines.push(args);
+  try { await run(); } finally { console.info = original; }
+  return lines;
+};
+
+test('switching the remove-prompt setting OFF still says so, instead of going silent', async () => {
+  installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  try {
+    const lines = await captureInfo(() => applyAutoConfirm(false, { target: globalThis.window }));
+    assert.equal(lines.length, 1, 'the off path must log exactly once');
+    const [prefix, detail] = lines[0];
+    assert.match(prefix, /\[psnppp\]/);
+    assert.match(detail.setting, /^OFF/);
+    assert.equal(detail.installed, false);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the diagnostic reports the realm it actually patched, not the one requested', async () => {
+  // `@sandbox raw` is a request. A script granting GM_* APIs cannot be given
+  // raw, so the manager downgrades it — and only the running script can say to
+  // what. Reasoning about it from the metadata block is what left this
+  // unverified in the first place.
+  installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  const pageWindow = { confirm: () => true };
+  globalThis.unsafeWindow = pageWindow;
+  globalThis.GM_info = { sandboxMode: 'js' };
+  try {
+    const lines = await captureInfo(() => applyAutoConfirm(false, { target: pageWindow }));
+    const detail = lines[0][1];
+    assert.equal(detail.sandboxMode, 'js');
+    assert.equal(detail.sandboxed, true);
+    assert.equal(detail.unsafeWindow, 'usable');
+    assert.equal(detail.targetIsPageWindow, true);
+  } finally {
+    delete globalThis.GM_info;
+    delete globalThis.unsafeWindow;
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the diagnostic never throws, whatever the environment withholds', async () => {
+  // It runs on the path that explains failures. A diagnostic that throws would
+  // take out the feature it is describing.
+  installFakeDocument();
+  installFakeWindow({ localStorage: null });
+  Object.defineProperty(globalThis, 'GM_info', {
+    configurable: true,
+    get() { throw new Error('manager withheld GM_info'); }
+  });
+  try {
+    const lines = await captureInfo(async () => {
+      assert.equal(await applyAutoConfirm(false, { target: globalThis.window }), true);
+    });
+    assert.equal(lines[0][1].sandboxMode, 'unknown');
+    assert.equal(lines[0][1].unsafeWindow, 'absent — sandbox window only');
+  } finally {
+    delete globalThis.GM_info;
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the diagnostic reports a live override, not just the off state', async () => {
+  // Every enabled:true log path was untested: deleting either call site left
+  // the suite green, so `installed` was only ever observed as a hardcoded false.
+  const storage = fakeStorage();
+  writeLists(storage, [list('a', 'Backlog', [{ id: 1, title: 'Bloodborne' }])]);
+  installFakeDocument();
+  installFakeWindow({ localStorage: storage });
+  try {
+    const lines = await captureInfo(() => applyAutoConfirm(true, { target: globalThis.window }));
+    const detail = lines[0][1];
+    assert.equal(detail.setting, 'on');
+    assert.equal(detail.installed, true);
+  } finally {
+    await applyAutoConfirm(false, { target: globalThis.window });
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the diagnostic reports installed:false when the override cannot take', async () => {
+  // A target whose `confirm` cannot be replaced. This is the case a user hits
+  // while believing the feature is on, so it is the one the line must name.
+  installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  const frozen = Object.freeze({ confirm: () => false });
+  try {
+    const lines = await captureInfo(async () => {
+      assert.equal(await applyAutoConfirm(true, { target: frozen }), false);
+    });
+    const detail = lines[0][1];
+    assert.equal(detail.setting, 'on');
+    assert.equal(detail.installed, false, 'an override that did not take must not report itself live');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the diagnostic catches the failure it was written for: patching a window PSNP+ cannot see', async () => {
+  // targetIsPageWindow === false is the whole point. It had no test — the
+  // source could hardcode `true` and the suite stayed green.
+  installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  globalThis.unsafeWindow = { confirm: () => true };
+  try {
+    const lines = await captureInfo(() => applyAutoConfirm(false, { target: globalThis.window }));
+    const detail = lines[0][1];
+    assert.equal(detail.targetIsPageWindow, false, 'patched our sandbox window while the page has its own');
+    assert.equal(detail.unsafeWindow, 'usable');
+  } finally {
+    delete globalThis.unsafeWindow;
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('an unsafeWindow that exists but carries no usable confirm is named, not called "sandboxed"', async () => {
+  // confirmTarget falls back to our own window in this case. Reporting only
+  // "sandboxed" would hide the reason for the fallback.
+  installFakeDocument();
+  installFakeWindow({ localStorage: fakeStorage() });
+  globalThis.unsafeWindow = {};
+  try {
+    const lines = await captureInfo(() => applyAutoConfirm(false, { target: globalThis.window }));
+    assert.equal(lines[0][1].unsafeWindow, 'present but carries no callable confirm');
+  } finally {
+    delete globalThis.unsafeWindow;
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});

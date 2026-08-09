@@ -178,6 +178,79 @@ export function confirmTarget() {
 let autoConfirm = null;
 
 /**
+ * One line, every load, saying which realm we actually got and whether the
+ * override is live.
+ *
+ * Written because the question "why did the remove dialog come back?" was not
+ * answerable from the page. See confirmTarget above for why the realm was
+ * never verified. `GM_info.sandboxMode` reports what Tampermonkey actually
+ * granted, which is the only version that counts: `@sandbox raw` is a REQUEST,
+ * and a script granting GM_* APIs (this one grants four) cannot be given raw,
+ * so the manager silently downgrades it.
+ *
+ * Logged for the OFF case too, and that is the point. Turning the setting off
+ * uninstalls the override and returns early, so the previous behaviour was
+ * total silence — identical, from the console, to an override that failed to
+ * install. One line distinguishes "you switched it off" from "it is broken".
+ *
+ * console.info, not debug: debug lands on DevTools' Verbose level, which is
+ * hidden by default — auto-confirm.mjs already learned that once. Every read is
+ * guarded; a diagnostic that throws would take out the caller it explains.
+ *
+ * Deliberately does NOT report a title count. auto-confirm.mjs already logs one
+ * at click time, which is the moment that decides, and a count taken here would
+ * read 0 on a device whose first sync has not run — a fault indication where
+ * there is no fault.
+ */
+const UNREADABLE = Symbol('unreadable');
+
+function logConfirmEnvironment(enabled, installed, target) {
+  const read = (fn, fallback = 'unknown') => {
+    try {
+      return fn();
+    } catch {
+      return fallback;
+    }
+  };
+
+  // `typeof` alone is not enough and the try is not redundant: typeof on an
+  // UNDECLARED name is safe, but on a declared getter that throws it performs
+  // the get and throws with it. The two outcomes are kept distinct because
+  // "the manager never provided this" and "it is there and unreadable" send
+  // you to different places.
+  const page = read(() => (typeof unsafeWindow === 'undefined' ? null : unsafeWindow), UNREADABLE);
+  const own = read(() => (typeof window === 'undefined' ? null : window), UNREADABLE);
+
+  // confirmTarget accepts unsafeWindow ONLY when it carries a callable confirm.
+  // Reporting merely "sandboxed" would hide the reason it fell back, which is
+  // the actionable half.
+  const describePage = () => {
+    if (page === UNREADABLE) return 'present but threw on access';
+    if (page == null) return 'absent — sandbox window only';
+    if (read(() => typeof page.confirm === 'function', false)) return 'usable';
+    return 'present but carries no callable confirm';
+  };
+
+  const known = page !== UNREADABLE && own !== UNREADABLE;
+
+  try {
+    console.info('[psnppp] remove-prompt override:', {
+      setting: enabled ? 'on' : 'OFF — right-click the chip to turn it on',
+      installed,
+      // 'js' means the raw request was downgraded, which is expected here and
+      // fine: unsafeWindow still reaches the page. 'dom' would NOT be fine —
+      // no page globals, so the override could never see PSNP+'s confirm.
+      sandboxMode: read(() => (typeof GM_info === 'undefined' ? 'no GM_info' : GM_info?.sandboxMode ?? 'unset')),
+      unsafeWindow: describePage(),
+      sandboxed: known ? page != null && page !== own : 'unknown',
+      // The one that actually decides whether PSNP+ can see us: we must have
+      // patched the same object its bare confirm() resolves against.
+      targetIsPageWindow: page == null || page === UNREADABLE ? 'unknown' : target === page
+    });
+  } catch { /* a console that throws must not break the feature it describes */ }
+}
+
+/**
  * Switch the override on or off, right now. Answers whether the requested state
  * was actually reached.
  *
@@ -203,7 +276,10 @@ export async function applyAutoConfirm(enabled, { target = confirmTarget() } = {
     console.error('[psnppp] could not remove the auto-confirm override:', error);
   }
   autoConfirm = null;
-  if (!enabled) return true;
+  if (!enabled) {
+    logConfirmEnvironment(false, false, target);
+    return true;
+  }
   try {
     autoConfirm = installAutoConfirm({
       target,
@@ -211,9 +287,12 @@ export async function applyAutoConfirm(enabled, { target = confirmTarget() } = {
       // so a set captured at install would go stale within one click.
       knownTitles: () => readGameTitles(window.localStorage)
     });
-    return autoConfirm.installed === true;
+    const installed = autoConfirm.installed === true;
+    logConfirmEnvironment(true, installed, target);
+    return installed;
   } catch (error) {
     console.error('[psnppp] could not install the auto-confirm override:', error);
+    logConfirmEnvironment(true, false, target);
     return false;
   }
 }
