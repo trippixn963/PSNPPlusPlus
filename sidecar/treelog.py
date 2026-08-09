@@ -62,6 +62,9 @@ LAST = "└─"
 # routine is ever logged with an alarm glyph.
 ERROR_EMOJIS = frozenset({"❌", "⚠️", "🚨", "💥"})
 
+# Discord rejects the default urllib agent outright. Identify properly.
+USER_AGENT = "PSNPPP-TreeLog/1.0 (+https://github.com/trippixn963/PSNPPlusPlus)"
+
 MAX_ITEMS = 25
 MAX_VALUE_CHARS = 300
 
@@ -216,8 +219,14 @@ class TreeLogger:
                 except Exception:
                     status = 0
                 if status == 429:
+                    print(f"[treelog] 429 from the webhook; pausing {CIRCUIT_COOLDOWN_S:.0f}s", flush=True)
                     self._circuit.trip()
                     break
+                if not (200 <= status < 300):
+                    # Loud, because the previous version returned this status to
+                    # nobody: a 403 from Discord looked exactly like success from
+                    # every other vantage point, including the browser's.
+                    print(f"[treelog] webhook rejected the batch: HTTP {status}", flush=True)
                 time.sleep(SEND_SPACING_S)
 
 
@@ -229,8 +238,19 @@ def _post_webhook(url: str, content: str) -> int:
         "content": content,
         "allowed_mentions": {"parse": []},
     }).encode("utf-8")
+    # A real User-Agent is REQUIRED, not decoration. Discord (via Cloudflare)
+    # answers 403 to urllib's default "Python-urllib/3.x" — verified against the
+    # live webhook, where curl got 204 and urllib got 403 with the same URL and
+    # the same body. It failed silently for a full day because the status was
+    # returned and never read.
     request = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+        method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:

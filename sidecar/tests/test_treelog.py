@@ -134,3 +134,24 @@ def test_the_webhook_body_disarms_mentions() -> None:
         ur.urlopen = real
     import json as _json
     assert _json.loads(sent["body"])["allowed_mentions"] == {"parse": []}
+
+
+def test_the_request_identifies_itself() -> None:
+    # Discord answers 403 to urllib's default agent. This failed silently for a
+    # day: the status was returned by _post_webhook and read by nobody.
+    seen = {}
+
+    class FakeResponse:
+        status = 204
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    import urllib.request as ur
+    real = ur.urlopen
+    try:
+        ur.urlopen = lambda req, timeout=None: (seen.update(req=req), FakeResponse())[1]
+        treelog._post_webhook("https://example.invalid/x", "hi")
+    finally:
+        ur.urlopen = real
+    agent = seen["req"].get_header("User-agent")
+    assert agent and "python-urllib" not in agent.lower()
