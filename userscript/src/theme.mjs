@@ -142,6 +142,8 @@ const STYLE_ID = 'psnppp-style';
 /** Documents that already carry the stylesheet. Keyed weakly so tests can't leak. */
 const styled = new WeakSet();
 
+import { MARK_ICON } from './mark-icon.mjs';
+
 const t = TOKENS;
 
 /** The metal rules, one pair per tier, generated so they cannot go missing. */
@@ -395,33 +397,28 @@ ${litTiers} {
    height does not stretch — so without this the mark pins to the top edge and
    sits 6px above the label's optical centre. The margin gives it the same 8px
    inset the label already has. */
+/* The chip shows the REAL icon, not a CSS approximation of it.
+   Drawing the mark by hand to "match" the icon is what produced two glyphs
+   with different proportions, different spacing, and an off-centre drift —
+   three rounds of fixing a copy instead of using the original. This is
+   assets/icon-round-48.png inlined by scripts/make-icon.mjs from the same
+   render, so the chip and the installed icon cannot disagree.
+
+   A data URI, not a URL: a userscript on someone else's page must not depend
+   on a request that can 404, and the host CSP has nothing to refuse. */
 #${INDICATOR_ID} .psnppp-mark {
   align-self: center;
-  margin-left: 6px;
-  /* 8 + 1.5 + 8. The gap is 18% of a glyph, matching the icon; at 20px wide it
-     came out 50% and the two plusses read as separated rather than paired. */
-  width: 17.5px;
+  margin-left: 7px;
+  width: 16px;
+  height: 16px;
+  background-image: url("${MARK_ICON}");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
 }
 
-/* The chip's glyphs are LARGER than the panel's, and that is not an
-   inconsistency. The 62% ratio exists to leave air inside the plate; the chip
-   has no plate, so sizing to a plate that is not there just makes the mark two
-   specks next to a full-height label. These are sized to the chip's optical
-   line instead — arms at 8px against a 12px cap height read as a mark rather
-   than as debris. */
-#${INDICATOR_ID} .psnppp-mark i {
-  top: 3px;
-  width: 2.4px;
-  height: 8px;
-}
-#${INDICATOR_ID} .psnppp-mark i::before {
-  left: -2.8px;
-  top: 2.8px;
-  width: 8px;
-  height: 2.4px;
-}
-#${INDICATOR_ID} .psnppp-mark i:first-child { left: 2.8px; }
-#${INDICATOR_ID} .psnppp-mark i:last-child { right: 2.8px; }
+/* The two <i> are the panel's glyph boxes; the chip draws from the image. */
+#${INDICATOR_ID} .psnppp-mark i { display: none; }
 
 
 #${PANEL_ID} .psnppp-brand {
