@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.22
+// @version      2.3.23
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -371,9 +371,6 @@
     };
   }
 
-  // userscript/src/mark-icon.mjs
-  var MARK_ICON = "data:image/png;base64,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";
-
   // userscript/src/theme.mjs
   var TOKENS = {
     plate: "#1b1d1f",
@@ -618,8 +615,7 @@ ${litTiers} {
    crossbar. Sized in fractional pixels because the crossbar has to sit centred
    on the arm \u2014 round it and the cross lands half a pixel off and reads as a
    smear rather than a glyph. */
-#${PANEL_ID} .psnppp-mark,
-#${INDICATOR_ID} .psnppp-mark {
+#${PANEL_ID} .psnppp-mark {
   position: relative;
   flex: 0 0 auto;
   width: 18px;
@@ -646,8 +642,7 @@ ${litTiers} {
      gap        : glyph  = 0.18   (0.9px)
    The first version filled 89% of the plate and the arms ran almost to the
    edge \u2014 it read as crowded rather than as a mark with air around it. */
-#${PANEL_ID} .psnppp-mark i,
-#${INDICATOR_ID} .psnppp-mark i {
+#${PANEL_ID} .psnppp-mark i {
   position: absolute;
   top: 6.4px;
   width: 1.8px;
@@ -655,8 +650,7 @@ ${litTiers} {
   border-radius: 1px;
   background: linear-gradient(180deg, #ffdf72 0%, ${t.gold} 46%, #c8960b 100%);
 }
-#${PANEL_ID} .psnppp-mark i::before,
-#${INDICATOR_ID} .psnppp-mark i::before {
+#${PANEL_ID} .psnppp-mark i::before {
   content: '';
   position: absolute;
   left: -1.7px;
@@ -675,28 +669,9 @@ ${litTiers} {
    height does not stretch \u2014 so without this the mark pins to the top edge and
    sits 6px above the label's optical centre. The margin gives it the same 8px
    inset the label already has. */
-/* The chip shows the REAL icon, not a CSS approximation of it.
-   Drawing the mark by hand to "match" the icon is what produced two glyphs
-   with different proportions, different spacing, and an off-centre drift \u2014
-   three rounds of fixing a copy instead of using the original. This is
-   assets/icon-round-48.png inlined by scripts/make-icon.mjs from the same
-   render, so the chip and the installed icon cannot disagree.
-
-   A data URI, not a URL: a userscript on someone else's page must not depend
-   on a request that can 404, and the host CSP has nothing to refuse. */
-#${INDICATOR_ID} .psnppp-mark {
-  align-self: center;
-  margin-left: 7px;
-  width: 16px;
-  height: 16px;
-  background-image: url("${MARK_ICON}");
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-}
-
-/* The two <i> are the panel's glyph boxes; the chip draws from the image. */
-#${INDICATOR_ID} .psnppp-mark i { display: none; }
+/* No mark on the chip. It is 26px of someone else's page and the rail already
+   identifies it; a logo in there read as clutter at every size tried. The panel
+   carries the branding, where there is room for it. */
 
 
 #${PANEL_ID} .psnppp-brand {
@@ -1087,13 +1062,6 @@ ${litTiers} {
     element.id = INDICATOR_ID;
     element.setAttribute("role", "button");
     element.setAttribute("tabindex", "0");
-    const mark = document.createElement("span");
-    mark.className = "psnppp-mark";
-    mark.setAttribute("data-psnppp", "mark");
-    mark.setAttribute("aria-hidden", "true");
-    mark.appendChild(document.createElement("i"));
-    mark.appendChild(document.createElement("i"));
-    element.appendChild(mark);
     const rail = document.createElement("span");
     rail.className = "psnppp-rail";
     rail.setAttribute("aria-hidden", "true");
