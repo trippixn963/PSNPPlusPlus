@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.34
+// @version      2.3.35
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -384,20 +384,6 @@
     } catch (error) {
       throw new Error(`Backup ${id} is corrupt: ${error.message}`, { cause: error });
     }
-  }
-
-  // userscript/src/history.mjs
-  var HISTORY_KEY = "psnppp.history";
-  var MAX_HISTORY = 10;
-  async function listSyncHistory() {
-    const stored = await GM.getValue(HISTORY_KEY, []);
-    return Array.isArray(stored) ? stored : [];
-  }
-  async function recordSync({ revision, delta }, now = Date.now()) {
-    const entries = await listSyncHistory();
-    const next = [{ at: now, revision, delta }, ...entries].slice(0, MAX_HISTORY);
-    await GM.setValue(HISTORY_KEY, next);
-    return next;
   }
 
   // userscript/src/lists-bridge.mjs
@@ -1475,8 +1461,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   // userscript/src/panel.mjs
   var TABS = [
     { name: "sync", label: "Sync" },
-    { name: "backups", label: "Backups" },
-    { name: "log", label: "Log" }
+    { name: "backups", label: "Backups" }
   ];
   function describeFailure(error, fallback) {
     try {
@@ -1501,8 +1486,6 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     side = "right",
     config = { endpoint: "", key: "" },
     backups = [],
-    history = [],
-    describeDelta: describeDelta2 = () => "lists updated",
     // Refusing defaults, not permissive ones. An unwired panel must not report a
     // saved credential or a completed restore.
     onSave = async () => ({ ok: false, message: "Settings are not wired up." }),
@@ -1659,31 +1642,6 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       });
       return row;
     }
-    const logPane = tag(make("div", "psnppp-pane"), "pane-log");
-    if (history.length === 0) {
-      logPane.appendChild(tag(
-        make(
-          "div",
-          "psnppp-empty",
-          "No sync changes yet. Only syncs that actually wrote to your lists are logged, so a run of quiet syncs leaves this empty."
-        ),
-        "log-empty"
-      ));
-    } else {
-      for (const entry of history) {
-        const row = tag(make("div", "psnppp-row"), "log-row");
-        const main = make("div", "psnppp-rowmain", stamp(entry?.at));
-        main.appendChild(make(
-          "span",
-          "psnppp-rowmeta",
-          `r${entry?.revision} \u2014 ${describeDelta2(entry?.delta)}`
-        ));
-        row.appendChild(main);
-        logPane.appendChild(row);
-      }
-    }
-    element.appendChild(logPane);
-    panes.set("log", logPane);
     const message = tag(make("div", "psnppp-message"), "message");
     show(message, false);
     element.appendChild(message);
@@ -2287,7 +2245,27 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     }
     const blobs = await migrateBackups();
     const endpointRewritten = await rewriteDefaultEndpoint();
-    return { keys, blobs, endpointRewritten };
+    const reaped = await reapRetiredKeys();
+    return { keys, blobs, endpointRewritten, reaped };
+  }
+  var RETIRED_KEYS = [
+    // The panel's Log tab, removed 2026-08-10. Sync activity goes to the Discord
+    // webhook now (treelog.mjs), and keeping a second copy on the device was the
+    // duplication the owner asked to end.
+    `${NEW_PREFIX}history`
+  ];
+  async function reapRetiredKeys() {
+    let reaped = 0;
+    for (const key of RETIRED_KEYS) {
+      try {
+        if (await GM.getValue(key, null) == null) continue;
+        await GM.deleteValue(key);
+        reaped += 1;
+      } catch (error) {
+        console.error(`[psnppp] could not reap the retired key ${key}:`, error);
+      }
+    }
+    return reaped;
   }
 
   // userscript/src/update-check.mjs
@@ -2562,7 +2540,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         return;
       }
       activePanel = PENDING_PANEL;
-      const [backups, history, config, loadError] = await loadPanelData();
+      const [backups, config, loadError] = await loadPanelData();
       await new Promise((resolve) => {
         let settled = false;
         const finish = () => {
@@ -2584,8 +2562,6 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           side: chip?.getSide?.() ?? "right",
           config,
           backups,
-          history,
-          describeDelta,
           onSave: async ({ endpoint, key }) => {
             try {
               return await applyConfig({ endpoint, key });
@@ -2627,16 +2603,14 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
     }
   }
   async function loadPanelData() {
-    const [backups, history, config] = await Promise.allSettled([
+    const [backups, config] = await Promise.allSettled([
       listBackups(),
-      listSyncHistory(),
       loadConfig()
     ]);
-    const failures = [backups, history, config].filter((result) => result.status === "rejected").map((result) => describeFailure(result.reason, "Could not read your saved settings"));
+    const failures = [backups, config].filter((result) => result.status === "rejected").map((result) => describeFailure(result.reason, "Could not read your saved settings"));
     const settings = config.status === "fulfilled" ? config.value : { endpoint: DEFAULT_ENDPOINT, key: "" };
     return [
       backups.status === "fulfilled" ? backups.value : [],
-      history.status === "fulfilled" ? history.value : [],
       settings,
       failures[0] ?? ""
     ];
@@ -2878,10 +2852,8 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         if (shouldLogCycle(result)) {
           try {
             logCycle(treeLog, result);
-            const { addedGames, removedGames, ...counts } = result.delta ?? {};
-            if (result.changed) await recordSync({ revision: result.revision, delta: counts });
           } catch (error) {
-            console.error("[psnppp] could not record sync history:", error);
+            console.error("[psnppp] could not post the sync log:", error);
           }
         }
       } catch (error) {
