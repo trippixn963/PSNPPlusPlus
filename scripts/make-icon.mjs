@@ -25,7 +25,7 @@
  */
 
 import { chromium } from 'playwright';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -69,33 +69,4 @@ try {
 } finally {
   await browser.close();
 }
-// The chip embeds the round mark as a data URI rather than fetching it: a
-// userscript on someone else's page should not depend on a request that can
-// 404, and psnprofiles.com's CSP has no say over a data: URI in our own style
-// element. Written from the SAME render as assets/, so the two cannot drift —
-// which is exactly what happened when the mark was hand-drawn in CSS to
-// "match" the icon and ended up a different set of proportions.
-const roundPath = resolve(outDir, 'icon-round-48.png');
-const base64 = (await readFile(roundPath)).toString('base64');
-await writeFile(resolve(root, 'userscript/src/mark-icon.mjs'), `/**
- * PSNP++ - Mark (generated)
- * =========================
- *
- * DO NOT EDIT. Written by scripts/make-icon.mjs from assets/icon-round-48.png,
- * which is itself rendered from scripts/icon.html. Regenerate with:
- *
- *   npm i -D playwright && npx playwright install chromium
- *   node scripts/make-icon.mjs
- *
- * Inlined as a data URI so the chip never depends on a network request, and so
- * the host page's CSP has nothing to refuse.
- *
- * Author: Trippixn
- * Server: discord.gg/syria
- */
-
-export const MARK_ICON = 'data:image/png;base64,${base64}';
-`);
-console.log(`  userscript/src/mark-icon.mjs   ${base64.length} chars`);
-
 console.log(`\nWrote ${EXPORTS.length} files to assets/`);

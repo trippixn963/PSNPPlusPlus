@@ -934,21 +934,3 @@ test('destroy releases the window resize listener', () => {
   }
 });
 
-test('the chip carries the mark, ahead of the status rail', () => {
-  // Had no coverage at all: deleting the mark from the chip left the suite
-  // green, because it was the one mark with no data-psnppp hook to find.
-  installFakeDocument();
-  installFakeWindow();
-  try {
-    const el = createIndicator({}).element;
-    const mark = find(el, 'mark');
-    assert.ok(mark, 'the chip should be identifiable as ours at a glance');
-    assert.equal(mark.children.length, 2);
-    const classes = el.children.map(child => child.className);
-    assert.ok(classes.indexOf('psnppp-mark') < classes.indexOf('psnppp-rail'),
-      'the mark reads as identity, the rail as status — identity comes first');
-  } finally {
-    uninstallFakeWindow();
-    uninstallFakeDocument();
-  }
-});

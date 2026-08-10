@@ -225,18 +225,6 @@ export function createIndicator({
   // page and stealing focus from it would be unforgivable in a status widget.
   element.setAttribute('tabindex', '0');
 
-  // The mark, before the status rail. Drawn in CSS from two boxes per glyph —
-  // no image request, nothing for psnprofiles.com's CSP to refuse, and it is
-  // the same geometry as the panel header and the installed icon, so the three
-  // cannot drift.
-  const mark = document.createElement('span');
-  mark.className = 'psnppp-mark';
-  mark.setAttribute('data-psnppp', 'mark');
-  mark.setAttribute('aria-hidden', 'true');
-  mark.appendChild(document.createElement('i'));
-  mark.appendChild(document.createElement('i'));
-  element.appendChild(mark);
-
   const rail = document.createElement('span');
   rail.className = 'psnppp-rail';
   rail.setAttribute('aria-hidden', 'true');

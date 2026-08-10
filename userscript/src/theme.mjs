@@ -142,8 +142,6 @@ const STYLE_ID = 'psnppp-style';
 /** Documents that already carry the stylesheet. Keyed weakly so tests can't leak. */
 const styled = new WeakSet();
 
-import { MARK_ICON } from './mark-icon.mjs';
-
 const t = TOKENS;
 
 /** The metal rules, one pair per tier, generated so they cannot go missing. */
@@ -348,8 +346,7 @@ ${litTiers} {
    crossbar. Sized in fractional pixels because the crossbar has to sit centred
    on the arm — round it and the cross lands half a pixel off and reads as a
    smear rather than a glyph. */
-#${PANEL_ID} .psnppp-mark,
-#${INDICATOR_ID} .psnppp-mark {
+#${PANEL_ID} .psnppp-mark {
   position: relative;
   flex: 0 0 auto;
   width: 18px;
@@ -376,8 +373,7 @@ ${litTiers} {
      gap        : glyph  = 0.18   (0.9px)
    The first version filled 89% of the plate and the arms ran almost to the
    edge — it read as crowded rather than as a mark with air around it. */
-#${PANEL_ID} .psnppp-mark i,
-#${INDICATOR_ID} .psnppp-mark i {
+#${PANEL_ID} .psnppp-mark i {
   position: absolute;
   top: 6.4px;
   width: 1.8px;
@@ -385,8 +381,7 @@ ${litTiers} {
   border-radius: 1px;
   background: linear-gradient(180deg, #ffdf72 0%, ${t.gold} 46%, #c8960b 100%);
 }
-#${PANEL_ID} .psnppp-mark i::before,
-#${INDICATOR_ID} .psnppp-mark i::before {
+#${PANEL_ID} .psnppp-mark i::before {
   content: '';
   position: absolute;
   left: -1.7px;
@@ -405,28 +400,9 @@ ${litTiers} {
    height does not stretch — so without this the mark pins to the top edge and
    sits 6px above the label's optical centre. The margin gives it the same 8px
    inset the label already has. */
-/* The chip shows the REAL icon, not a CSS approximation of it.
-   Drawing the mark by hand to "match" the icon is what produced two glyphs
-   with different proportions, different spacing, and an off-centre drift —
-   three rounds of fixing a copy instead of using the original. This is
-   assets/icon-round-48.png inlined by scripts/make-icon.mjs from the same
-   render, so the chip and the installed icon cannot disagree.
-
-   A data URI, not a URL: a userscript on someone else's page must not depend
-   on a request that can 404, and the host CSP has nothing to refuse. */
-#${INDICATOR_ID} .psnppp-mark {
-  align-self: center;
-  margin-left: 7px;
-  width: 16px;
-  height: 16px;
-  background-image: url("${MARK_ICON}");
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-}
-
-/* The two <i> are the panel's glyph boxes; the chip draws from the image. */
-#${INDICATOR_ID} .psnppp-mark i { display: none; }
+/* No mark on the chip. It is 26px of someone else's page and the rail already
+   identifies it; a logo in there read as clutter at every size tried. The panel
+   carries the branding, where there is room for it. */
 
 
 #${PANEL_ID} .psnppp-brand {
