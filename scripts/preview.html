@@ -1,0 +1,40 @@
+<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0;background:#0e1012;padding:24px;font-family:system-ui}
+ .col{display:flex;gap:28px;align-items:flex-start}
+ .stack{display:flex;flex-direction:column;gap:12px;align-items:flex-start}</style>
+<div class="col"><div class="stack" id="chips"></div><div id="panelhost"></div></div>
+<script type="module">
+  import { CSS, INDICATOR_ID } from '/userscript/src/theme.mjs';
+  import { createIndicator } from '/userscript/src/indicator.mjs';
+  import { createSettingsPanel } from '/userscript/src/panel.mjs';
+
+  const style = document.createElement('style');
+  // The chip positions itself against the viewport; pin it flat so several can
+  // be laid out side by side for comparison.
+  style.textContent = CSS + `#${INDICATOR_ID}{position:static !important;transform:none !important;}`;
+  document.head.appendChild(style);
+
+  const chips = document.getElementById('chips');
+  for (const state of ['synced', 'syncing', 'reload', 'conflict', 'offline', 'unconfigured', 'update']) {
+    const ind = createIndicator({});
+    const el = ind.element ?? ind;
+    ind.setState(state, 'Revision 93');
+    // The id stays: every rule in the sheet is scoped to #psnppp-indicator, so
+    // stripping it renders unstyled text. Several nodes share the id here,
+    // which is invalid but harmless in a preview that never queries by id.
+    chips.appendChild(el);
+  }
+
+  const panel = createSettingsPanel({
+    config: { endpoint: 'https://trippixn.com/api/psnppp', key: 'stored' },
+    backups: [{ at: Date.now() - 3600e3 }],
+    history: [{ at: Date.now() - 120e3, revision: 93, delta: { gamesRemoved: 1 } }],
+    describeDelta: () => '-1 game',
+    version: '2.3.19'
+  });
+  const pel = panel.element ?? panel;
+  pel.style.position = 'static';
+  document.getElementById('panelhost').appendChild(pel);
+
+  window.__ready = true;
+</script>

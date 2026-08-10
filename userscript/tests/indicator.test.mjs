@@ -4,7 +4,7 @@ import { createIndicator, clampToViewport, isUsablePosition, isDockSide, sideFor
   POSITION_KEY, EDGE_MARGIN, RESIZE_SETTLE_MS } from '../src/indicator.mjs';
 import { EDGE_INSET_PX, DOCK_SNAP_MS } from '../src/theme.mjs';
 import { installFakeDocument, uninstallFakeDocument, installFakeWindow, uninstallFakeWindow,
-  installFakeGM, uninstallFakeGM } from './fake-dom.mjs';
+  installFakeGM, uninstallFakeGM, find } from './fake-dom.mjs';
 
 /**
  * The chip is driven through dispatched events rather than by poking at its
@@ -928,6 +928,25 @@ test('destroy releases the window resize listener', () => {
     assert.equal(fake.resizeListenerCount(), 1, 'the chip installed one');
     indicator.destroy();
     assert.equal(fake.resizeListenerCount(), 0, 'and destroy took it back off');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the chip carries the mark, ahead of the status rail', () => {
+  // Had no coverage at all: deleting the mark from the chip left the suite
+  // green, because it was the one mark with no data-psnppp hook to find.
+  installFakeDocument();
+  installFakeWindow();
+  try {
+    const el = createIndicator({}).element;
+    const mark = find(el, 'mark');
+    assert.ok(mark, 'the chip should be identifiable as ours at a glance');
+    assert.equal(mark.children.length, 2);
+    const classes = el.children.map(child => child.className);
+    assert.ok(classes.indexOf('psnppp-mark') < classes.indexOf('psnppp-rail'),
+      'the mark reads as identity, the rail as status — identity comes first');
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();

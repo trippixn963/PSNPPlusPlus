@@ -16,7 +16,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSettingsPanel } from '../src/panel.mjs';
 import { EDGE_INSET_PX, PANEL_WIDTH_PX, CHIP_FALLBACK_SIZE } from '../src/theme.mjs';
-import { installFakeDocument, uninstallFakeDocument, installFakeWindow, uninstallFakeWindow }
+import { installFakeDocument, uninstallFakeDocument, installFakeWindow, uninstallFakeWindow, find }
   from './fake-dom.mjs';
 
 /** A chip-shaped anchor node with a fixed, measurable rect. */
@@ -166,6 +166,59 @@ test('an anchor near the bottom of the screen still gets a panel that fits', () 
     assert.ok(Number.isFinite(top), 'a real number');
     assert.ok(top >= EDGE_INSET_PX && top <= 800 - EDGE_INSET_PX,
       `clamped onto the screen, got ${top}`);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+
+
+
+test('the header carries the mark, the wordmark and the version', () => {
+  installFakeDocument();
+  installFakeWindow();
+  try {
+    const el = createSettingsPanel({ version: '2.3.18' }).element;
+    const mark = find(el, 'mark');
+    assert.ok(mark, 'the mark identifies the widget on a page we do not own');
+    assert.equal(mark.children.length, 2, 'both glyphs, or it ships as an empty plate');
+    assert.equal(mark.getAttribute('aria-hidden'), 'true',
+      'two empty <i> inside a dialog are noise to a screen reader');
+    assert.equal(find(el, 'version').textContent, 'v2.3.18',
+      'the version is the first thing anyone needs when reporting a fault');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('a panel with no version shows no empty pill', () => {
+  installFakeDocument();
+  installFakeWindow();
+  try {
+    assert.equal(find(createSettingsPanel({}).element, 'version'), null);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('the footer links out, and never hands the new tab a way back', () => {
+  installFakeDocument();
+  installFakeWindow();
+  try {
+    const el = createSettingsPanel({}).element;
+    const site = find(el, 'link-site');
+    const repo = find(el, 'link-repo');
+    assert.equal(site.getAttribute('href'), 'https://trippixn.com');
+    assert.equal(repo.getAttribute('href'), 'https://github.com/trippixn963/PSNPPlusPlus');
+    for (const node of [site, repo]) {
+      assert.equal(node.getAttribute('target'), '_blank');
+      // Without noopener the opened tab keeps a window.opener handle back into
+      // psnprofiles.com — a page we do not own, that the user is signed into.
+      assert.equal(node.getAttribute('rel'), 'noopener noreferrer');
+    }
   } finally {
     uninstallFakeWindow();
     uninstallFakeDocument();

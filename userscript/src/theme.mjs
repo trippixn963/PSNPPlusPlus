@@ -162,6 +162,13 @@ export const CSS = `
   text-align: left;
   float: none;
   text-shadow: none;
+  /* border:0 is not tidiness. The mark is built from bare i elements, and i is
+     exactly the tag an icon-font site styles globally — a page rule as ordinary
+     as "i { border: 1px solid }" (no !important needed) puts a box around each
+     arm and thickens it. Every intentional border in this sheet is declared
+     later at equal-or-greater specificity, so all of them survive.
+     NOTE: this whole sheet is a template literal. No backticks in comments. */
+  border: 0;
 }
 
 /* ---- the chip ---------------------------------------------------------- */
@@ -312,6 +319,133 @@ ${litTiers} {
   padding: 9px 10px;
   border-bottom: 1px solid ${t.edge};
 }
+
+/* The mark, drawn rather than fetched.
+   Same geometry and tokens as scripts/icon.html, built from two boxes per
+   glyph: no image request, so nothing to 404 and nothing for psnprofiles.com's
+   CSP to refuse, and it stays crisp at any zoom.
+
+   Each plus is ONE element: the box is the vertical stroke, its ::before is the
+   crossbar. Sized in fractional pixels because the crossbar has to sit centred
+   on the arm — round it and the cross lands half a pixel off and reads as a
+   smear rather than a glyph. */
+#${PANEL_ID} .psnppp-mark,
+#${INDICATOR_ID} .psnppp-mark {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+/* Only the PANEL's mark gets a plate of its own. The chip already IS a plate,
+   and nesting one inside the other is a box in a box: it reads as a stray
+   button sitting inside the status pill rather than as a wordmark. */
+#${PANEL_ID} .psnppp-mark {
+  border-radius: 4px;
+  background:
+    radial-gradient(120% 100% at 22% 8%, rgba(255,255,255,.07), rgba(255,255,255,0) 55%),
+    linear-gradient(158deg, ${t.control} 0%, ${t.plate} 48%, ${t.sunken} 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(169,214,234,.16),
+    inset 0 1px 0 rgba(255,255,255,.05);
+}
+
+/* Proportions taken from scripts/icon.html rather than guessed, so the mark and
+   the installed icon are the same drawing at two sizes:
+     glyph pair : plate  = 0.62   (11.2px of 18)
+     stroke     : arm    = 0.34   (1.8px of 5.2)
+     gap        : glyph  = 0.18   (0.9px)
+   The first version filled 89% of the plate and the arms ran almost to the
+   edge — it read as crowded rather than as a mark with air around it. */
+#${PANEL_ID} .psnppp-mark i,
+#${INDICATOR_ID} .psnppp-mark i {
+  position: absolute;
+  top: 6.4px;
+  width: 1.8px;
+  height: 5.2px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #ffdf72 0%, ${t.gold} 46%, #c8960b 100%);
+}
+#${PANEL_ID} .psnppp-mark i::before,
+#${INDICATOR_ID} .psnppp-mark i::before {
+  content: '';
+  position: absolute;
+  left: -1.7px;
+  top: 1.7px;
+  width: 5.2px;
+  height: 1.8px;
+  border-radius: 1px;
+  background: inherit;
+}
+#${PANEL_ID} .psnppp-mark i:first-child,
+#${INDICATOR_ID} .psnppp-mark i:first-child { left: 5.1px; }
+#${PANEL_ID} .psnppp-mark i:last-child,
+#${INDICATOR_ID} .psnppp-mark i:last-child  { right: 5.1px; }
+
+/* The chip is inline-flex with align-items:stretch, and an item with a definite
+   height does not stretch — so without this the mark pins to the top edge and
+   sits 6px above the label's optical centre. The margin gives it the same 8px
+   inset the label already has. */
+#${INDICATOR_ID} .psnppp-mark {
+  align-self: center;
+  margin-left: 6px;
+}
+
+
+#${PANEL_ID} .psnppp-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+/* The version sits with the wordmark rather than in the footer: it is the first
+   thing anyone needs when reporting that something is wrong. */
+#${PANEL_ID} .psnppp-version {
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  letter-spacing: .08em;
+  color: ${t.quiet};
+  padding: 1px 5px;
+  border: 1px solid ${t.hairline};
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* Footer: two quiet links, weighted below everything actionable above them. */
+#${PANEL_ID} .psnppp-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid ${t.edge};
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.18) 100%);
+}
+
+#${PANEL_ID} .psnppp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid ${t.hairline};
+  border-radius: 5px;
+  background: ${t.control};
+  color: ${t.engrave};
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+#${PANEL_ID} .psnppp-link:hover {
+  color: ${t.bright};
+  border-color: ${t.edge};
+  background: ${t.plate};
+}
+#${PANEL_ID} .psnppp-link svg { width: 11px; height: 11px; fill: currentColor; display: block; }
+#${PANEL_ID} .psnppp-foot .psnppp-spacer { flex: 1 1 auto; }
 
 #${PANEL_ID} .psnppp-title {
   font-family: ${TYPE.display};

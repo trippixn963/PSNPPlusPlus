@@ -212,6 +212,9 @@ export async function openSettings({ chip = null } = {}) {
       };
 
       panel = createSettingsPanel({
+        // Without this the version pill never renders on a real install: the
+        // panel defaults it to null and only the tests were passing one.
+        version: currentScriptVersion(),
         anchor: chip?.element ?? null,
         side: chip?.getSide?.() ?? 'right',
         config,

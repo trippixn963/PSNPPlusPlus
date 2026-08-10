@@ -82,7 +82,10 @@ export function createSettingsPanel({
   // saved credential or a completed restore.
   onSave = async () => ({ ok: false, message: 'Settings are not wired up.' }),
   onRestore = async () => ({ ok: false, message: 'Restore is not wired up.' }),
-  onClose = () => {}
+  onClose = () => {},
+  // Shown beside the wordmark. Passed in rather than read here so the panel
+  // stays free of GM_info and keeps rendering in node under the test runner.
+  version = null
 } = {}) {
   const make = (tag, className, text) => {
     const node = doc.createElement(tag);
@@ -107,7 +110,19 @@ export function createSettingsPanel({
   // --- header --------------------------------------------------------------
 
   const head = make('div', 'psnppp-head');
-  head.appendChild(make('span', 'psnppp-title', 'PSNP++'));
+
+  // Brand: the mark, the wordmark, then the version. The mark is drawn from two
+  // boxes per glyph in CSS rather than loaded as an image — no request to fail,
+  // nothing for the host page's CSP to block, crisp at any zoom.
+  const brand = make('div', 'psnppp-brand');
+  const mark = tag(make('span', 'psnppp-mark'), 'mark');
+  mark.setAttribute('aria-hidden', 'true');
+  mark.appendChild(make('i'));
+  mark.appendChild(make('i'));
+  brand.appendChild(mark);
+  brand.appendChild(make('span', 'psnppp-title', 'PSNP++'));
+  if (version) brand.appendChild(tag(make('span', 'psnppp-version', `v${version}`), 'version'));
+  head.appendChild(brand);
 
   const closeButton = tag(make('button', 'psnppp-close', '×'), 'close');
   closeButton.setAttribute('type', 'button');
@@ -292,6 +307,45 @@ export function createSettingsPanel({
   const message = tag(make('div', 'psnppp-message'), 'message');
   show(message, false);
   element.appendChild(message);
+
+  // --- footer ---------------------------------------------------------------
+
+  // Two links, deliberately quiet: they sit below everything actionable and are
+  // styled a tier down from the buttons above so they read as provenance rather
+  // than as controls competing with Save and Restore.
+  //
+  // rel="noopener noreferrer" on both. Without `noopener` the opened tab gets a
+  // `window.opener` handle back into psnprofiles.com — a page we do not own and
+  // whose session the user is signed into.
+  const foot = make('div', 'psnppp-foot');
+  const link = (href, label, svgPath, key) => {
+    const node = tag(make('a', 'psnppp-link'), key);
+    node.setAttribute('href', href);
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', svgPath);
+    svg.appendChild(path);
+    node.appendChild(svg);
+    node.appendChild(make('span', null, label));
+    // These are the first <a> elements this panel has ever put into the host
+    // document, and psnprofiles.com may well have a delegated anchor handler.
+    // Stopping propagation keeps the click ours, per this file's rule that no
+    // listener of ours reaches the page.
+    node.addEventListener('click', event => event.stopPropagation());
+    return node;
+  };
+
+  const GLOBE = 'M8 0a8 8 0 100 16A8 8 0 008 0zM6.6 1.6a10.8 10.8 0 00-1.3 3.2H2.9a6.6 6.6 0 013.7-3.2zM2.2 6.2h2.9a15 15 0 000 3.6H2.2a6.6 6.6 0 010-3.6zm.7 5h2.4a10.8 10.8 0 001.3 3.2 6.6 6.6 0 01-3.7-3.2zM8 14.6c-.7-.7-1.3-1.9-1.6-3.4h3.2c-.3 1.5-.9 2.7-1.6 3.4zm1.8-4.8H6.2a13.6 13.6 0 010-3.6h3.6a13.6 13.6 0 010 3.6zM8 1.4c.7.7 1.3 1.9 1.6 3.4H6.4C6.7 3.3 7.3 2.1 8 1.4zm1.4.2a6.6 6.6 0 013.7 3.2h-2.4a10.8 10.8 0 00-1.3-3.2zm1.5 4.6h2.9a6.6 6.6 0 010 3.6h-2.9a15 15 0 000-3.6zm-.2 5h2.4a6.6 6.6 0 01-3.7 3.2 10.8 10.8 0 001.3-3.2z';
+  const GITHUB = 'M8 0C3.6 0 0 3.6 0 8a8 8 0 005.5 7.6c.4.1.5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.2 1.9.9 2.4.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 014 0c1.5-1 2.2-.8 2.2-.8.5 1.1.2 1.9.1 2.1.5.5.8 1.2.8 2.1 0 3.1-1.8 3.8-3.6 4 .3.3.6.8.6 1.6v2.2c0 .2.1.5.5.4A8 8 0 0016 8c0-4.4-3.6-8-8-8z';
+
+  foot.appendChild(link('https://trippixn.com', 'trippixn.com', GLOBE, 'link-site'));
+  foot.appendChild(make('span', 'psnppp-spacer'));
+  foot.appendChild(link('https://github.com/trippixn963/PSNPPlusPlus', 'GitHub', GITHUB, 'link-repo'));
+  element.appendChild(foot);
 
   /**
    * The panel's one error channel, and the reason `onSave`/`onRestore` report

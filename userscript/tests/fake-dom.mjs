@@ -139,6 +139,13 @@ export function installFakeDocument() {
       const node = new FakeNode(tag);
       created.push(node);
       return node;
+    },
+    // The panel's footer icons are real SVG, which needs the namespaced form.
+    // Namespace ignored here: these tests assert structure and attributes, and
+    // FakeNode is namespace-agnostic — what matters is that the call succeeds
+    // and the node lands in the tree like any other.
+    createElementNS(_namespace, tag) {
+      return this.createElement(tag);
     }
   };
 
