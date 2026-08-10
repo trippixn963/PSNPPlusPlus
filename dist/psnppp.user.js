@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.24
+// @version      2.3.25
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -2048,8 +2048,9 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
         if (pushed && attempt < maxAttempts) continue;
         return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
       }
+      const deletedLocally = localDelta.gamesRemoved > 0 || localDelta.listsRemoved > 0;
       if (changed) {
-        await saveBackup2(currentLists);
+        await saveBackup2(deletedLocally ? fromDoc(workingBase) : currentLists);
         if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
           if (pushed && attempt < maxAttempts) continue;
           return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
