@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.18
+// @version      2.3.19
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -440,6 +440,13 @@
   text-align: left;
   float: none;
   text-shadow: none;
+  /* border:0 is not tidiness. The mark is built from bare i elements, and i is
+     exactly the tag an icon-font site styles globally \u2014 a page rule as ordinary
+     as "i { border: 1px solid }" (no !important needed) puts a box around each
+     arm and thickens it. Every intentional border in this sheet is declared
+     later at equal-or-greater specificity, so all of them survive.
+     NOTE: this whole sheet is a template literal. No backticks in comments. */
+  border: 0;
 }
 
 /* ---- the chip ---------------------------------------------------------- */
@@ -590,6 +597,133 @@ ${litTiers} {
   padding: 9px 10px;
   border-bottom: 1px solid ${t.edge};
 }
+
+/* The mark, drawn rather than fetched.
+   Same geometry and tokens as scripts/icon.html, built from two boxes per
+   glyph: no image request, so nothing to 404 and nothing for psnprofiles.com's
+   CSP to refuse, and it stays crisp at any zoom.
+
+   Each plus is ONE element: the box is the vertical stroke, its ::before is the
+   crossbar. Sized in fractional pixels because the crossbar has to sit centred
+   on the arm \u2014 round it and the cross lands half a pixel off and reads as a
+   smear rather than a glyph. */
+#${PANEL_ID} .psnppp-mark,
+#${INDICATOR_ID} .psnppp-mark {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+/* Only the PANEL's mark gets a plate of its own. The chip already IS a plate,
+   and nesting one inside the other is a box in a box: it reads as a stray
+   button sitting inside the status pill rather than as a wordmark. */
+#${PANEL_ID} .psnppp-mark {
+  border-radius: 4px;
+  background:
+    radial-gradient(120% 100% at 22% 8%, rgba(255,255,255,.07), rgba(255,255,255,0) 55%),
+    linear-gradient(158deg, ${t.control} 0%, ${t.plate} 48%, ${t.sunken} 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(169,214,234,.16),
+    inset 0 1px 0 rgba(255,255,255,.05);
+}
+
+/* Proportions taken from scripts/icon.html rather than guessed, so the mark and
+   the installed icon are the same drawing at two sizes:
+     glyph pair : plate  = 0.62   (11.2px of 18)
+     stroke     : arm    = 0.34   (1.8px of 5.2)
+     gap        : glyph  = 0.18   (0.9px)
+   The first version filled 89% of the plate and the arms ran almost to the
+   edge \u2014 it read as crowded rather than as a mark with air around it. */
+#${PANEL_ID} .psnppp-mark i,
+#${INDICATOR_ID} .psnppp-mark i {
+  position: absolute;
+  top: 6.4px;
+  width: 1.8px;
+  height: 5.2px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #ffdf72 0%, ${t.gold} 46%, #c8960b 100%);
+}
+#${PANEL_ID} .psnppp-mark i::before,
+#${INDICATOR_ID} .psnppp-mark i::before {
+  content: '';
+  position: absolute;
+  left: -1.7px;
+  top: 1.7px;
+  width: 5.2px;
+  height: 1.8px;
+  border-radius: 1px;
+  background: inherit;
+}
+#${PANEL_ID} .psnppp-mark i:first-child,
+#${INDICATOR_ID} .psnppp-mark i:first-child { left: 5.1px; }
+#${PANEL_ID} .psnppp-mark i:last-child,
+#${INDICATOR_ID} .psnppp-mark i:last-child  { right: 5.1px; }
+
+/* The chip is inline-flex with align-items:stretch, and an item with a definite
+   height does not stretch \u2014 so without this the mark pins to the top edge and
+   sits 6px above the label's optical centre. The margin gives it the same 8px
+   inset the label already has. */
+#${INDICATOR_ID} .psnppp-mark {
+  align-self: center;
+  margin-left: 6px;
+}
+
+
+#${PANEL_ID} .psnppp-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+/* The version sits with the wordmark rather than in the footer: it is the first
+   thing anyone needs when reporting that something is wrong. */
+#${PANEL_ID} .psnppp-version {
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  letter-spacing: .08em;
+  color: ${t.quiet};
+  padding: 1px 5px;
+  border: 1px solid ${t.hairline};
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* Footer: two quiet links, weighted below everything actionable above them. */
+#${PANEL_ID} .psnppp-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid ${t.edge};
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.18) 100%);
+}
+
+#${PANEL_ID} .psnppp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid ${t.hairline};
+  border-radius: 5px;
+  background: ${t.control};
+  color: ${t.engrave};
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+#${PANEL_ID} .psnppp-link:hover {
+  color: ${t.bright};
+  border-color: ${t.edge};
+  background: ${t.plate};
+}
+#${PANEL_ID} .psnppp-link svg { width: 11px; height: 11px; fill: currentColor; display: block; }
+#${PANEL_ID} .psnppp-foot .psnppp-spacer { flex: 1 1 auto; }
 
 #${PANEL_ID} .psnppp-title {
   font-family: ${TYPE.display};
@@ -920,6 +1054,13 @@ ${litTiers} {
     element.id = INDICATOR_ID;
     element.setAttribute("role", "button");
     element.setAttribute("tabindex", "0");
+    const mark = document.createElement("span");
+    mark.className = "psnppp-mark";
+    mark.setAttribute("data-psnppp", "mark");
+    mark.setAttribute("aria-hidden", "true");
+    mark.appendChild(document.createElement("i"));
+    mark.appendChild(document.createElement("i"));
+    element.appendChild(mark);
     const rail = document.createElement("span");
     rail.className = "psnppp-rail";
     rail.setAttribute("aria-hidden", "true");
@@ -1215,7 +1356,10 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     onSave = async () => ({ ok: false, message: "Settings are not wired up." }),
     onRestore = async () => ({ ok: false, message: "Restore is not wired up." }),
     onClose = () => {
-    }
+    },
+    // Shown beside the wordmark. Passed in rather than read here so the panel
+    // stays free of GM_info and keeps rendering in node under the test runner.
+    version = null
   } = {}) {
     const make = (tag2, className, text) => {
       const node = doc.createElement(tag2);
@@ -1236,7 +1380,15 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     element.setAttribute("role", "dialog");
     element.setAttribute("aria-label", "PSNP++ settings");
     const head = make("div", "psnppp-head");
-    head.appendChild(make("span", "psnppp-title", "PSNP++"));
+    const brand = make("div", "psnppp-brand");
+    const mark = tag(make("span", "psnppp-mark"), "mark");
+    mark.setAttribute("aria-hidden", "true");
+    mark.appendChild(make("i"));
+    mark.appendChild(make("i"));
+    brand.appendChild(mark);
+    brand.appendChild(make("span", "psnppp-title", "PSNP++"));
+    if (version) brand.appendChild(tag(make("span", "psnppp-version", `v${version}`), "version"));
+    head.appendChild(brand);
     const closeButton = tag(make("button", "psnppp-close", "\xD7"), "close");
     closeButton.setAttribute("type", "button");
     closeButton.setAttribute("aria-label", "Close settings");
@@ -1380,6 +1532,29 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     const message = tag(make("div", "psnppp-message"), "message");
     show(message, false);
     element.appendChild(message);
+    const foot = make("div", "psnppp-foot");
+    const link = (href, label, svgPath, key) => {
+      const node = tag(make("a", "psnppp-link"), key);
+      node.setAttribute("href", href);
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+      const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 16 16");
+      svg.setAttribute("aria-hidden", "true");
+      const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", svgPath);
+      svg.appendChild(path);
+      node.appendChild(svg);
+      node.appendChild(make("span", null, label));
+      node.addEventListener("click", (event) => event.stopPropagation());
+      return node;
+    };
+    const GLOBE = "M8 0a8 8 0 100 16A8 8 0 008 0zM6.6 1.6a10.8 10.8 0 00-1.3 3.2H2.9a6.6 6.6 0 013.7-3.2zM2.2 6.2h2.9a15 15 0 000 3.6H2.2a6.6 6.6 0 010-3.6zm.7 5h2.4a10.8 10.8 0 001.3 3.2 6.6 6.6 0 01-3.7-3.2zM8 14.6c-.7-.7-1.3-1.9-1.6-3.4h3.2c-.3 1.5-.9 2.7-1.6 3.4zm1.8-4.8H6.2a13.6 13.6 0 010-3.6h3.6a13.6 13.6 0 010 3.6zM8 1.4c.7.7 1.3 1.9 1.6 3.4H6.4C6.7 3.3 7.3 2.1 8 1.4zm1.4.2a6.6 6.6 0 013.7 3.2h-2.4a10.8 10.8 0 00-1.3-3.2zm1.5 4.6h2.9a6.6 6.6 0 010 3.6h-2.9a15 15 0 000-3.6zm-.2 5h2.4a6.6 6.6 0 01-3.7 3.2 10.8 10.8 0 001.3-3.2z";
+    const GITHUB = "M8 0C3.6 0 0 3.6 0 8a8 8 0 005.5 7.6c.4.1.5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.2 1.9.9 2.4.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 014 0c1.5-1 2.2-.8 2.2-.8.5 1.1.2 1.9.1 2.1.5.5.8 1.2.8 2.1 0 3.1-1.8 3.8-3.6 4 .3.3.6.8.6 1.6v2.2c0 .2.1.5.5.4A8 8 0 0016 8c0-4.4-3.6-8-8-8z";
+    foot.appendChild(link("https://trippixn.com", "trippixn.com", GLOBE, "link-site"));
+    foot.appendChild(make("span", "psnppp-spacer"));
+    foot.appendChild(link("https://github.com/trippixn963/PSNPPlusPlus", "GitHub", GITHUB, "link-repo"));
+    element.appendChild(foot);
     function showMessage(text, { error = false } = {}) {
       message.textContent = text;
       message.className = error ? "psnppp-message psnppp-message-error" : "psnppp-message";
@@ -2225,6 +2400,9 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           resolve();
         };
         panel = createSettingsPanel({
+          // Without this the version pill never renders on a real install: the
+          // panel defaults it to null and only the tests were passing one.
+          version: currentScriptVersion(),
           anchor: chip?.element ?? null,
           side: chip?.getSide?.() ?? "right",
           config,
