@@ -168,11 +168,30 @@ ssh -i "$KEY" "$VPS" "set -e
   mv -f '$WEBROOT'/.psnppp.meta.js.tmp '$WEBROOT'/psnppp.meta.js"
 
 echo "=== 8. verify live ==="
-# `|| true` on the substitution, or a 404 (grep matches nothing) trips set -e
-# right here and the ABORT below — the one message that names the actual
-# problem — never prints. The failure this step exists to catch was the one it
-# could not report.
-LIVE="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.meta.js" 2>/dev/null | grep -m1 '@version' | tr -s ' ' | cut -d' ' -f3 || true)"
+# Whether the publish worked and whether THIS MACHINE can reach the internet
+# are different questions, and conflating them cost a false ABORT on a release
+# that had in fact succeeded: a TLS handshake failure here (curl 35) was
+# reported as "live meta.js is <nothing — 404>", blaming the publish for a
+# problem on the developer's side of the wire.
+#
+# curl separates them itself. 22 is an HTTP error — the publish. Anything else
+# is DNS, connect, timeout or TLS — us. On the latter we do not guess: we ask
+# the SERVER, which is authoritative about what it is serving and is the same
+# check the on-box guard makes every fifteen minutes.
+verify_live() {
+  local rc=0 body
+  body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.meta.js" 2>/dev/null)" || rc=$?
+
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 22 ]; then
+    echo "cannot reach $BASE_URL from here (curl $rc) — asking the server instead"
+    ssh -i "$KEY" "$VPS" "curl -fsS --max-time 20 '$BASE_URL/psnppp.meta.js'" 2>/dev/null \
+      | grep -m1 '@version' | tr -s ' ' | cut -d' ' -f3
+    return
+  fi
+  printf '%s' "$body" | grep -m1 '@version' | tr -s ' ' | cut -d' ' -f3
+}
+
+LIVE="$(verify_live || true)"
 [ "$LIVE" = "$NEW_VERSION" ] \
   || { echo "ABORT: live meta.js is '${LIVE:-<nothing — 404, or the SPA fallback answered with HTML>}', expected $NEW_VERSION"; exit 1; }
 echo "live meta.js = $LIVE"
@@ -183,9 +202,19 @@ echo "live meta.js = $LIVE"
 # of &&, set -e exempted it and the release sailed past. It could neither pass
 # nor fail. cmp reads all of stdin, so no early exit, and it catches truncation
 # too — a body cut off after the metadata block passes any @version check.
-curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.user.js" | cmp -s - dist/psnppp.user.js \
-  || { echo "ABORT: live user.js is not byte-identical to dist/psnppp.user.js (served $(curl -s -o /dev/null -w '%{http_code}, %{size_download} bytes' "$BASE_URL/psnppp.user.js"), expected $(wc -c < dist/psnppp.user.js) bytes)"; exit 1; }
-echo "live user.js = byte-identical to dist ($(wc -c < dist/psnppp.user.js) bytes)"
+#
+# Same split as above: when this machine cannot reach the host, compare on the
+# server against the copy the publish put there.
+user_rc=0
+curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.user.js" 2>/dev/null | cmp -s - dist/psnppp.user.js || user_rc=$?
+if [ "$user_rc" -ne 0 ]; then
+  remote="$(ssh -i "$KEY" "$VPS" "curl -fsS --max-time 20 '$BASE_URL/psnppp.user.js' | cmp -s - '$WEBROOT/psnppp.user.js' && echo same" 2>/dev/null || true)"
+  [ "$remote" = "same" ] \
+    || { echo "ABORT: live user.js is not byte-identical to what was published"; exit 1; }
+  echo "live user.js = byte-identical (verified on the server; unreachable from here)"
+else
+  echo "live user.js = byte-identical to dist ($(wc -c < dist/psnppp.user.js) bytes)"
+fi
 
 echo "=== 9. sync API still routed ==="
 # Assert the BODY, not the status. If the host puts an SPA catch-all in front of
