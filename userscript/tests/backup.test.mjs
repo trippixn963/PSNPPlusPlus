@@ -84,6 +84,37 @@ test('listBackups returns newest-first', async () => {
   }
 });
 
+test('an index written under a larger cap collapses on the next READ', async () => {
+  // The reported bug. MAX_BACKUPS was lowered from five to three, but trimming
+  // only happened on save -- so a device that had not merged since kept showing
+  // five rows, with no way to ever reach three except by syncing three times.
+  const store = installFakeGM();
+  try {
+    const legacy = [];
+    for (let i = 0; i < 5; i++) {
+      const id = `psnppp.backup.${2000 + i}`;
+      await GM.setValue(id, JSON.stringify([{ id: `l${i}` }]));
+      legacy.push({ id, at: 2000 + i, listCount: 1 });
+    }
+    // Newest first, exactly as saveBackup would have left it under the old cap.
+    legacy.reverse();
+    await GM.setValue('psnppp.backups', legacy);
+
+    const index = await listBackups();
+
+    assert.equal(index.length, MAX_BACKUPS, 'the read applies the current cap');
+    assert.deepEqual(index.map(e => e.id), legacy.slice(0, MAX_BACKUPS).map(e => e.id),
+      'and keeps the newest, not an arbitrary three');
+    for (const entry of legacy.slice(MAX_BACKUPS)) {
+      assert.equal(store.has(entry.id), false, 'the dropped blobs are deleted, not orphaned');
+    }
+    assert.deepEqual(await GM.getValue('psnppp.backups', []), index,
+      'and the trim is persisted, so it does not re-run on every open');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
 test('a protected entry survives a save that would otherwise evict it', async () => {
   // At three slots, the restore flow's own safety snapshot is exactly what
   // would evict the oldest entry — which is the one a restore usually targets.

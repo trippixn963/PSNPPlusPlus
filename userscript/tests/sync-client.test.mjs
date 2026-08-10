@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSyncClient } from '../src/sync-client.mjs';
+import { createSyncClient, HISTORY_PAGE } from '../src/sync-client.mjs';
 
 const okDoc = { version: 1, lists: {} };
 
@@ -100,9 +100,25 @@ test('getHistory returns the revision list, newest first as the server sends it'
     }
   });
   const history = await client.getHistory();
-  assert.equal(calls[0].url, 'https://e.test/api/psnppp/state/history');
+  // The limit is sent explicitly. Leaving it off gets the server's default,
+  // which is its full retention of 100 -- and the panel renders every row it is
+  // handed, so the omission is what turned the Backups tab into a long scroll.
+  assert.equal(calls[0].url, `https://e.test/api/psnppp/state/history?limit=${HISTORY_PAGE}`);
   assert.equal(calls[0].method, 'GET');
   assert.deepEqual(history.map(r => r.revision), [9, 8]);
+});
+
+test('getHistory sends a caller-chosen limit when given one', async () => {
+  const calls = [];
+  const client = createSyncClient({
+    endpoint: 'https://e.test/api/psnppp', key: 'k',
+    request: async opts => {
+      calls.push(opts);
+      return { status: 200, responseText: JSON.stringify({ revisions: [] }) };
+    }
+  });
+  await client.getHistory(2);
+  assert.equal(calls[0].url, 'https://e.test/api/psnppp/state/history?limit=2');
 });
 
 test('a history response without a revisions array reads as empty, not as a crash', async () => {

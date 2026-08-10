@@ -33,6 +33,40 @@ const INDEX_KEY = 'psnppp.backups';
 export const MAX_BACKUPS = 3;
 
 /**
+ * Trim an index to the cap, deleting the blobs that fall off, and persist it.
+ *
+ * Shared by save and list because trimming only on save leaves an index written
+ * under an older, larger cap sitting over it indefinitely: lowering MAX_BACKUPS
+ * took effect on the next write, so a device that had not merged since kept
+ * showing five rows with no way to reach three. Pruning on read as well means a
+ * changed cap applies the moment the panel is opened.
+ *
+ * Deletes the blob, not just the index entry. Dropping the row alone would hide
+ * the backup while its payload sat in GM storage forever, which is the more
+ * expensive half.
+ *
+ * ⚠️ Entries flagged `protected` are never dropped, and that flag is why the
+ * flag exists on the ENTRY rather than being an argument. A read has no idea a
+ * restore is in flight, so a prune-on-read that took `protect` as a parameter
+ * would sail straight past it and delete the snapshot the restore was about to
+ * read — the "restore destroys its own source" bug, reintroduced through the
+ * read path instead of the write path. Storing it means every reader honours it.
+ */
+async function pruneTo(index) {
+  const keep = [];
+  const dropped = [];
+  for (const [position, entry] of index.entries()) {
+    if (position < MAX_BACKUPS || entry.protected) keep.push(entry);
+    else dropped.push(entry);
+  }
+  if (dropped.length > 0) {
+    for (const entry of dropped) await GM.deleteValue(entry.id);
+    await GM.setValue(INDEX_KEY, keep);
+  }
+  return keep;
+}
+
+/**
  * `protect` names one entry that must survive this save even if it would
  * otherwise be the one evicted.
  *
@@ -48,20 +82,22 @@ export async function saveBackup(lists, now = Date.now(), { protect = null } = {
   const id = `psnppp.backup.${now}`;
   await GM.setValue(id, JSON.stringify(lists));
 
-  const next = [{ id, at: now, listCount: lists.length }, ...index];
-  const keep = [];
-  const dropped = [];
-  for (const [position, entry] of next.entries()) {
-    if (position < MAX_BACKUPS || entry.id === protect) keep.push(entry);
-    else dropped.push(entry);
-  }
-  for (const entry of dropped) await GM.deleteValue(entry.id);
-  await GM.setValue(INDEX_KEY, keep);
+  // Clear any previous flag as we go. Protection covers one restore, and a
+  // stale flag left behind would pin that entry above the cap permanently —
+  // the index would creep upwards one orphan at a time.
+  const next = [{ id, at: now, listCount: lists.length }, ...index].map(entry => (
+    entry.id === protect ? { ...entry, protected: true } : { ...entry, protected: undefined }
+  ));
+
+  const keep = await pruneTo(next);
+  // pruneTo only writes when it dropped something; a save always has to,
+  // because the new entry is in `keep` and nowhere else yet.
+  if (keep.length === next.length) await GM.setValue(INDEX_KEY, keep);
   return id;
 }
 
 export async function listBackups() {
-  return GM.getValue(INDEX_KEY, []);
+  return pruneTo(await GM.getValue(INDEX_KEY, []));
 }
 
 export async function restoreBackup(id) {

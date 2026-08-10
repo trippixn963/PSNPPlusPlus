@@ -37,6 +37,15 @@ function parseBody(response) {
   }
 }
 
+/**
+ * How many server revisions the panel asks for.
+ *
+ * The server retains 100 and will return all of them if not told otherwise.
+ * This is a display depth, not a retention change: the deeper history stays on
+ * the server and is still reachable by raising this.
+ */
+export const HISTORY_PAGE = 5;
+
 function assertDocVersion(doc) {
   if (doc == null || doc.version !== DOC_VERSION) {
     throw new Error(`Unsupported document version: ${doc?.version}`);
@@ -81,11 +90,17 @@ export function createSyncClient({
      * Metadata only — revision, when, and size. Fetching 40 full documents to
      * draw a list would be tens of thousands of bytes to render three columns.
      * The one being restored is fetched separately, and only when asked for.
+     *
+     * `limit` is sent rather than left to the server's default, which is its
+     * full retention of 100. The panel renders every row it is handed, so the
+     * default turned the Backups tab into a hundred-row scroll — the server
+     * keeps that depth as the safety net, but nobody scrolls to r7 to undo
+     * something from ten minutes ago.
      */
-    async getHistory() {
+    async getHistory(limit = HISTORY_PAGE) {
       const response = await request({
         method: 'GET',
-        url: `${base}/state/history`,
+        url: `${base}/state/history?limit=${encodeURIComponent(limit)}`,
         headers,
         timeout: timeoutMs
       });
