@@ -409,6 +409,11 @@ export function createSettingsPanel({
   }
 
   let closed = false;
+  // Assigned once the outside-click listener is installed, below. A mutable
+  // no-op rather than a const the hoisted close() would reference before its
+  // declaration ran — that is a temporal dead zone away from a ReferenceError
+  // inside the one function that has to work.
+  let detachOutside = () => {};
   /**
    * Both steps are guarded, and both still run if the other throws.
    *
@@ -420,6 +425,12 @@ export function createSettingsPanel({
   function close() {
     if (closed) return;
     closed = true;
+    // Before anything that can throw: a panel that failed to remove itself but
+    // left a live document listener behind would keep firing for the rest of
+    // the page's life, on a page we do not own.
+    try {
+      detachOutside();
+    } catch { /* nothing to do; the panel is going away regardless */ }
     try {
       element.remove?.();
     } catch (error) {
@@ -434,11 +445,47 @@ export function createSettingsPanel({
 
   element.addEventListener('keydown', event => {
     if (event.key !== 'Escape' && event.key !== 'Esc') return;
-    // Scoped to the panel: no listener of ours goes on the host document, so
-    // Escape elsewhere on psnprofiles.com still belongs to psnprofiles.com.
+    // Scoped to the panel: Escape elsewhere on psnprofiles.com still belongs to
+    // psnprofiles.com.
     event.stopPropagation?.();
     close();
   });
+
+  /**
+   * Close when the user clicks away.
+   *
+   * THE ONE LISTENER THIS WIDGET PUTS ON THE HOST DOCUMENT, and it is here
+   * because "the user clicked somewhere that is not us" is the one thing that
+   * genuinely cannot be observed from inside our own subtree. Everything else
+   * stays scoped to the panel.
+   *
+   * Three deliberate choices:
+   *
+   * `pointerdown`, not `click`. A click is only delivered once the button is
+   * released, and its target is the common ancestor of press and release — so
+   * dragging to select the endpoint text and letting go outside the panel would
+   * fire a document-level click and shut the panel mid-edit. A pointerdown that
+   * STARTS outside is an unambiguous "I am done here".
+   *
+   * Capture phase, so a host page that stops propagation on its own document
+   * clicks cannot stop the panel closing. We never stop propagation ourselves —
+   * the click still belongs to psnprofiles.com and must reach it.
+   *
+   * The anchor is excluded. It is the chip, and the chip already toggles the
+   * panel; without this, clicking it while open would close the panel here and
+   * immediately reopen it there, which reads as the chip not working.
+   */
+  detachOutside = (() => {
+    const onOutsidePointerDown = event => {
+      const target = event?.target ?? null;
+      if (target == null) return;
+      if (element.contains?.(target)) return;
+      if (anchor?.contains?.(target)) return;
+      close();
+    };
+    doc.addEventListener?.('pointerdown', onOutsidePointerDown, true);
+    return () => doc.removeEventListener?.('pointerdown', onOutsidePointerDown, true);
+  })();
 
   selectTab(TABS[0].name);
   position();

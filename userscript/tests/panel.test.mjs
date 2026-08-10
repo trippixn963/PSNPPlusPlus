@@ -224,3 +224,78 @@ test('the footer links out, and never hands the new tab a way back', () => {
     uninstallFakeDocument();
   }
 });
+
+test('a click anywhere else on the page closes the panel', () => {
+  installFakeDocument();
+  installFakeWindow();
+  let closed = 0;
+  try {
+    const panel = createSettingsPanel({ onClose: () => { closed += 1; } });
+    globalThis.document.body.appendChild(panel.element);
+    const elsewhere = globalThis.document.createElement('div');
+    globalThis.document.body.appendChild(elsewhere);
+
+    globalThis.document.dispatch('pointerdown', { target: elsewhere });
+    assert.equal(closed, 1, 'clicking away should close it — no reaching for the ×');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('a click INSIDE the panel never closes it', () => {
+  installFakeDocument();
+  installFakeWindow();
+  let closed = 0;
+  try {
+    const panel = createSettingsPanel({ onClose: () => { closed += 1; } });
+    globalThis.document.body.appendChild(panel.element);
+    // The endpoint input is as deep as the panel gets; if containment is wrong
+    // anywhere it is wrong here.
+    const input = find(panel.element, 'endpoint') ?? panel.element;
+    globalThis.document.dispatch('pointerdown', { target: input });
+    assert.equal(closed, 0, 'typing in your own settings must not dismiss them');
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('a click on the chip does not close-then-reopen', () => {
+  // The chip toggles the panel itself. Without excluding the anchor, one click
+  // would close it here and reopen it there, and the chip would look broken.
+  installFakeDocument();
+  installFakeWindow();
+  let closed = 0;
+  try {
+    const chip = globalThis.document.createElement('div');
+    globalThis.document.body.appendChild(chip);
+    const panel = createSettingsPanel({ anchor: chip, onClose: () => { closed += 1; } });
+    globalThis.document.body.appendChild(panel.element);
+
+    globalThis.document.dispatch('pointerdown', { target: chip });
+    assert.equal(closed, 0);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});
+
+test('closing removes the document listener, however it was closed', () => {
+  // It lives on a page we do not own. A panel that goes away and leaves this
+  // behind keeps firing for the rest of that page's life.
+  installFakeDocument();
+  installFakeWindow();
+  try {
+    const panel = createSettingsPanel({});
+    assert.equal(globalThis.document.listenerCount('pointerdown'), 1);
+    panel.close();
+    assert.equal(globalThis.document.listenerCount('pointerdown'), 0, 'no listener may outlive the panel');
+    // And a second close must not throw or double-remove.
+    panel.close();
+    assert.equal(globalThis.document.listenerCount('pointerdown'), 0);
+  } finally {
+    uninstallFakeWindow();
+    uninstallFakeDocument();
+  }
+});

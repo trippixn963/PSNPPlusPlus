@@ -89,6 +89,13 @@ class FakeNode {
     return handlers.length;
   }
 
+  /** Is `node` this node or a descendant of it? Mirrors Node.contains. */
+  contains(node) {
+    if (node == null) return false;
+    if (node === this) return true;
+    return this.children.some(child => child.contains(node));
+  }
+
   getBoundingClientRect() {
     return this.rect ?? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
   }
@@ -131,10 +138,34 @@ export function installFakeDocument() {
   const head = new FakeNode('head');
   const documentElement = new FakeNode('html');
 
+  // The document carries listeners of its own now: closing the panel on an
+  // outside click is the one thing that cannot be observed from inside our own
+  // subtree, so it is the one listener this widget puts on the host document.
+  const docListeners = new Map();
+
   globalThis.document = {
     body,
     head,
     documentElement,
+    addEventListener(type, handler) {
+      if (!docListeners.has(type)) docListeners.set(type, []);
+      docListeners.get(type).push(handler);
+    },
+    removeEventListener(type, handler) {
+      const handlers = docListeners.get(type);
+      if (!handlers) return;
+      docListeners.set(type, handlers.filter(fn => fn !== handler));
+    },
+    /** Fire every document handler of `type`, as a real click would. */
+    dispatch(type, event = {}) {
+      const handlers = docListeners.get(type) ?? [];
+      for (const handler of handlers) handler(event);
+      return handlers.length;
+    },
+    /** How many document listeners of `type` are installed — leak detection. */
+    listenerCount(type) {
+      return (docListeners.get(type) ?? []).length;
+    },
     createElement(tag) {
       const node = new FakeNode(tag);
       created.push(node);
