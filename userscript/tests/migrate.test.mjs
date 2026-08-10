@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { migrateGmStorage, OLD_DEFAULT_ENDPOINT } from '../src/migrate.mjs';
 import { DEFAULT_ENDPOINT, loadConfig } from '../src/config.mjs';
-import { listBackups, restoreBackup, saveBackup } from '../src/backup.mjs';
+import { listBackups, restoreBackup, saveBackup, MAX_BACKUPS } from '../src/backup.mjs';
 import { loadBase, start } from '../src/main.mjs';
 
 /**
@@ -102,12 +102,13 @@ test('a backup saved after the migration coexists with the migrated ones', async
   installFakeGM(oldInstall());
   try {
     await migrateGmStorage();
-    // backup.mjs caps the index at 5; 3 migrated + 2 new must all be restorable,
-    // which also proves the migrated entries are shaped exactly like native ones.
+    // The index is capped, so a new save evicts a migrated one. What must hold
+    // is that every surviving entry is restorable — which proves the migrated
+    // entries are shaped exactly like native ones.
     await saveBackup([{ id: 'd' }], 4000);
     await saveBackup([{ id: 'e' }], 5000);
     const index = await listBackups();
-    assert.equal(index.length, 5);
+    assert.equal(index.length, MAX_BACKUPS);
     for (const entry of index) {
       await assert.doesNotReject(() => restoreBackup(entry.id));
     }

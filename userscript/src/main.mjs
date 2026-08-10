@@ -246,7 +246,10 @@ export async function openSettings({ chip = null } = {}) {
             // with no way back is not one. Now safe to take regardless of what
             // it evicts: `restored` is already in hand.
             const { syncable: currentLists } = readSyncable(window.localStorage);
-            await saveBackup(currentLists);
+            // `protect`: at three slots this very save is what would evict the
+            // entry being restored, and a restore that destroys its own source
+            // is the worst possible behaviour for the escape hatch.
+            await saveBackup(currentLists, Date.now(), { protect: id });
 
             writeSyncable(window.localStorage, restored);
             window.location.reload();

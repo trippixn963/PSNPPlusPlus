@@ -54,7 +54,7 @@ test('history is newest-first', async () => {
 test('history is bounded — the oldest entry is evicted past the cap', async () => {
   installFakeGM();
   try {
-    assert.equal(MAX_HISTORY, 20);
+    assert.equal(MAX_HISTORY, 10);
     for (let i = 1; i <= MAX_HISTORY + 5; i += 1) {
       await recordSync({ revision: i, delta: delta() }, 1000 + i);
     }

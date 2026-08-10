@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { saveBackup, listBackups } from '../src/backup.mjs';
+import { saveBackup, listBackups, MAX_BACKUPS } from '../src/backup.mjs';
 import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
 import { loadConfig, saveConfig } from '../src/config.mjs';
@@ -415,23 +415,23 @@ test('Escape closes the panel and changes nothing', async () => {
 
 // --- restore -----------------------------------------------------------------
 
-test('restoring the oldest of 5 full backup slots succeeds without evicting itself', async () => {
+test('restoring the oldest of a full backup log succeeds without evicting itself', async () => {
   installFakeGM();
   const storage = fakeStorage();
   writeLists(storage, [list('current', 'Current', [{ id: 'gX', title: 'X', platforms: {}, tags: [] }])]);
 
   try {
-    // Fill all 5 backup.mjs slots. The oldest one — timestamp 1000 — is the
+    // Fill every backup.mjs slot. The oldest one — timestamp 1000 — is the
     // pre-corruption snapshot a user restoring from a full backup log is
     // most likely to want, and it's the slot at risk of being evicted by the
     // restore's own "back up current lists first" step if that step runs
     // before the restore reads the chosen entry.
     await saveBackup([list('oldest', 'Oldest')], 1000);
-    for (let i = 1; i < 5; i++) {
+    for (let i = 1; i < MAX_BACKUPS; i++) {
       await saveBackup([list(`slot-${i}`, `Slot ${i}`)], 1000 + i);
     }
     const backups = await listBackups();
-    assert.equal(backups.length, 5);
+    assert.equal(backups.length, MAX_BACKUPS);
     // listBackups is newest-first (backup.test.mjs pins this), so the oldest
     // entry is the LAST row in the panel.
     assert.equal(backups[backups.length - 1].listCount, 1);
@@ -440,7 +440,7 @@ test('restoring the oldest of 5 full backup slots succeeds without evicting itse
     try {
       await ui.click('tab-backups');
       const rows = ui.nodes('backup-row');
-      assert.equal(rows.length, 5);
+      assert.equal(rows.length, MAX_BACKUPS);
 
       const oldestRow = rows[rows.length - 1];
       find(oldestRow, 'restore').dispatch('click');

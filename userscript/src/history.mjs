@@ -20,11 +20,15 @@
 const HISTORY_KEY = 'psnppp.history';
 
 /**
- * Kept small on purpose. This is a "what just happened" log meant to be read in
- * one alert box, not an audit trail — and every entry is one more thing living
- * in extension storage next to the backups that actually matter.
+ * Kept small on purpose. This is a "what just happened" log meant to be read at
+ * a glance, not an audit trail — and every entry is one more thing living in
+ * extension storage next to the backups that actually matter.
+ *
+ * Ten, down from twenty: twenty rows is a scroll, and anything older than the
+ * last handful is answered better by the server's own revision history, which
+ * goes back further and can actually restore.
  */
-export const MAX_HISTORY = 20;
+export const MAX_HISTORY = 10;
 
 /**
  * Recent syncs, newest first.
