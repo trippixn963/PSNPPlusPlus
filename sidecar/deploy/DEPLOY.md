@@ -37,12 +37,31 @@ curl -H "X-Sync-Key: $PSNP_SYNC_KEY" https://your-domain.example/api/psnppp/stat
 ## The proxy
 
 `nginx-psnppp.conf` has the three location blocks: the API, and the two static
-artifacts that Tampermonkey installs and polls. Paste them into your server
-block and reload with the config test chained, not merely adjacent:
+artifacts that Tampermonkey installs and polls.
+
+Install it as its own file and pull it in with one `include`, rather than
+pasting the blocks into your server block. If the vhost is shared with other
+services — a portfolio, other apps behind the same `server_name` — this is what
+keeps PSNP++ from needing an edit to a file those services also live in:
 
 ```bash
+install -d -m 755 /etc/psnppp/nginx
+install -m 644 nginx-psnppp.conf /etc/psnppp/nginx/locations.conf
+# then, inside the server block:
+#     include /etc/psnppp/nginx/*.conf;
 nginx -t && systemctl reload nginx
 ```
+
+**Use the glob, not a literal path.** A literal path that goes missing makes
+`nginx -t` fail, so the next reload takes down every other service in that
+vhost — PSNP++ would gain the power to break unrelated things, which is the
+opposite of why it was moved out. A glob matching nothing is not an error:
+nginx starts, and PSNP++'s URLs fall through to whatever catch-all exists.
+That failure is already covered, because the publish guard re-fetches both
+URLs every 15 minutes and compares bodies, so a vanished `location` block
+looks exactly like a deleted file and gets the same alert.
+
+Chain the config test to the reload, don't merely put it on the line above.
 
 Three things in that file are load-bearing and easy to undo by tidying:
 
