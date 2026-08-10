@@ -40,6 +40,13 @@ install -d -m 700 "$DEST" || die "cannot create $DEST"
 stamp="$(date +%F-%H%M)"
 out="$DEST/state-$stamp.db"
 
+# Remove a half-made copy on ANY failure below. Without this a failed run left
+# its output behind — a 0-byte state-*.db sitting in the backup directory
+# looking exactly like a backup, and counted as one by the "never prune to
+# zero" check. A file that is not a backup must not be able to pass for one.
+cleanup() { [ -n "${out:-}" ] && [ -e "$out" ] && rm -f "$out"; }
+trap 'cleanup' EXIT
+
 sqlite3 "$DB" ".backup '$out'" || die "sqlite3 .backup failed for $DB"
 chmod 600 "$out"
 
@@ -54,6 +61,8 @@ revisions="$(sqlite3 "$out" "SELECT COUNT(*) FROM document_history;" 2>/dev/null
 [ "$revisions" -gt 0 ] || die "backup at $out has no revision history — refusing to call that a backup."
 
 bytes="$(wc -c < "$out" | tr -d ' ')"
+# Verified — it is a real backup now, so stop the trap deleting it.
+trap - EXIT
 log "OK: $out ($bytes bytes, $revisions revisions, integrity ok)"
 
 # Prune by age, and only ever files this script's own naming produced.

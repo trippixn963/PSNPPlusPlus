@@ -136,3 +136,21 @@ sqlite3 state.db ".backup 'state.db.bak'"
 
 Use `.backup` rather than `cp` — the app runs in WAL mode, so a plain copy of
 the `.db` alone can miss committed data still sitting in the `-wal` file.
+
+`psnppp-backup.timer` does this daily, verifies each copy with
+`integrity_check` and a check that it actually contains revision history, and
+prunes past 14 days — while refusing to prune to zero, so a clock jump cannot
+empty the directory. A failed run deletes its own half-written output, because
+a 0-byte file in a backup directory otherwise passes for a backup.
+
+**Storage is bounded and small.** Both limits are hard caps, not conventions:
+
+| | |
+|---|---|
+| Database | `HISTORY_LIMIT = 100` revisions per document, one document → tops out well under 1 MB |
+| Backups | one per day at roughly the database's size, 14 kept → about 2 MB |
+
+Anything named other than `state-*.db` in the backup directory is never pruned,
+which is how a copy can be kept deliberately — the pre-purge archive from
+2026-08-10 is one, being the only remaining record of the documents removed
+that day.
