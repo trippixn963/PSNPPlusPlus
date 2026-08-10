@@ -179,6 +179,25 @@ echo "=== 8. verify live ==="
 # is DNS, connect, timeout or TLS — us. On the latter we do not guess: we ask
 # the SERVER, which is authoritative about what it is serving and is the same
 # check the on-box guard makes every fifteen minutes.
+# Fetch a public URL, from here if possible and from the SERVER if this machine
+# cannot reach the host.
+#
+# Every live check needs this, and writing it inline each time is how the same
+# bug appeared twice: a TLS failure on the developer's laptop reported as a
+# broken publish, and then the fallback's own progress message captured as the
+# value because it went to stdout. Diagnostics go to >&2; only the body is
+# printed.
+fetch_live() {
+  local path="$1" rc=0 body
+  body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL$path" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 22 ]; then
+    echo "cannot reach $BASE_URL$path from here (curl $rc) — asking the server instead" >&2
+    ssh -i "$KEY" "$VPS" "curl -fsS --max-time 20 '$BASE_URL$path'" 2>/dev/null
+    return
+  fi
+  printf '%s' "$body"
+}
+
 verify_live() {
   local rc=0 body
   body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.meta.js" 2>/dev/null)" || rc=$?
@@ -225,7 +244,7 @@ echo "=== 9. sync API still routed ==="
 # Assert the BODY, not the status. If the host puts an SPA catch-all in front of
 # this domain, any unmatched path answers 200 with HTML — a status-code check
 # there cannot distinguish "routed" from "gone".
-HEALTH="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/api/psnppp/health" 2>/dev/null || true)"
+HEALTH="$(fetch_live /api/psnppp/health || true)"
 case $HEALTH in
   *'"status":"ok"'*) echo "sync API = ROUTED" ;;
   *) echo "ABORT: sync API not routed — $BASE_URL/api/psnppp/health returned '${HEALTH:0:80}'"; exit 1 ;;
