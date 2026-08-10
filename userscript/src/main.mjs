@@ -20,7 +20,6 @@ const STARTUP_LOG_INTERVAL_MS = 6 * 60 * 60 * 1000;
 import { createSyncClient, gmRequest } from './sync-client.mjs';
 import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT } from './config.mjs';
 import { saveBackup, saveDailyBackup, listBackups, restoreBackup } from './backup.mjs';
-import { recordSync, listSyncHistory } from './history.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { createSettingsPanel, describeFailure } from './panel.mjs';
@@ -194,7 +193,7 @@ export async function openSettings({ chip = null } = {}) {
     // Read together, and independently. Sharing one try meant an unreadable
     // backup index also skipped loadConfig, so the form rendered the DEFAULT
     // endpoint over the user's real one — and saving would have committed it.
-    const [backups, history, config, loadError] = await loadPanelData();
+    const [backups, config, loadError] = await loadPanelData();
 
     await new Promise(resolve => {
       let settled = false;
@@ -220,8 +219,6 @@ export async function openSettings({ chip = null } = {}) {
         side: chip?.getSide?.() ?? 'right',
         config,
         backups,
-        history,
-        describeDelta,
         onSave: async ({ endpoint, key }) => {
           try {
             return await applyConfig({ endpoint, key });
@@ -295,10 +292,10 @@ export async function openSettings({ chip = null } = {}) {
  * credentials is a plausible fix for exactly that.
  */
 async function loadPanelData() {
-  const [backups, history, config] = await Promise.allSettled([
-    listBackups(), listSyncHistory(), loadConfig()
+  const [backups, config] = await Promise.allSettled([
+    listBackups(), loadConfig()
   ]);
-  const failures = [backups, history, config]
+  const failures = [backups, config]
     .filter(result => result.status === 'rejected')
     .map(result => describeFailure(result.reason, 'Could not read your saved settings'));
   const settings = config.status === 'fulfilled'
@@ -312,7 +309,6 @@ async function loadPanelData() {
   // would be reaching for.
   return [
     backups.status === 'fulfilled' ? backups.value : [],
-    history.status === 'fulfilled' ? history.value : [],
     settings,
     failures[0] ?? ''
   ];
@@ -811,32 +807,20 @@ export async function start() {
       // fault is reported rather than suppressed for the life of the page.
       lastFaultLogged = null;
 
-      // Only cycles that actually wrote are logged. Syncs fire on every load,
-      // every tab focus and every debounced edit, and the overwhelming majority
-      // of them change nothing — recording those would push the 20-entry window
-      // past the one interesting entry within minutes and leave a log that
-      // cannot answer the question it exists for.
-      //
-      // Its own try/catch, INSIDE the state update: the history is a nicety and
-      // the sync is the product, so a failure to write a log line must never
-      // repaint a successful sync as "Offline".
       if (shouldLogCycle(result)) {
-        // Same rule as the history above, and for the same reason: only cycles
-        // that WROTE are logged. Syncs fire on every load, focus and debounced
-        // edit, and logging the quiet ones would post to Discord every couple
-        // of minutes while the user simply browses.
+        // Only cycles that WROTE are logged. Syncs fire on every load, focus
+        // and debounced edit, and logging the quiet ones would post to Discord
+        // every couple of minutes while the user simply browses.
+        //
+        // Its own try/catch: the log is a nicety and the sync is the product,
+        // so a failed post must never repaint a successful sync as "Offline".
+        // INSIDE the guard, not beside it — this runs after a cycle that has
+        // already written to localStorage, and anything thrown out here reaches
+        // the outer catch and tells that lie.
         try {
-          // INSIDE the guard, not beside it. This block runs after a cycle
-          // that already WROTE to localStorage; anything thrown out here
-          // reaches the outer catch and repaints a successful sync as
-          // "Offline", which is the one lie the chip must never tell.
           logCycle(treeLog, result);
-          // The named games are for the log only. The history is a 20-entry
-          // window meant to stay small, and the panel never renders them.
-          const { addedGames, removedGames, ...counts } = result.delta ?? {};
-          if (result.changed) await recordSync({ revision: result.revision, delta: counts });
         } catch (error) {
-          console.error('[psnppp] could not record sync history:', error);
+          console.error('[psnppp] could not post the sync log:', error);
         }
       }
 

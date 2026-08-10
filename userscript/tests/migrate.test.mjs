@@ -57,7 +57,7 @@ test('migration moves all four key families and deletes every old name', async (
   const store = installFakeGM(oldInstall());
   try {
     const summary = await migrateGmStorage();
-    assert.deepEqual(summary, { keys: 3, blobs: 3, endpointRewritten: true });
+    assert.deepEqual(summary, { keys: 3, blobs: 3, endpointRewritten: true, reaped: 0 });
 
     // Read back through the real consumers, not by poking at key names.
     const config = await loadConfig();
@@ -126,7 +126,7 @@ test('a second run is a no-op and changes nothing', async () => {
     const after = new Map(store);
 
     const summary = await migrateGmStorage();
-    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: false });
+    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: false, reaped: 0 });
     assert.deepEqual([...store.entries()].sort(), [...after.entries()].sort());
   } finally {
     uninstallFakeGM();
@@ -144,7 +144,7 @@ test('an already-migrated install with new-name values is left alone', async () 
   try {
     const before = new Map(store);
     const summary = await migrateGmStorage();
-    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: false });
+    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: false, reaped: 0 });
     assert.deepEqual([...store.entries()].sort(), [...before.entries()].sort());
   } finally {
     uninstallFakeGM();
@@ -171,7 +171,7 @@ test('a fresh install migrates nothing, writes nothing, and does not throw', asy
   const store = installFakeGM();
   try {
     const summary = await migrateGmStorage();
-    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: false });
+    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: false, reaped: 0 });
     // Not "no old keys" — NO keys at all. A no-op that leaves a stub behind
     // would make the next run take the already-migrated branch.
     assert.equal(store.size, 0);
@@ -189,7 +189,7 @@ test('a partial old install migrates what exists without inventing the rest', as
   const store = installFakeGM([['psnpsync.key', 'only-the-key']]);
   try {
     const summary = await migrateGmStorage();
-    assert.deepEqual(summary, { keys: 1, blobs: 0, endpointRewritten: false });
+    assert.deepEqual(summary, { keys: 1, blobs: 0, endpointRewritten: false, reaped: 0 });
     assert.equal((await loadConfig()).key, 'only-the-key');
     assert.equal((await loadConfig()).endpoint, DEFAULT_ENDPOINT);
     assert.deepEqual([...store.keys()], ['psnppp.key']);
@@ -237,7 +237,7 @@ test('a stale old default under the NEW name is rewritten even with nothing to m
   installFakeGM([['psnppp.endpoint', OLD_DEFAULT_ENDPOINT]]);
   try {
     const summary = await migrateGmStorage();
-    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: true });
+    assert.deepEqual(summary, { keys: 0, blobs: 0, endpointRewritten: true, reaped: 0 });
     assert.equal((await loadConfig()).endpoint, DEFAULT_ENDPOINT);
   } finally {
     uninstallFakeGM();
@@ -430,6 +430,35 @@ test('start() still brings up the chip when the migration throws', async () => {
     assert.equal(appended, 1, 'the chip must still be attached');
   } finally {
     restore();
+    uninstallFakeGM();
+  }
+});
+
+
+test('a key from a removed feature is reaped, once', async () => {
+  // Nothing else can ever collect it: GM.listValues is not granted, so an
+  // orphaned key is not even enumerable. The only moment it can be named is
+  // the change that retires it.
+  const store = installFakeGM();
+  try {
+    await GM.setValue('psnppp.history', [{ at: 1, revision: 2 }]);
+
+    assert.equal((await migrateGmStorage()).reaped, 1, 'the retired key is deleted');
+    assert.equal(store.has('psnppp.history'), false);
+    assert.equal((await migrateGmStorage()).reaped, 0, 'and a second run has nothing to do');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('reaping never takes down the startup it runs in', async () => {
+  installFakeGM();
+  try {
+    await GM.setValue('psnppp.history', [{ at: 1 }]);
+    GM.deleteValue = async () => { throw new Error('storage exploded'); };
+    // Tidying is not the job. It must report and move on.
+    await assert.doesNotReject(() => migrateGmStorage());
+  } finally {
     uninstallFakeGM();
   }
 });

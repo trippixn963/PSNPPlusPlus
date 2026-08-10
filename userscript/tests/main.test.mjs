@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { saveBackup, listBackups, MAX_BACKUPS } from '../src/backup.mjs';
-import { recordSync } from '../src/history.mjs';
 import { writeLists, readLists, LISTS_KEY } from '../src/lists-bridge.mjs';
 import { loadConfig, saveConfig } from '../src/config.mjs';
 import { openSettings, loadBase, handleSyncNowClick, describeSyncResult, describeDelta,
@@ -935,73 +934,20 @@ test('the warning still appears when there is no other detail to show', () => {
   assert.doesNotMatch(detail, /^\s|undefined/);
 });
 
-// --- the panel exposes the sync history -------------------------------------
-
-test('the log tab lists the recorded entries, newest first, in the tooltip\'s own words', async () => {
-  installFakeGM();
-  const storage = fakeStorage();
-  writeLists(storage, [list('current', 'Current')]);
-  try {
-    await recordSync({ revision: 11, delta: delta({ gamesAdded: 2 }) }, 1000);
-    await recordSync({ revision: 12, delta: delta({ listsRemoved: 1 }) }, 2000);
-
-    const ui = await openPanel(storage);
-    try {
-      // The tab itself must exist, or the log does not.
-      assert.ok(ui.node('tab-log'));
-      await ui.click('tab-log');
-
-      const rows = ui.nodes('log-row');
-      assert.equal(rows.length, 2);
-      assert.match(rows[0].textContent, /r12/, 'the newest revision comes first');
-      assert.match(rows[0].textContent, /1 list\b/);
-      assert.match(rows[1].textContent, /r11/);
-      assert.match(rows[1].textContent, /2 games/);
-
-      // Reading history must not touch the lists.
-      assert.deepEqual(readLists(storage).map(l => l.id), ['current']);
-      assertNoDialogs(ui.fake);
-    } finally {
-      ui.teardown();
-    }
-  } finally {
-    uninstallFakeGM();
-  }
-});
-
-test('an empty history says so rather than showing a blank tab', async () => {
-  installFakeGM();
-  const storage = fakeStorage();
-  writeLists(storage, [list('current', 'Current')]);
-  try {
-    const ui = await openPanel(storage);
-    try {
-      await ui.click('tab-log');
-      assert.equal(ui.nodes('log-row').length, 0);
-      assert.match(ui.node('log-empty').textContent, /no sync/i);
-    } finally {
-      ui.teardown();
-    }
-  } finally {
-    uninstallFakeGM();
-  }
-});
-
 test('only one tab is showing at a time', async () => {
   // The old menu's numbering was the only thing standing between "restore a
-  // backup" and "show me a log", and one of them overwrites the user's lists.
-  // Tabs replaced it; if two panes were ever open at once, a Restore button
-  // could sit under a heading that says Log.
+  // backup" and everything else, and Restore overwrites the user's lists. Tabs
+  // replaced it; if two panes were ever open at once, a Restore button could
+  // sit under a heading that belongs to another pane.
   installFakeGM();
   const storage = fakeStorage();
   try {
     await saveBackup([list('backup-1', 'Backup One')], 1000);
     const ui = await openPanel(storage);
     try {
-      for (const [tab, pane] of [['tab-sync', 'pane-sync'], ['tab-backups', 'pane-backups'],
-        ['tab-log', 'pane-log']]) {
+      for (const [tab, pane] of [['tab-sync', 'pane-sync'], ['tab-backups', 'pane-backups']]) {
         await ui.click(tab);
-        const visible = ['pane-sync', 'pane-backups', 'pane-log'].filter(p => isVisible(ui.node(p)));
+        const visible = ['pane-sync', 'pane-backups'].filter(p => isVisible(ui.node(p)));
         assert.deepEqual(visible, [pane], `${tab} should show only ${pane}`);
         assert.equal(ui.node(tab).getAttribute('aria-selected'), 'true');
       }
@@ -1013,7 +959,7 @@ test('only one tab is showing at a time', async () => {
   }
 });
 
-test('the restore flow still works with the panel\'s three tabs', async () => {
+test('the restore flow still works with the panel\'s two tabs', async () => {
   installFakeGM();
   const storage = fakeStorage();
   writeLists(storage, [list('current', 'Current')]);

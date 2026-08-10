@@ -161,5 +161,38 @@ export async function migrateGmStorage() {
   }
   const blobs = await migrateBackups();
   const endpointRewritten = await rewriteDefaultEndpoint();
-  return { keys, blobs, endpointRewritten };
+  const reaped = await reapRetiredKeys();
+  return { keys, blobs, endpointRewritten, reaped };
+}
+
+/**
+ * Delete keys no code reads any more.
+ *
+ * Removing a feature leaves its storage behind on every device that ever ran
+ * the old version, and nothing else will ever collect it: GM.listValues is not
+ * granted (see banner.txt), so an orphan is not even enumerable, let alone
+ * reapable. The only moment it can be named is while someone still remembers
+ * it existed — which is here, in the same change that retires it.
+ *
+ * Never throws. This is tidying, and tidying must not be able to stop a startup.
+ */
+const RETIRED_KEYS = [
+  // The panel's Log tab, removed 2026-08-10. Sync activity goes to the Discord
+  // webhook now (treelog.mjs), and keeping a second copy on the device was the
+  // duplication the owner asked to end.
+  `${NEW_PREFIX}history`
+];
+
+async function reapRetiredKeys() {
+  let reaped = 0;
+  for (const key of RETIRED_KEYS) {
+    try {
+      if (await GM.getValue(key, null) == null) continue;
+      await GM.deleteValue(key);
+      reaped += 1;
+    } catch (error) {
+      console.error(`[psnppp] could not reap the retired key ${key}:`, error);
+    }
+  }
+  return reaped;
 }

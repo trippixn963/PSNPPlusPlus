@@ -35,8 +35,7 @@ import { PANEL_ID, PANEL_WIDTH_PX, EDGE_INSET_PX, CHIP_FALLBACK_SIZE } from './t
 
 const TABS = [
   { name: 'sync', label: 'Sync' },
-  { name: 'backups', label: 'Backups' },
-  { name: 'log', label: 'Log' }
+  { name: 'backups', label: 'Backups' }
 ];
 
 /**
@@ -77,8 +76,6 @@ export function createSettingsPanel({
   side = 'right',
   config = { endpoint: '', key: '' },
   backups = [],
-  history = [],
-  describeDelta = () => 'lists updated',
   // Refusing defaults, not permissive ones. An unwired panel must not report a
   // saved credential or a completed restore.
   onSave = async () => ({ ok: false, message: 'Settings are not wired up.' }),
@@ -282,29 +279,6 @@ export function createSettingsPanel({
 
     return row;
   }
-
-  // --- log pane ------------------------------------------------------------
-
-  const logPane = tag(make('div', 'psnppp-pane'), 'pane-log');
-  if (history.length === 0) {
-    logPane.appendChild(tag(
-      make('div', 'psnppp-empty',
-        'No sync changes yet. Only syncs that actually wrote to your lists are ' +
-        'logged, so a run of quiet syncs leaves this empty.'),
-      'log-empty'
-    ));
-  } else {
-    for (const entry of history) {
-      const row = tag(make('div', 'psnppp-row'), 'log-row');
-      const main = make('div', 'psnppp-rowmain', stamp(entry?.at));
-      main.appendChild(make('span', 'psnppp-rowmeta',
-        `r${entry?.revision} — ${describeDelta(entry?.delta)}`));
-      row.appendChild(main);
-      logPane.appendChild(row);
-    }
-  }
-  element.appendChild(logPane);
-  panes.set('log', logPane);
 
   // --- message -------------------------------------------------------------
 
