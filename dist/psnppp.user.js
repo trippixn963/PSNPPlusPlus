@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.30
+// @version      2.3.31
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -109,7 +109,7 @@
       throw new Error(`Malformed response body (HTTP ${response.status}): ${snippet}`);
     }
   }
-  var HISTORY_PAGE = 5;
+  var HISTORY_PAGE = 3;
   function assertDocVersion(doc) {
     if (doc == null || doc.version !== DOC_VERSION) {
       throw new Error(`Unsupported document version: ${doc?.version}`);
