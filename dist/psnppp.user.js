@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.21
+// @version      2.3.22
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -448,8 +448,16 @@
      as "i { border: 1px solid }" (no !important needed) puts a box around each
      arm and thickens it. Every intentional border in this sheet is declared
      later at equal-or-greater specificity, so all of them survive.
+
+     background-color is here for the same reason and was missed: the chip's
+     mark is a span carrying only a background-IMAGE, and the image shorthand
+     does not clear a colour underneath it. A page rule as ordinary as
+     "span { background: #fff }" therefore paints a white disc behind our dark
+     one \u2014 observed live on psnprofiles.com, where the mark rendered as a white
+     circle that no local preview could reproduce.
      NOTE: this whole sheet is a template literal. No backticks in comments. */
   border: 0;
+  background-color: transparent;
 }
 
 /* ---- the chip ---------------------------------------------------------- */
