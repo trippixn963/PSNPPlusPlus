@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.19
+// @version      2.3.20
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -658,7 +658,7 @@ ${litTiers} {
 #${PANEL_ID} .psnppp-mark i:first-child,
 #${INDICATOR_ID} .psnppp-mark i:first-child { left: 5.1px; }
 #${PANEL_ID} .psnppp-mark i:last-child,
-#${INDICATOR_ID} .psnppp-mark i:last-child  { right: 5.1px; }
+#${INDICATOR_ID} .psnppp-mark i:last-child { right: 5.1px; }
 
 /* The chip is inline-flex with align-items:stretch, and an item with a definite
    height does not stretch \u2014 so without this the mark pins to the top edge and
@@ -667,7 +667,30 @@ ${litTiers} {
 #${INDICATOR_ID} .psnppp-mark {
   align-self: center;
   margin-left: 6px;
+  /* 8 + 1.5 + 8. The gap is 18% of a glyph, matching the icon; at 20px wide it
+     came out 50% and the two plusses read as separated rather than paired. */
+  width: 17.5px;
 }
+
+/* The chip's glyphs are LARGER than the panel's, and that is not an
+   inconsistency. The 62% ratio exists to leave air inside the plate; the chip
+   has no plate, so sizing to a plate that is not there just makes the mark two
+   specks next to a full-height label. These are sized to the chip's optical
+   line instead \u2014 arms at 8px against a 12px cap height read as a mark rather
+   than as debris. */
+#${INDICATOR_ID} .psnppp-mark i {
+  top: 3px;
+  width: 2.4px;
+  height: 8px;
+}
+#${INDICATOR_ID} .psnppp-mark i::before {
+  left: -2.8px;
+  top: 2.8px;
+  width: 8px;
+  height: 2.4px;
+}
+#${INDICATOR_ID} .psnppp-mark i:first-child { left: 2.8px; }
+#${INDICATOR_ID} .psnppp-mark i:last-child { right: 2.8px; }
 
 
 #${PANEL_ID} .psnppp-brand {
@@ -708,17 +731,21 @@ ${litTiers} {
   border: 1px solid ${t.hairline};
   border-radius: 5px;
   background: ${t.control};
-  color: ${t.engrave};
   font-family: ${TYPE.display};
   font-size: 9px;
   font-weight: 700;
   letter-spacing: .1em;
   text-transform: uppercase;
-  text-decoration: none;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  /* The sheet's only two !important declarations. See the header: specificity
+     cannot beat an author !important, and "a { color: #06c !important }" is an
+     ordinary thing for a site to ship. Blue underlined links in a graphite
+     footer read as broken, not as different. */
+  color: ${t.engrave} !important;
+  text-decoration: none !important;
 }
 #${PANEL_ID} .psnppp-link:hover {
-  color: ${t.bright};
+  color: ${t.bright} !important;
   border-color: ${t.edge};
   background: ${t.plate};
 }
