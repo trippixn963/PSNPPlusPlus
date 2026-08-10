@@ -183,7 +183,11 @@ verify_live() {
   body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$BASE_URL/psnppp.meta.js" 2>/dev/null)" || rc=$?
 
   if [ "$rc" -ne 0 ] && [ "$rc" -ne 22 ]; then
-    echo "cannot reach $BASE_URL from here (curl $rc) — asking the server instead"
+    # >&2, or this line is captured by the $( ) that calls this function and
+    # becomes part of the version string it returns. It did exactly that: the
+    # fallback fetched the right version and the comparison still failed,
+    # because LIVE was the message with the version stuck on the end.
+    echo "cannot reach $BASE_URL from here (curl $rc) — asking the server instead" >&2
     ssh -i "$KEY" "$VPS" "curl -fsS --max-time 20 '$BASE_URL/psnppp.meta.js'" 2>/dev/null \
       | grep -m1 '@version' | tr -s ' ' | cut -d' ' -f3
     return
