@@ -28,7 +28,7 @@ if (!out) {
 }
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 720, height: 640 }, deviceScaleFactor: 3 });
+const page = await browser.newPage({ viewport: { width: 300, height: 400 }, deviceScaleFactor: 3 });
 page.on('pageerror', e => console.log('  pageerror:', e.message));
 await page.goto('http://127.0.0.1:8777/scripts/preview.html');
 await page.waitForFunction(() => window.__ready === true, { timeout: 5000 });
