@@ -16,8 +16,9 @@
  *   python3 -m http.server 8777 --bind 127.0.0.1 &
  *   node scripts/preview.mjs out.png
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { chromium } from 'playwright';

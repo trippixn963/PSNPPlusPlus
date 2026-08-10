@@ -5,6 +5,8 @@
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
+// @homepage     https://trippixn.com
+// @supportURL   https://discord.gg/syria
 // @match        https://psnprofiles.com/*
 // @run-at       document-start
 // @inject-into  page

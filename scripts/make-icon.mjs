@@ -20,8 +20,9 @@
  *   node scripts/make-icon.mjs
  *   npm uninstall playwright
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { chromium } from 'playwright';

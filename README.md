@@ -116,6 +116,10 @@ The version bump is why the script exists: Tampermonkey only updates when `@vers
 increases, and the build reads it from `package.json`. Ship without a bump and every install
 silently keeps running the old code.
 
+## Developer
+
+**Trippixn** — [trippixn.com](https://trippixn.com) · [discord.gg/syria](https://discord.gg/syria)
+
 ## Credit
 
 PSNP+ is by **HusKyCode** — <https://psnp-plus.huskycode.dev>. This repository contains no

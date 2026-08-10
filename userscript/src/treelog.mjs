@@ -23,8 +23,9 @@
  * are per-webhook concerns, and a browser tab cannot coordinate them: close the
  * tab and any client-side queue goes with it.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { gmRequest } from './sync-client.mjs';

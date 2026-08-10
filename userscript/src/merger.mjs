@@ -8,8 +8,9 @@
  * returns new ones. All the risk in this project lives in this file, so it is
  * kept isolated and exhaustively unit-tested.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { DOC_VERSION } from './doc.mjs';

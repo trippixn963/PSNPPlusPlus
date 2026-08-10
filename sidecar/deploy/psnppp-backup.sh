@@ -19,8 +19,9 @@
 # and runs as root; a file-write bug in it must not be able to reach the copies
 # that exist to survive exactly that.
 #
-# Author: Trippixn
-# Server: discord.gg/syria
+# Developer: Trippixn
+# Website:   https://trippixn.com
+# Discord:   discord.gg/syria
 
 set -euo pipefail
 

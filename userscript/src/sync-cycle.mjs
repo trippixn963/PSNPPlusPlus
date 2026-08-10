@@ -7,8 +7,9 @@
  * Every dependency is injected, so the whole cycle runs in node against fake
  * storage and a fake server — no browser needed for the tests that matter.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { toDoc, fromDoc, emptyDoc } from './doc.mjs';

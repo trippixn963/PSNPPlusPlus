@@ -13,8 +13,9 @@
 # Requires Python >= 3.10 (fastapi, uvicorn and starlette all declare it).
 # The VPS runs 3.12.3; check with `python3 -V` before creating the venv.
 #
-# Author: Trippixn
-# Server: discord.gg/syria
+# Developer: Trippixn
+# Website:   https://trippixn.com
+# Discord:   discord.gg/syria
 # ============================================================
 
 

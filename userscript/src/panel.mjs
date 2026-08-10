@@ -24,8 +24,9 @@
  * surfaced those as `window.alert`; swallowing them here instead would take the
  * escape hatch's only error channel away.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { describeStoredKey } from './config.mjs';

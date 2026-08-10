@@ -21,8 +21,9 @@
  * a missing or malformed @version — resolves to `{ available: false }`. This
  * function never throws and never returns a rejected promise.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { gmRequest } from './sync-client.mjs';

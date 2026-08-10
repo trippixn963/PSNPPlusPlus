@@ -12,8 +12,9 @@
  * Only unambiguous matches are proposed: the name must occur exactly once on
  * each side, and neither list may already be present on the other side by ID.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 const clone = value => JSON.parse(JSON.stringify(value));

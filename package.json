@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Two-way sync for PSNP+ game lists",
-  "author": "Trippixn <90400991+trippixn963@users.noreply.github.com>",
+  "author": "Trippixn (https://trippixn.com)",
+  "homepage": "https://trippixn.com",
+  "repository": "github:trippixn963/PSNPPlusPlus",
   "scripts": {
     "test": "node --test 'userscript/tests/*.test.mjs'",
     "build": "node userscript/build.mjs",

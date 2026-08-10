@@ -16,8 +16,9 @@
 # alerter, and a non-zero exit here buys nothing — there is deliberately no
 # OnFailure on this unit, so a loop is impossible.
 #
-# Author: Trippixn
-# Server: discord.gg/syria
+# Developer: Trippixn
+# Website:   https://trippixn.com
+# Discord:   discord.gg/syria
 
 set -uo pipefail
 

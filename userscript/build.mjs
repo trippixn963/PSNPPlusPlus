@@ -26,8 +26,9 @@
  * watchLists: our `Storage.prototype.setItem` patch only sees writes made in
  * OUR realm, so PSNP+'s own writes are caught by the 2s poll, not the patch.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { build } from 'esbuild';

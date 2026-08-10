@@ -5,8 +5,9 @@
 #
 # Bump, test, build, publish, and verify a userscript release end to end.
 #
-# Author: Trippixn
-# Server: discord.gg/syria
+# Developer: Trippixn
+# Website:   https://trippixn.com
+# Discord:   discord.gg/syria
 #
 # Usage:  scripts/release.sh [patch|minor|major]   (default: patch)
 #         scripts/release.sh patch --dry-run       (everything except publishing)

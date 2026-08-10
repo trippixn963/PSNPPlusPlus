@@ -28,8 +28,9 @@ hard way:
     problem fires many lines, and the first few explain it while the last few
     show where it got to.
 
-Author: Trippixn
-Server: discord.gg/syria
+Developer: Trippixn
+Website:   https://trippixn.com
+Discord:   discord.gg/syria
 """
 
 from __future__ import annotations

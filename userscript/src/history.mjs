@@ -13,8 +13,9 @@
  * Lives in GM storage alongside the backups rather than in localStorage, so a
  * PSNP+ reset (or the "Clear" button) cannot take the evidence with it.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 const HISTORY_KEY = 'psnppp.history';

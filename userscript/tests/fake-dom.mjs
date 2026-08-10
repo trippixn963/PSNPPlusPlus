@@ -14,8 +14,9 @@
  * data-loss bugs in this project were invisible to reading and only fell out of
  * executing the code; this exists so the widget can be executed too.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 class FakeNode {

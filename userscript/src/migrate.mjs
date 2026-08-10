@@ -28,8 +28,9 @@
  * from the top (nothing was deleted yet) or is already finished; it can never
  * resume into a half-copied state.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { DEFAULT_ENDPOINT } from './config.mjs';

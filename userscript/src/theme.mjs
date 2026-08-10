@@ -36,8 +36,9 @@
  * reads as a bug. Nothing else here gets one; if a third is ever tempting,
  * that is a sign the widget is fighting the page rather than sitting on it.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 /**

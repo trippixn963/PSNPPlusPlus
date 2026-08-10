@@ -28,8 +28,9 @@
 #     rollback waiting to be mistaken for a fix, so the guard refuses and says
 #     so rather than "healing" production to an older release.
 #
-# Author: Trippixn
-# Server: discord.gg/syria
+# Developer: Trippixn
+# Website:   https://trippixn.com
+# Discord:   discord.gg/syria
 
 set -euo pipefail
 

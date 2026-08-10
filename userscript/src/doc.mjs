@@ -10,8 +10,9 @@
  * updatedAt stamps and tombstones, and keeps the display order in a separate
  * gameOrder array so custom sorting survives the round trip.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 export const DOC_VERSION = 1;

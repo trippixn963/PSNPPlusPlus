@@ -8,8 +8,9 @@
  * list panel freely, and anything injected inside it would be destroyed. A
  * fixed-position element owned entirely by this script survives that.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { installStyles, INDICATOR_ID, CHIP_FALLBACK_SIZE, EDGE_INSET_PX, DOCK_SNAP_MS }

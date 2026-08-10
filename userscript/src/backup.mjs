@@ -8,8 +8,9 @@
  * every write-back is preceded by a snapshot. Kept in GM storage rather than
  * localStorage so a PSNP+ reset cannot take the backups with it.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 const INDEX_KEY = 'psnppp.backups';

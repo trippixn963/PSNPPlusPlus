@@ -8,8 +8,9 @@
  * opens the panel to its right, a docked-right chip opens it to the left, and
  * neither ever runs the panel off the opposite edge of the screen.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import test from 'node:test';

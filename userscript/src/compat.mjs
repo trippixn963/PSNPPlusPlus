@@ -37,8 +37,9 @@
  * a cosmetic annoyance. A dependency that already fails safe on its own belongs
  * at its own call site, not here.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { LISTS_KEY } from './lists-bridge.mjs';

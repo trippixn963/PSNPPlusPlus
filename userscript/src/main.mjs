@@ -7,8 +7,9 @@
  * Triggers are page load, a debounced local change, tab focus, and the chip
  * itself. There is no idle polling loop.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 import { createTreeLog } from './treelog.mjs';

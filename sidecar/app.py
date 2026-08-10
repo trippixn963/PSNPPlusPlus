@@ -25,8 +25,9 @@ Bound to loopback only; nginx terminates TLS and proxies /api/psnppp/.
 No CORS middleware — the only client is a userscript using GM_xmlhttpRequest,
 which is not subject to CORS.
 
-Author: Trippixn
-Server: discord.gg/syria
+Developer: Trippixn
+Website:   https://trippixn.com
+Discord:   discord.gg/syria
 """
 from __future__ import annotations
 

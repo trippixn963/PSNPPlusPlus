@@ -7,8 +7,9 @@
  * The secret lives in GM storage rather than in the script file, so the script
  * itself can be committed and shared without leaking a credential.
  *
- * Author: Trippixn
- * Server: discord.gg/syria
+ * Developer: Trippixn
+ * Website:   https://trippixn.com
+ * Discord:   discord.gg/syria
  */
 
 const ENDPOINT_KEY = 'psnppp.endpoint';
