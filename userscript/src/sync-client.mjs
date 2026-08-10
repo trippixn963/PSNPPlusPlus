@@ -42,9 +42,15 @@ function parseBody(response) {
  *
  * The server retains 100 and will return all of them if not told otherwise.
  * This is a display depth, not a retention change: the deeper history stays on
- * the server and is still reachable by raising this.
+ * the server and is still reachable by raising this number.
+ *
+ * Three, matching MAX_BACKUPS. The panel shows both lists stacked in one pane,
+ * so the number that matters is the total — five here read as a wall under the
+ * three local rows, which is the same complaint that lowered the local cap.
+ * Undo reaches back minutes, not days; anything older is a server-side safety
+ * net rather than something anyone scrolls to.
  */
-export const HISTORY_PAGE = 5;
+export const HISTORY_PAGE = 3;
 
 function assertDocVersion(doc) {
   if (doc == null || doc.version !== DOC_VERSION) {
