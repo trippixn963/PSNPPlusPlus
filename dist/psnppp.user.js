@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.26
+// @version      2.3.27
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -136,6 +136,67 @@
         const body = parseBody(response);
         assertDocVersion(body.doc);
         return { revision: body.revision, updatedAt: body.updatedAt, doc: body.doc };
+      },
+      /**
+       * The server's own revision history for this document, newest first.
+       *
+       * Metadata only — revision, when, and size. Fetching 40 full documents to
+       * draw a list would be tens of thousands of bytes to render three columns.
+       * The one being restored is fetched separately, and only when asked for.
+       */
+      async getHistory() {
+        const response = await request({
+          method: "GET",
+          url: documentKey == null ? `${base}/state/history` : `${base}/state/history?document=${encodeURIComponent(documentKey)}`,
+          headers,
+          timeout: timeoutMs
+        });
+        if (response.status !== 200) {
+          throw new Error(`Sync server returned ${response.status}`);
+        }
+        const body = parseBody(response);
+        return Array.isArray(body.revisions) ? body.revisions : [];
+      },
+      /** One past revision in full, for showing what a restore would change. */
+      async getRevision(revision) {
+        const response = await request({
+          method: "GET",
+          url: documentKey == null ? `${base}/state/history/${encodeURIComponent(revision)}` : `${base}/state/history/${encodeURIComponent(revision)}?document=${encodeURIComponent(documentKey)}`,
+          headers,
+          timeout: timeoutMs
+        });
+        if (response.status === 404) return null;
+        if (response.status !== 200) {
+          throw new Error(`Sync server returned ${response.status}`);
+        }
+        const body = parseBody(response);
+        assertDocVersion(body.doc);
+        return { revision: body.revision, updatedAt: body.updatedAt, doc: body.doc };
+      },
+      /**
+       * Make a past revision current again, as a NEW revision.
+       *
+       * Carries `baseRevision` and reports a 409 the same way putState does, and
+       * for the same reason: a restore IS a write. Undoing while another device
+       * is mid-push must lose the race and re-read rather than silently
+       * overwrite an edit this device never saw.
+       */
+      async restoreRevision(baseRevision, revision) {
+        const response = await request({
+          method: "POST",
+          url: documentKey == null ? `${base}/state/restore` : `${base}/state/restore?document=${encodeURIComponent(documentKey)}`,
+          headers,
+          timeout: timeoutMs,
+          data: JSON.stringify({ baseRevision, revision })
+        });
+        if (response.status === 409) {
+          const body = parseBody(response);
+          return { ok: false, conflict: true, revision: body.revision };
+        }
+        if (response.status !== 200) {
+          throw new Error(`Sync server returned ${response.status}`);
+        }
+        return { ok: true, revision: parseBody(response).revision };
       },
       async putState(baseRevision, doc) {
         const response = await request({
@@ -678,6 +739,31 @@ ${litTiers} {
    identifies it; a logo in there read as clutter at every size tried. The panel
    carries the branding, where there is room for it. */
 
+
+/* Separates the two kinds of restore that share the Backups tab. Quiet, because
+   it is a label rather than a control \u2014 the rows under it are the substance. */
+#${PANEL_ID} .psnppp-subhead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 4px;
+  padding: 6px 10px 0;
+  border-top: 1px solid ${t.hairline};
+  font-family: ${TYPE.display};
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: ${t.engrave};
+}
+
+#${PANEL_ID} .psnppp-subnote {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: .04em;
+  text-transform: none;
+  color: ${t.quiet};
+}
 
 #${PANEL_ID} .psnppp-brand {
   display: flex;
@@ -1363,6 +1449,12 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     onRestore = async () => ({ ok: false, message: "Restore is not wired up." }),
     onClose = () => {
     },
+    // The server's own revision history, newest first: [{revision, updatedAt, size}].
+    // Empty when the server could not be reached — the panel must still open.
+    serverHistory = [],
+    // Why it is empty, when that is not simply "there is none".
+    serverHistoryError = null,
+    onRestoreRevision = async () => ({ ok: false, message: "Restore is not wired up." }),
     // Shown beside the wordmark. Passed in rather than read here so the panel
     // stays free of GM_info and keeps rendering in node under the test runner.
     version = null
@@ -1469,8 +1561,81 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
         backupsPane.appendChild(backupRow(entry));
       }
     }
+    const serverHead = make("div", "psnppp-subhead", "Server history");
+    serverHead.appendChild(make("span", "psnppp-subnote", "all devices"));
+    backupsPane.appendChild(serverHead);
+    if (serverHistoryError) {
+      backupsPane.appendChild(tag(
+        make("div", "psnppp-empty", serverHistoryError),
+        "server-history-error"
+      ));
+    } else if (serverHistory.length === 0) {
+      backupsPane.appendChild(tag(
+        make("div", "psnppp-empty", "No server revisions yet."),
+        "server-history-empty"
+      ));
+    } else {
+      for (const entry of serverHistory) backupsPane.appendChild(revisionRow(entry));
+    }
     element.appendChild(backupsPane);
     panes.set("backups", backupsPane);
+    function revisionRow(entry) {
+      const row = tag(make("div", "psnppp-row"), "revision-row");
+      const main = make("div", "psnppp-rowmain", stamp(entry?.updatedAt));
+      main.appendChild(tag(
+        make("span", "psnppp-rowmeta", `r${entry?.revision}`),
+        "revision-id"
+      ));
+      row.appendChild(main);
+      const restoreButton = tag(make("button", "psnppp-btn", "Restore"), "revision-restore");
+      restoreButton.setAttribute("type", "button");
+      row.appendChild(restoreButton);
+      const confirm = tag(make("div", "psnppp-confirm"), "revision-confirm");
+      confirm.appendChild(make(
+        "div",
+        null,
+        `Roll every device back to r${entry?.revision}? Anything changed since then is undone.`
+      ));
+      const confirmActions = make("div", "psnppp-actions");
+      const keepButton = tag(make("button", "psnppp-btn", "Cancel"), "revision-cancel");
+      keepButton.setAttribute("type", "button");
+      keepButton.addEventListener("click", () => {
+        show(confirm, false);
+        show(restoreButton, true);
+      });
+      confirmActions.appendChild(keepButton);
+      const goButton = tag(
+        make("button", "psnppp-btn psnppp-btn-danger", `Restore r${entry?.revision}`),
+        "revision-confirm-go"
+      );
+      goButton.setAttribute("type", "button");
+      goButton.addEventListener("click", () => {
+        runRevisionRestore(entry?.revision, goButton).catch((error) => {
+          goButton.disabled = false;
+          showMessage(describeFailure(error, "Could not restore that revision"), { error: true });
+        });
+      });
+      confirmActions.appendChild(goButton);
+      confirm.appendChild(confirmActions);
+      show(confirm, false);
+      row.appendChild(confirm);
+      restoreButton.addEventListener("click", () => {
+        show(restoreButton, false);
+        show(confirm, true);
+      });
+      return row;
+    }
+    async function runRevisionRestore(revision, button) {
+      clearMessage();
+      button.disabled = true;
+      const result = await onRestoreRevision(revision);
+      if (!result || result.ok !== true) {
+        button.disabled = false;
+        showMessage(result?.message ?? "Could not restore that revision.", { error: true });
+        return;
+      }
+      showMessage(result.message ?? "Restored.");
+    }
     function backupRow(entry) {
       const row = tag(make("div", "psnppp-row"), "backup-row");
       const main = make("div", "psnppp-rowmain", stamp(entry?.at));
@@ -2409,7 +2574,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         return;
       }
       activePanel = PENDING_PANEL;
-      const [backups, history, config, loadError] = await loadPanelData();
+      const [backups, history, config, loadError, serverHistory, serverHistoryError] = await loadPanelData();
       await new Promise((resolve) => {
         let settled = false;
         const finish = () => {
@@ -2432,6 +2597,8 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           config,
           backups,
           history,
+          serverHistory,
+          serverHistoryError,
           describeDelta,
           onSave: async ({ endpoint, key }) => {
             try {
@@ -2439,6 +2606,61 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
             } catch (error) {
               console.error("[psnppp] could not save settings:", error);
               return { ok: false, message: describeFailure(error, "Could not save your settings") };
+            }
+          },
+          /**
+           * Roll the SERVER back to a past revision, then bring this device to it.
+           *
+           * Different in kind from restoring a local backup, and the confirmation
+           * in the panel says so: that one rewrites this browser, this one
+           * rewrites what every other device pulls on its next sync.
+           *
+           * Order is the whole safety story:
+           *
+           *   1. Back up THIS device's current lists first. The server restore is
+           *      append-only and undoable by restoring again, but the local lists
+           *      are about to be overwritten by the pull in step 3 and have no
+           *      other copy. This is also why it happens before any network call
+           *      that could half-succeed.
+           *   2. Restore on the server, carrying the revision we believe is
+           *      current. A 409 means another device pushed while the panel sat
+           *      open — the right answer is to stop and let the user re-read,
+           *      never to overwrite an edit nobody has seen.
+           *   3. Pull what the server now holds and write it here, so the device
+           *      that asked for the undo is the first to have it rather than the
+           *      last. PSNP+ renders from localStorage at page load, so the page
+           *      is reloaded afterwards; without that the user sees the old list
+           *      and concludes it did not work.
+           */
+          onRestoreRevision: async (revision) => {
+            try {
+              const settings = await loadConfig();
+              if (!settings.key) return { ok: false, message: "Sync is not set up." };
+              const client = createSyncClient({ ...settings, request: gmRequest });
+              const { syncable: currentLists } = readSyncable(window.localStorage);
+              await saveBackup(currentLists);
+              const current = await client.getState();
+              const result = await client.restoreRevision(current.revision, revision);
+              if (result?.conflict) {
+                return {
+                  ok: false,
+                  message: "Another device changed your lists while this was open. Close and reopen the panel, then try again."
+                };
+              }
+              if (!result?.ok) return { ok: false, message: "The server refused the restore." };
+              const restored = await client.getState();
+              writeSyncable(window.localStorage, fromDoc(restored.doc));
+              await saveBase(restored.doc);
+              treeLog("Revision Restored", [
+                ["Restored to", `r${revision}`],
+                ["New revision", result.revision],
+                ["Applies to", "every device on their next sync"]
+              ], "\u26A0\uFE0F");
+              window.location.reload();
+              return { ok: true, message: `Restored r${revision}. Reloading\u2026` };
+            } catch (error) {
+              console.error("[psnppp] could not restore a revision:", error);
+              return { ok: false, message: describeFailure(error, "Could not restore that revision") };
             }
           },
           onRestore: async (id) => {
@@ -2480,11 +2702,27 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       loadConfig()
     ]);
     const failures = [backups, history, config].filter((result) => result.status === "rejected").map((result) => describeFailure(result.reason, "Could not read your saved settings"));
+    const settings = config.status === "fulfilled" ? config.value : { endpoint: DEFAULT_ENDPOINT, key: "" };
+    let serverHistory = [];
+    let serverHistoryError = null;
+    if (!settings.key) {
+      serverHistoryError = "Set up sync to see the server\u2019s history.";
+    } else {
+      try {
+        const client = createSyncClient({ ...settings, request: gmRequest });
+        serverHistory = await client.getHistory();
+      } catch (error) {
+        console.error("[psnppp] could not read the server history:", error);
+        serverHistoryError = describeFailure(error, "Could not reach the server");
+      }
+    }
     return [
       backups.status === "fulfilled" ? backups.value : [],
       history.status === "fulfilled" ? history.value : [],
-      config.status === "fulfilled" ? config.value : { endpoint: DEFAULT_ENDPOINT, key: "" },
-      failures[0] ?? ""
+      settings,
+      failures[0] ?? "",
+      serverHistory,
+      serverHistoryError
     ];
   }
   async function handleSyncNowClick({ loadConfig: loadConfig2, openSettings: openSettings2, sync }) {
@@ -2653,7 +2891,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         }
       }
     });
-    let treeLog = () => {
+    let treeLog2 = () => {
     };
     let lastFaultLogged = null;
     let running = false;
@@ -2677,13 +2915,13 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       running = true;
       try {
         const config = await loadConfig();
-        treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key });
+        treeLog2 = createTreeLog({ endpoint: config.endpoint, key: config.key });
         if (!config.key) {
           paint("unconfigured", "Click to set up sync (or right-click for settings)");
           return;
         }
         if (await shouldLogStartup()) {
-          treeLog("Script Started", [
+          treeLog2("Script Started", [
             ["Version", currentScriptVersion() ?? "unknown"],
             ["PSNP+ Version", readPsnpPlusVersion(window.localStorage) ?? "unknown"],
             ["Endpoint", config.endpoint]
@@ -2695,7 +2933,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           paint("incompatible", decorateDetail(describeIncompatibility(compat), config.endpoint));
           if (lastFaultLogged !== `halt:${compat.code}`) {
             lastFaultLogged = `halt:${compat.code}`;
-            treeLog("Sync Halted", [
+            treeLog2("Sync Halted", [
               ["Reason", compat.reason ?? compat.code ?? "unknown"],
               ["Code", compat.code ?? "none"],
               ["PSNP+ Version", compat.version ?? "unknown"]
@@ -2719,7 +2957,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         lastFaultLogged = null;
         if (shouldLogCycle(result)) {
           try {
-            logCycle(treeLog, result);
+            logCycle(treeLog2, result);
             const { addedGames, removedGames, ...counts } = result.delta ?? {};
             if (result.changed) await recordSync({ revision: result.revision, delta: counts });
           } catch (error) {
@@ -2732,7 +2970,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           const reason = String(error && error.message ? error.message : error);
           if (lastFaultLogged !== `fail:${reason}`) {
             lastFaultLogged = `fail:${reason}`;
-            treeLog("Sync Failed", [
+            treeLog2("Sync Failed", [
               ["Error", reason],
               ["Type", error && error.name ? error.name : typeof error]
             ], "\u274C");
@@ -2768,7 +3006,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
         });
         if (available) {
           paint("update", `Version ${latest} is available`);
-          treeLog("Update Available", [
+          treeLog2("Update Available", [
             ["Installed", currentScriptVersion() ?? "unknown"],
             ["Latest", latest]
           ], "\u{1F199}");
