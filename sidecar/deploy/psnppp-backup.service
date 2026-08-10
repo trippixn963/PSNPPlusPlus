@@ -14,6 +14,10 @@ Type=oneshot
 ExecStart=/usr/local/sbin/psnppp-backup
 TimeoutStartSec=300
 
+# Same as the guard: a successful daily backup says so at info and is dropped.
+# Failures are err and always survive. See psnppp-guard.service.
+LogLevelMax=notice
+
 # StateDirectory, not ReadWritePaths. systemd CREATES this before the sandbox
 # is built and makes it writable; ReadWritePaths only grants access to a path
 # that already exists, so the first run failed with 226/NAMESPACE on a box where

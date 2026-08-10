@@ -29,8 +29,18 @@ DB="${PSNPPP_DB:-/root/psnppp/state.db}"
 DEST="${PSNPPP_BACKUP_DIR:-/var/lib/psnppp/backups}"
 KEEP_DAYS="${PSNPPP_BACKUP_KEEP_DAYS:-14}"
 
-log() { echo "[psnppp-backup] $*"; }
-die() { echo "[psnppp-backup] FAIL: $*" >&2; exit 1; }
+# The leading <N> is a syslog priority journald reads and strips. It is not
+# decoration: the unit sets LogLevelMax=notice so a successful daily backup
+# writes nothing, and WITHOUT these prefixes every line here would be dropped —
+# including the failures. systemd logs stdout AND stderr at info by default and
+# does not infer err from stderr, so a plain `echo ... >&2` is invisible at
+# notice. Verified: an unprefixed failing unit left only systemd's own
+# "status=1/FAILURE", with no line saying why.
+#
+# That also silently guts the Discord alert, which builds its body from
+# `journalctl -u psnppp-backup -n 25` (see psnppp-alert.sh).
+log()  { echo "<6>[psnppp-backup] $*"; }
+die()  { echo "<3>[psnppp-backup] FAIL: $*" >&2; exit 1; }
 
 command -v sqlite3 >/dev/null || die "sqlite3 is not installed; cannot take a consistent copy."
 [ -s "$DB" ] || die "no database at $DB — nothing to back up, which is itself worth knowing."

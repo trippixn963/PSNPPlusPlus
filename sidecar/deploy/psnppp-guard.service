@@ -27,6 +27,19 @@ Type=oneshot
 ExecStart=/usr/local/sbin/psnppp-guard
 TimeoutStartSec=180
 
+# Healthy runs write NOTHING to the journal.
+#
+# This fires 96 times a day and each run produced four lines — systemd's
+# Starting/Finished/Deactivated plus the script's own "OK" — for 474 lines a
+# day of "nothing happened". LogLevelMax=notice drops everything below notice,
+# including systemd's own unit chatter, so a quiet guard is genuinely silent
+# and `journalctl -u psnppp-guard` shows only the runs that MEANT something.
+#
+# Nothing is lost: repairs log at warning and failures at err, both above the
+# threshold. Liveness is still visible without the journal — `systemctl
+# list-timers psnppp-guard.timer` shows LAST and NEXT.
+LogLevelMax=notice
+
 # This runs as root on a timer forever, on a box that also serves other people's
 # services. Its sibling psnppp.service carries the same block.
 # ProtectHome is NOT set: it would hide nothing we need today, but ProtectHome=true
