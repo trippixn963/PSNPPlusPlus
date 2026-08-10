@@ -78,6 +78,76 @@ export function createSyncClient({
       return { revision: body.revision, updatedAt: body.updatedAt, doc: body.doc };
     },
 
+    /**
+     * The server's own revision history for this document, newest first.
+     *
+     * Metadata only — revision, when, and size. Fetching 40 full documents to
+     * draw a list would be tens of thousands of bytes to render three columns.
+     * The one being restored is fetched separately, and only when asked for.
+     */
+    async getHistory() {
+      const response = await request({
+        method: 'GET',
+        url: documentKey == null
+          ? `${base}/state/history`
+          : `${base}/state/history?document=${encodeURIComponent(documentKey)}`,
+        headers,
+        timeout: timeoutMs
+      });
+      if (response.status !== 200) {
+        throw new Error(`Sync server returned ${response.status}`);
+      }
+      const body = parseBody(response);
+      return Array.isArray(body.revisions) ? body.revisions : [];
+    },
+
+    /** One past revision in full, for showing what a restore would change. */
+    async getRevision(revision) {
+      const response = await request({
+        method: 'GET',
+        url: documentKey == null
+          ? `${base}/state/history/${encodeURIComponent(revision)}`
+          : `${base}/state/history/${encodeURIComponent(revision)}?document=${encodeURIComponent(documentKey)}`,
+        headers,
+        timeout: timeoutMs
+      });
+      if (response.status === 404) return null;
+      if (response.status !== 200) {
+        throw new Error(`Sync server returned ${response.status}`);
+      }
+      const body = parseBody(response);
+      assertDocVersion(body.doc);
+      return { revision: body.revision, updatedAt: body.updatedAt, doc: body.doc };
+    },
+
+    /**
+     * Make a past revision current again, as a NEW revision.
+     *
+     * Carries `baseRevision` and reports a 409 the same way putState does, and
+     * for the same reason: a restore IS a write. Undoing while another device
+     * is mid-push must lose the race and re-read rather than silently
+     * overwrite an edit this device never saw.
+     */
+    async restoreRevision(baseRevision, revision) {
+      const response = await request({
+        method: 'POST',
+        url: documentKey == null
+          ? `${base}/state/restore`
+          : `${base}/state/restore?document=${encodeURIComponent(documentKey)}`,
+        headers,
+        timeout: timeoutMs,
+        data: JSON.stringify({ baseRevision, revision })
+      });
+      if (response.status === 409) {
+        const body = parseBody(response);
+        return { ok: false, conflict: true, revision: body.revision };
+      }
+      if (response.status !== 200) {
+        throw new Error(`Sync server returned ${response.status}`);
+      }
+      return { ok: true, revision: parseBody(response).revision };
+    },
+
     async putState(baseRevision, doc) {
       const response = await request({
         method: 'PUT', url, headers, timeout: timeoutMs,

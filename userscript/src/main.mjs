@@ -27,7 +27,7 @@ import { runSyncCycle } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
 import { checkPsnpPlusCompat, describeIncompatibility, readPsnpPlusVersion } from './compat.mjs';
-import { emptyDoc } from './doc.mjs';
+import { emptyDoc, fromDoc } from './doc.mjs';
 import { installStorageGuard, describeStorageFailure } from './storage-guard.mjs';
 
 const BASE_KEY = 'psnppp.base';
@@ -193,7 +193,7 @@ export async function openSettings({ chip = null } = {}) {
     // Read together, and independently. Sharing one try meant an unreadable
     // backup index also skipped loadConfig, so the form rendered the DEFAULT
     // endpoint over the user's real one — and saving would have committed it.
-    const [backups, history, config, loadError] = await loadPanelData();
+    const [backups, history, config, loadError, serverHistory, serverHistoryError] = await loadPanelData();
 
     await new Promise(resolve => {
       let settled = false;
@@ -220,6 +220,8 @@ export async function openSettings({ chip = null } = {}) {
         config,
         backups,
         history,
+        serverHistory,
+        serverHistoryError,
         describeDelta,
         onSave: async ({ endpoint, key }) => {
           try {
@@ -229,6 +231,68 @@ export async function openSettings({ chip = null } = {}) {
             return { ok: false, message: describeFailure(error, 'Could not save your settings') };
           }
         },
+        /**
+         * Roll the SERVER back to a past revision, then bring this device to it.
+         *
+         * Different in kind from restoring a local backup, and the confirmation
+         * in the panel says so: that one rewrites this browser, this one
+         * rewrites what every other device pulls on its next sync.
+         *
+         * Order is the whole safety story:
+         *
+         *   1. Back up THIS device's current lists first. The server restore is
+         *      append-only and undoable by restoring again, but the local lists
+         *      are about to be overwritten by the pull in step 3 and have no
+         *      other copy. This is also why it happens before any network call
+         *      that could half-succeed.
+         *   2. Restore on the server, carrying the revision we believe is
+         *      current. A 409 means another device pushed while the panel sat
+         *      open — the right answer is to stop and let the user re-read,
+         *      never to overwrite an edit nobody has seen.
+         *   3. Pull what the server now holds and write it here, so the device
+         *      that asked for the undo is the first to have it rather than the
+         *      last. PSNP+ renders from localStorage at page load, so the page
+         *      is reloaded afterwards; without that the user sees the old list
+         *      and concludes it did not work.
+         */
+        onRestoreRevision: async revision => {
+          try {
+            const settings = await loadConfig();
+            if (!settings.key) return { ok: false, message: 'Sync is not set up.' };
+            const client = createSyncClient({ ...settings, request: gmRequest });
+
+            const { syncable: currentLists } = readSyncable(window.localStorage);
+            await saveBackup(currentLists);
+
+            const current = await client.getState();
+            const result = await client.restoreRevision(current.revision, revision);
+            if (result?.conflict) {
+              return {
+                ok: false,
+                message: 'Another device changed your lists while this was open. '
+                  + 'Close and reopen the panel, then try again.'
+              };
+            }
+            if (!result?.ok) return { ok: false, message: 'The server refused the restore.' };
+
+            const restored = await client.getState();
+            writeSyncable(window.localStorage, fromDoc(restored.doc));
+            await saveBase(restored.doc);
+
+            treeLog('Revision Restored', [
+              ['Restored to', `r${revision}`],
+              ['New revision', result.revision],
+              ['Applies to', 'every device on their next sync']
+            ], '⚠️');
+
+            window.location.reload();
+            return { ok: true, message: `Restored r${revision}. Reloading…` };
+          } catch (error) {
+            console.error('[psnppp] could not restore a revision:', error);
+            return { ok: false, message: describeFailure(error, 'Could not restore that revision') };
+          }
+        },
+
         onRestore: async id => {
           try {
             // Read the chosen snapshot into memory BEFORE taking the next
@@ -301,11 +365,36 @@ async function loadPanelData() {
   const failures = [backups, history, config]
     .filter(result => result.status === 'rejected')
     .map(result => describeFailure(result.reason, 'Could not read your saved settings'));
+  const settings = config.status === 'fulfilled'
+    ? config.value
+    : { endpoint: DEFAULT_ENDPOINT, key: '' };
+
+  // The server's history is the only part of this that touches the network, so
+  // it is fetched separately and its failure is reported IN PLACE rather than
+  // as a panel-wide error. A sidecar that is down must not stop someone opening
+  // the panel — the local snapshots and the settings form are exactly what they
+  // would be reaching for.
+  let serverHistory = [];
+  let serverHistoryError = null;
+  if (!settings.key) {
+    serverHistoryError = 'Set up sync to see the server\u2019s history.';
+  } else {
+    try {
+      const client = createSyncClient({ ...settings, request: gmRequest });
+      serverHistory = await client.getHistory();
+    } catch (error) {
+      console.error('[psnppp] could not read the server history:', error);
+      serverHistoryError = describeFailure(error, 'Could not reach the server');
+    }
+  }
+
   return [
     backups.status === 'fulfilled' ? backups.value : [],
     history.status === 'fulfilled' ? history.value : [],
-    config.status === 'fulfilled' ? config.value : { endpoint: DEFAULT_ENDPOINT, key: '' },
-    failures[0] ?? ''
+    settings,
+    failures[0] ?? '',
+    serverHistory,
+    serverHistoryError
   ];
 }
 

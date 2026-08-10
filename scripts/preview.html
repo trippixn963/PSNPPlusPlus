@@ -30,9 +30,17 @@
     backups: [{ at: Date.now() - 3600e3 }],
     history: [{ at: Date.now() - 120e3, revision: 93, delta: { gamesRemoved: 1 } }],
     describeDelta: () => '-1 game',
-    version: '2.3.19'
+    version: '2.3.26',
+    serverHistory: [
+      { revision: 99, updatedAt: Date.now() - 3600e3, size: 4339 },
+      { revision: 98, updatedAt: Date.now() - 4000e3, size: 3790 },
+      { revision: 97, updatedAt: Date.now() - 4400e3, size: 3256 }
+    ]
   });
   const pel = panel.element ?? panel;
+  // Open on the Backups tab, which is what this preview is for.
+  const tab = pel.querySelector('[data-psnppp="tab-backups"]');
+  if (tab) tab.click();
   pel.style.position = 'static';
   document.getElementById('panelhost').appendChild(pel);
 
