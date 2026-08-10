@@ -1,0 +1,14 @@
+# Schedules the database backup.
+[Unit]
+Description=Run the PSNP++ database backup daily
+
+[Timer]
+# 04:12 rather than 04:00: a round hour is where every other timer on a box
+# piles up. Persistent so a machine that was off at 04:12 still takes the
+# backup once it is up, which is the case a daily backup most needs to survive.
+OnCalendar=*-*-* 04:12:00
+RandomizedDelaySec=300s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

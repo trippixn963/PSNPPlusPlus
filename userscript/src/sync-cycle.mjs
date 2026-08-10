@@ -487,9 +487,34 @@ export async function runSyncCycle({
       if (pushed && attempt < maxAttempts) continue;
       return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };
     }
+    // A DELETION made on this device was being backed up USELESSLY.
+    //
+    // The snapshot below is `currentLists` — the lists as read at the top of
+    // this cycle. That is the right thing to keep when the merge is about to
+    // overwrite local data with something that arrived from elsewhere. But when
+    // the change is a deletion made HERE, `currentLists` is ALREADY the
+    // post-deletion state: the backup faithfully preserves the absence, and
+    // restoring it brings nothing back — while the tombstone goes out to every
+    // other device. A backup that exists and cannot undo the thing it was taken
+    // for is worse than an obvious gap, because it stops anyone looking.
+    //
+    // What is worth keeping is what this device last settled on: `workingBase`,
+    // which the cycle already holds and would otherwise discard.
+    //
+    // NOT gated on anything extra: a deletion always writes, because stamping
+    // the tombstone makes the merge differ from what is in storage. Verified by
+    // execution across a game removal, a whole-list removal and removing
+    // everything — `changed` was true in all three. So this only ever changes
+    // WHICH snapshot is taken, never whether one is.
+    const deletedLocally = localDelta.gamesRemoved > 0 || localDelta.listsRemoved > 0;
+
     if (changed) {
-      // Snapshot the untouched lists before the merge result overwrites them.
-      await saveBackup(currentLists);
+      // Snapshot the untouched lists before the merge result overwrites them —
+      // EXCEPT after a local deletion, where `currentLists` is already the
+      // post-deletion state and restoring it would bring nothing back. There
+      // the useful snapshot is what this device last settled on, which the
+      // cycle is holding as `workingBase` and would otherwise discard.
+      await saveBackup(deletedLocally ? fromDoc(workingBase) : currentLists);
       // saveBackup is an await too, so re-check before the one and only write.
       // A write landing inside that window still costs one of the 5 backup
       // slots for a write that never happens. That residual cost is

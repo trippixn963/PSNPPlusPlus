@@ -1,0 +1,21 @@
+# Pushes a failed backup run to the log webhook. Started by systemd via
+# OnFailure= on psnppp-backup.service; never scheduled, never enabled.
+#
+# Shares psnppp-alert with the publish guard — the script takes the unit to
+# read the journal from as its argument, so one alerter serves both.
+[Unit]
+Description=PSNP++ database backup — alert on failure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/psnppp-alert psnppp-backup.service
+TimeoutStartSec=120
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true

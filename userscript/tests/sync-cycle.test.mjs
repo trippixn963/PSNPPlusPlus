@@ -1601,3 +1601,75 @@ test('a deletion from another device repoints the bookmark and reports it', asyn
   assert.deepEqual(result.activeListRepair, { from: 'B', to: 'A' });
   assert.equal(JSON.parse(storage.getItem('psnpp-scriptstate')).lastActiveGameList, 'A');
 });
+
+test('deleting a game locally takes a backup of the state before the deletion', async () => {
+  // The dangerous case: the deletion is PUSHED, nothing is written locally, so
+  // `changed` is false and the old backup gate never fired — while the tombstone
+  // went out to every other device. Nothing was recoverable anywhere.
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1'), gameTitled('g2', 'Returnal')])]);
+  const server = fakeServer();
+  const h = harness(storage, server);
+  await runSyncCycle(h.args);          // settle, so base matches storage
+  h.backups.length = 0;
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const result = await runSyncCycle(h.args);
+
+  // A backup WAS always taken here — of currentLists, which is already
+  // post-deletion. It preserved the absence and restored nothing.
+  assert.equal(h.backups.length, 1, 'one snapshot per cycle');
+  const saved = h.backups[0];
+  assert.deepEqual(saved.map(l => l.id), ['A']);
+  assert.deepEqual(saved[0].games.map(g => g.id).sort(), ['g1', 'g2'],
+    'the snapshot must be the state BEFORE the deletion, not after');
+});
+
+test('deleting a whole list locally is snapshotted too', async () => {
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')]), list('B', 'Backlog', [game('g8')])]);
+  const server = fakeServer();
+  const h = harness(storage, server);
+  await runSyncCycle(h.args);
+  h.backups.length = 0;
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const result = await runSyncCycle(h.args);
+
+  assert.equal(result.localDelta.listsRemoved, 1);
+  assert.equal(h.backups.length, 1);
+  assert.deepEqual(h.backups[0].map(l => l.id).sort(), ['A', 'B'], 'B is in the snapshot');
+});
+
+test('an ordinary addition does not spend a backup slot', async () => {
+  // Five slots. Snapshotting every edit would evict the deletion snapshots that
+  // are the only ones that matter, and an addition is recoverable by re-adding.
+  const storage = fakeStorage();
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const server = fakeServer();
+  const h = harness(storage, server);
+  await runSyncCycle(h.args);
+  h.backups.length = 0;
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1'), game('g2')])]);
+  await runSyncCycle(h.args);
+  assert.equal(h.backups.length, 0);
+});
+
+test('a deletion that also receives something is backed up once, not twice', async () => {
+  // Both gates can be true in one cycle; the slots are too few to spend two on it.
+  const storage = fakeStorage();
+  const before = [list('A', 'Wishlist', [game('g1'), gameTitled('g2', 'Returnal')])];
+  writeLists(storage, before);
+  const base = toDoc(before);
+  const server = fakeServer(
+    stampChanges(base, toDoc([list('A', 'Wishlist', [game('g1'), game('g2'), game('g9')])]), 5000), 1
+  );
+  const h = harness(storage, server, base);
+
+  writeLists(storage, [list('A', 'Wishlist', [game('g1')])]);
+  const result = await runSyncCycle({ ...h.args, now: 6000 });
+
+  assert.equal(result.changed, true, 'g9 arrives, so the cycle also writes');
+  assert.equal(h.backups.length, 1, 'one cycle, one slot');
+});

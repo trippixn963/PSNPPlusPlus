@@ -1,0 +1,42 @@
+# Daily consistent copy of the sync database. See psnppp-backup.sh for why this
+# exists and why it must not use cp.
+[Unit]
+Description=PSNP++ database backup
+After=network-online.target
+
+# Same push-not-pull reasoning as the publish guard: a backup that silently
+# stopped running is indistinguishable from one that runs, right up until the
+# day it is needed.
+OnFailure=psnppp-backup-alert.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/psnppp-backup
+TimeoutStartSec=300
+
+# StateDirectory, not ReadWritePaths. systemd CREATES this before the sandbox
+# is built and makes it writable; ReadWritePaths only grants access to a path
+# that already exists, so the first run failed with 226/NAMESPACE on a box where
+# nothing had made the directory yet. It is also self-healing — the directory
+# comes back if it is ever removed.
+#
+# Deliberately not /root/psnppp: the internet-facing sidecar must not be able to
+# reach the copies that exist to survive a fault in it.
+StateDirectory=psnppp/backups
+StateDirectoryMode=0700
+
+# The SOURCE directory has to be writable, which is counter-intuitive for a
+# backup: SQLite in WAL mode needs to create and update the -wal and -shm
+# sidecars even to READ, so ReadOnlyPaths here produced "unable to open
+# database file". It passed once by luck, because the sidecar happened to have
+# those files open at that moment, and failed on the very next run.
+#
+# This costs nothing that mattered. The isolation worth having is that the
+# internet-facing sidecar cannot reach the BACKUPS, and that comes from
+# StateDirectory above, which is untouched by this.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/root/psnppp
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true
