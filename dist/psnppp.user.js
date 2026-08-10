@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.25
+// @version      2.3.26
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -240,15 +240,20 @@
 
   // userscript/src/backup.mjs
   var INDEX_KEY = "psnppp.backups";
-  var MAX_BACKUPS = 5;
-  async function saveBackup(lists, now = Date.now()) {
+  var MAX_BACKUPS = 3;
+  async function saveBackup(lists, now = Date.now(), { protect = null } = {}) {
     const index = await GM.getValue(INDEX_KEY, []);
     const id = `psnppp.backup.${now}`;
     await GM.setValue(id, JSON.stringify(lists));
     const next = [{ id, at: now, listCount: lists.length }, ...index];
-    const dropped = next.slice(MAX_BACKUPS);
+    const keep = [];
+    const dropped = [];
+    for (const [position, entry] of next.entries()) {
+      if (position < MAX_BACKUPS || entry.id === protect) keep.push(entry);
+      else dropped.push(entry);
+    }
     for (const entry of dropped) await GM.deleteValue(entry.id);
-    await GM.setValue(INDEX_KEY, next.slice(0, MAX_BACKUPS));
+    await GM.setValue(INDEX_KEY, keep);
     return id;
   }
   async function listBackups() {
@@ -262,7 +267,7 @@
 
   // userscript/src/history.mjs
   var HISTORY_KEY = "psnppp.history";
-  var MAX_HISTORY = 20;
+  var MAX_HISTORY = 10;
   async function listSyncHistory() {
     const stored = await GM.getValue(HISTORY_KEY, []);
     return Array.isArray(stored) ? stored : [];
@@ -2440,7 +2445,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
             try {
               const restored = await restoreBackup(id);
               const { syncable: currentLists } = readSyncable(window.localStorage);
-              await saveBackup(currentLists);
+              await saveBackup(currentLists, Date.now(), { protect: id });
               writeSyncable(window.localStorage, restored);
               window.location.reload();
               return { ok: true, message: "Backup restored. Reloading." };
