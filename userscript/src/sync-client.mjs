@@ -93,6 +93,15 @@ export function createSyncClient({
     },
 
     /**
+     * ⚠️ getHistory, getRevision and restoreRevision have NO production caller.
+     *
+     * That is deliberate, not an oversight for the next dead-code sweep to
+     * delete. The panel used to list the server's revisions beside the local
+     * snapshots and was cut on 2026-08-10 for being twice the rows anyone
+     * wanted — but the server still records every push and still retains
+     * HISTORY_LIMIT of them, so the capability is intact and surfacing it again
+     * is a panel change, not a rebuild. They stay tested for the same reason.
+     *
      * The server's own revision history for this document, newest first.
      *
      * Metadata only — revision, when, and size. Fetching the full documents to

@@ -86,10 +86,7 @@ export function createSettingsPanel({
   onClose = () => {},
   // The server's own revision history, newest first: [{revision, updatedAt, size}].
   // Empty when the server could not be reached — the panel must still open.
-  serverHistory = [],
   // Why it is empty, when that is not simply "there is none".
-  serverHistoryError = null,
-  onRestoreRevision = async () => ({ ok: false, message: 'Restore is not wired up.' }),
   // Shown beside the wordmark. Passed in rather than read here so the panel
   // stays free of GM_info and keeps rendering in node under the test runner.
   version = null
@@ -230,107 +227,8 @@ export function createSettingsPanel({
       backupsPane.appendChild(backupRow(entry));
     }
   }
-  // --- the server's history, under the local snapshots -----------------------
-  //
-  // Two different things share this tab on purpose, and the heading says which
-  // is which. The rows above are LOCAL: three snapshots, this browser only,
-  // one a day plus any merge that would remove something. These are the
-  // SERVER's, shared by every device, and restoring one changes every device.
-  // Only the newest few are listed; the server retains far more behind them.
-  //
-  // That difference is the whole reason to show them together — someone
-  // reaching for an undo should see both reaches at once, rather than assume
-  // the three local rows are all there is.
-  const serverHead = make('div', 'psnppp-subhead', 'Server history');
-  serverHead.appendChild(make('span', 'psnppp-subnote', 'all devices'));
-  backupsPane.appendChild(serverHead);
-
-  if (serverHistoryError) {
-    backupsPane.appendChild(tag(
-      make('div', 'psnppp-empty', serverHistoryError),
-      'server-history-error'
-    ));
-  } else if (serverHistory.length === 0) {
-    backupsPane.appendChild(tag(
-      make('div', 'psnppp-empty', 'No server revisions yet.'),
-      'server-history-empty'
-    ));
-  } else {
-    for (const entry of serverHistory) backupsPane.appendChild(revisionRow(entry));
-  }
-
   element.appendChild(backupsPane);
   panes.set('backups', backupsPane);
-
-  function revisionRow(entry) {
-    const row = tag(make('div', 'psnppp-row'), 'revision-row');
-
-    const main = make('div', 'psnppp-rowmain', stamp(entry?.updatedAt));
-    main.appendChild(tag(
-      make('span', 'psnppp-rowmeta', `r${entry?.revision}`),
-      'revision-id'
-    ));
-    row.appendChild(main);
-
-    const restoreButton = tag(make('button', 'psnppp-btn', 'Restore'), 'revision-restore');
-    restoreButton.setAttribute('type', 'button');
-    row.appendChild(restoreButton);
-
-    const confirm = tag(make('div', 'psnppp-confirm'), 'revision-confirm');
-    // Spelled out because this one is not undoable by closing the panel: it
-    // rewrites what every other device will pull down on its next sync.
-    confirm.appendChild(make(
-      'div', null,
-      `Roll every device back to r${entry?.revision}? Anything changed since then is undone.`
-    ));
-    const confirmActions = make('div', 'psnppp-actions');
-
-    const keepButton = tag(make('button', 'psnppp-btn', 'Cancel'), 'revision-cancel');
-    keepButton.setAttribute('type', 'button');
-    keepButton.addEventListener('click', () => {
-      show(confirm, false);
-      show(restoreButton, true);
-    });
-    confirmActions.appendChild(keepButton);
-
-    const goButton = tag(
-      make('button', 'psnppp-btn psnppp-btn-danger', `Restore r${entry?.revision}`),
-      'revision-confirm-go'
-    );
-    goButton.setAttribute('type', 'button');
-    goButton.addEventListener('click', () => {
-      runRevisionRestore(entry?.revision, goButton).catch(error => {
-        goButton.disabled = false;
-        showMessage(describeFailure(error, 'Could not restore that revision'), { error: true });
-      });
-    });
-    confirmActions.appendChild(goButton);
-
-    confirm.appendChild(confirmActions);
-    show(confirm, false);
-    row.appendChild(confirm);
-
-    restoreButton.addEventListener('click', () => {
-      show(restoreButton, false);
-      show(confirm, true);
-    });
-
-    return row;
-  }
-
-  async function runRevisionRestore(revision, button) {
-    clearMessage();
-    button.disabled = true;
-    const result = await onRestoreRevision(revision);
-    if (!result || result.ok !== true) {
-      button.disabled = false;
-      // Same rule as a failed backup restore: do NOT close. A restore that
-      // failed is the moment the panel is most needed still on screen.
-      showMessage(result?.message ?? 'Could not restore that revision.', { error: true });
-      return;
-    }
-    showMessage(result.message ?? 'Restored.');
-  }
 
   function backupRow(entry) {
     const row = tag(make('div', 'psnppp-row'), 'backup-row');
