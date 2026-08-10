@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.32
+// @version      2.3.33
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -142,7 +142,7 @@
       /**
        * The server's own revision history for this document, newest first.
        *
-       * Metadata only — revision, when, and size. Fetching 40 full documents to
+       * Metadata only — revision, when, and size. Fetching the full documents to
        * draw a list would be tens of thousands of bytes to render three columns.
        * The one being restored is fetched separately, and only when asked for.
        *
@@ -310,50 +310,71 @@
   // userscript/src/backup.mjs
   var INDEX_KEY = "psnppp.backups";
   var MAX_BACKUPS = 3;
-  async function pruneTo(index) {
+  function trim(index) {
     const keep = [];
     const dropped = [];
+    if (!Array.isArray(index)) return { keep, dropped };
     for (const [position, entry] of index.entries()) {
-      if (position < MAX_BACKUPS || entry.protected) keep.push(entry);
+      if (position < MAX_BACKUPS || entry?.protected) keep.push(entry);
       else dropped.push(entry);
     }
-    if (dropped.length > 0) {
-      for (const entry of dropped) await GM.deleteValue(entry.id);
-      await GM.setValue(INDEX_KEY, keep);
-    }
-    return keep;
+    return { keep, dropped };
   }
   async function saveBackup(lists, now = Date.now(), { protect = null } = {}) {
     const index = await GM.getValue(INDEX_KEY, []);
     const id = `psnppp.backup.${now}`;
     await GM.setValue(id, JSON.stringify(lists));
-    const next = [{ id, at: now, listCount: lists.length }, ...index].map((entry) => entry.id === protect ? { ...entry, protected: true } : { ...entry, protected: void 0 });
-    const keep = await pruneTo(next);
-    if (keep.length === next.length) await GM.setValue(INDEX_KEY, keep);
+    const next = [{ id, at: now, listCount: lists.length }, ...index].map((entry) => {
+      const { protected: _cleared, ...rest } = entry;
+      return entry.id === protect ? { ...rest, protected: true } : rest;
+    });
+    const { keep, dropped } = trim(next);
+    await GM.setValue(INDEX_KEY, keep);
+    for (const entry of dropped) {
+      try {
+        await GM.deleteValue(entry.id);
+      } catch (error) {
+        console.error("[psnppp] could not delete an evicted backup:", error);
+      }
+    }
     return id;
   }
   async function listBackups() {
-    return pruneTo(await GM.getValue(INDEX_KEY, []));
+    return trim(await GM.getValue(INDEX_KEY, [])).keep;
   }
-  var EASTERN_DAY = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  });
+  var easternDayFormat;
   function easternDay(at) {
-    return EASTERN_DAY.format(new Date(at));
+    if (!Number.isFinite(at)) return null;
+    try {
+      easternDayFormat ??= new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      });
+      return easternDayFormat.format(at);
+    } catch (error) {
+      console.error("[psnppp] could not read the Eastern date:", error);
+      return null;
+    }
   }
-  async function saveDailyBackup(lists, now = Date.now()) {
+  async function saveDailyBackup(lists, now = Date.now(), { force = false } = {}) {
+    if (force) return saveBackup(lists, now);
     const index = await GM.getValue(INDEX_KEY, []);
-    const newest = index[0];
-    if (newest != null && easternDay(newest.at) === easternDay(now)) return null;
+    const newest = Array.isArray(index) ? index[0] : null;
+    const today = easternDay(now);
+    const last = newest == null ? null : easternDay(newest.at);
+    if (today != null && last === today) return null;
     return saveBackup(lists, now);
   }
   async function restoreBackup(id) {
     const raw = await GM.getValue(id, null);
     if (raw == null) throw new Error(`No such backup: ${id}`);
-    return JSON.parse(raw);
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Backup ${id} is corrupt: ${error.message}`, { cause: error });
+    }
   }
 
   // userscript/src/history.mjs
@@ -1583,7 +1604,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
     const backupsPane = tag(make("div", "psnppp-pane"), "pane-backups");
     if (backups.length === 0) {
       backupsPane.appendChild(tag(
-        make("div", "psnppp-empty", "No backups yet. One is taken before every merge that writes."),
+        make("div", "psnppp-empty", "No backups yet. One is taken each day, and before any merge that would remove something."),
         "backups-empty"
       ));
     } else {
@@ -2250,7 +2271,12 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       }
       const deletedLocally = localDelta.gamesRemoved > 0 || localDelta.listsRemoved > 0;
       if (changed) {
-        await saveBackup2(deletedLocally ? fromDoc(workingBase) : currentLists);
+        const removesLocalContent = delta.gamesRemoved > 0 || delta.listsRemoved > 0;
+        await saveBackup2(
+          deletedLocally ? fromDoc(workingBase) : currentLists,
+          now,
+          { force: removesLocalContent || deletedLocally }
+        );
         if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
           if (pushed && attempt < maxAttempts) continue;
           return { status: "synced", revision: settledRevision, changed: false, delta: zeroDelta() };
