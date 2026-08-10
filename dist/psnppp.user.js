@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.23
+// @version      2.3.24
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -1596,9 +1596,15 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       showMessage(result.message ?? "Backup restored.");
     }
     let closed = false;
+    let detachOutside = () => {
+    };
     function close() {
       if (closed) return;
       closed = true;
+      try {
+        detachOutside();
+      } catch {
+      }
       try {
         element.remove?.();
       } catch (error) {
@@ -1615,6 +1621,17 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
       event.stopPropagation?.();
       close();
     });
+    detachOutside = (() => {
+      const onOutsidePointerDown = (event) => {
+        const target = event?.target ?? null;
+        if (target == null) return;
+        if (element.contains?.(target)) return;
+        if (anchor?.contains?.(target)) return;
+        close();
+      };
+      doc.addEventListener?.("pointerdown", onOutsidePointerDown, true);
+      return () => doc.removeEventListener?.("pointerdown", onOutsidePointerDown, true);
+    })();
     selectTab(TABS[0].name);
     position();
     function position() {
