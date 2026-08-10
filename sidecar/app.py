@@ -75,20 +75,23 @@ DEFAULT_DOCUMENT = "lists"
 # silent-divergence failure this project has already been bitten by. A 404 is
 # noisy, immediate, and cannot lose data. The cost is that adding a document
 # means shipping a server change first; that is the intended trade.
+# One document, deliberately.
+#
+# There were four: settings, progress and compare went with the features that
+# wrote them (7262490, 59841a8 — "strip PSNP++ back to list sync"), but this map
+# was never updated, so the API kept advertising and accepting three documents
+# no client had touched since 2026-08-08.
+#
+# That is not merely untidy. Their stored data was 94% of the database, and a
+# frozen document that the server still accepts is a loaded gun: re-add progress
+# sync one day and the first thing a device pulls down is a two-day-old snapshot,
+# written over whatever it has now. Removing them from the allowlist is what
+# makes a request for one a 404 rather than a plausible-looking empty document.
+#
+# Purged from the live database on 2026-08-10, after a verified backup:
+# 2,539,520 -> 143,360 bytes.
 EMPTY_DOCUMENTS: dict[str, dict[str, Any]] = {
     "lists": {"version": DOC_VERSION, "lists": {}},
-    "settings": {"version": DOC_VERSION, "settings": {}},
-    # Archived game-progress observations, keyed by game id. Grows slowly — the
-    # client only appends a point when a game actually moved, and caps the
-    # points it keeps per game — but it is the one document expected to keep
-    # growing at all, so it is the first place to look if the store gets large.
-    "progress": {"version": DOC_VERSION, "games": {}},
-    # PSNP+'s Compare+ entries: trophy list id -> the PSN IDs to compare that
-    # game against. Shares the settings document's shape because it shares its
-    # merge (a flat keyed map, per-key last-write-wins, no tombstones) — the
-    # field is called "settings" because that is the shape's name in the client,
-    # not because this holds settings.
-    "compare": {"version": DOC_VERSION, "settings": {}},
 }
 
 app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None)

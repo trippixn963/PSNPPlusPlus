@@ -218,13 +218,17 @@ def test_legacy_table_with_no_row_migrates_nothing(client, db_path):
     assert read_sql(db_path, "SELECT * FROM documents") == []
 
 
-def test_migration_does_not_invent_a_settings_document(client, db_path):
+def test_migration_creates_the_lists_row_and_nothing_else(client, db_path):
+    """The legacy table held one document; migrating it must produce one row.
+
+    This used to phrase the same invariant as "does not invent a SETTINGS
+    document", back when settings was one of four served documents. Only lists
+    survives now, so the question is no longer about a particular neighbour: it
+    is that migration adds exactly what it found and nothing more.
+    """
     build_legacy_db(db_path)
     client.get(f"{BASE}/state", headers=AUTH)
 
-    body = client.get(f"{BASE}/state", headers=AUTH, params={"document": "settings"}).json()
-    assert body["revision"] == 0
-    assert body["doc"] == {"version": 1, "settings": {}}
     assert read_sql(db_path, "SELECT doc_key FROM documents") == [("lists",)]
 
 

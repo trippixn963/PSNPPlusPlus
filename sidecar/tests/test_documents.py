@@ -24,6 +24,32 @@ def settings_doc(**settings):
     return {"version": 1, "settings": settings}
 
 
+# A second document, registered only for the duration of a test.
+#
+# Production serves exactly one document, "lists". The other three went with the
+# features that wrote them, and re-adding one to the allowlist just to give
+# these tests something to compare against would put the footgun back: a
+# document the server accepts is one a future client can be pointed at and pull
+# stale data from.
+#
+# The machinery these tests exercise is real and still in the code — independent
+# revisions, per-document history, per-document pruning. The allowlist is
+# configuration, so the tests patch the configuration rather than shipping a
+# second document to satisfy them.
+#
+# Its shape reuses settings_doc: a flat keyed map, which is the other shape the
+# merge supports besides lists.
+SCRATCH = "scratch"
+
+
+@pytest.fixture()
+def second_document(monkeypatch):
+    monkeypatch.setitem(
+        app_module.EMPTY_DOCUMENTS, SCRATCH, {"version": 1, "settings": {}}
+    )
+    return SCRATCH
+
+
 def put(client, doc, base_revision, document=None):
     params = {} if document is None else {"document": document}
     return client.put(
@@ -83,62 +109,62 @@ def test_the_documents_endpoint_names_the_keys_and_the_default(client):
     """
     body = client.get(f"{BASE}/documents", headers=AUTH).json()
     assert body["default"] == "lists"
-    assert set(body["documents"]) == {"lists", "settings", "progress", "compare"}
+    assert set(body["documents"]) == {"lists"}
 
 
 # --------------------------------------------------------------------------
 # Independent documents
 # --------------------------------------------------------------------------
 
-def test_two_documents_keep_independent_revisions(client):
+def test_two_documents_keep_independent_revisions(client, second_document):
     assert put(client, lists_doc(a={}), 0).json()["revision"] == 1
     assert put(client, lists_doc(b={}), 1).json()["revision"] == 2
     assert put(client, lists_doc(c={}), 2).json()["revision"] == 3
 
     # settings has never been written; it starts at 0, not at 3.
-    assert get(client, "settings").json()["revision"] == 0
-    assert put(client, settings_doc(theme="dark"), 0, document="settings").json()["revision"] == 1
+    assert get(client, SCRATCH).json()["revision"] == 0
+    assert put(client, settings_doc(theme="dark"), 0, document=SCRATCH).json()["revision"] == 1
 
     assert get(client, "lists").json()["revision"] == 3
-    assert get(client, "settings").json()["revision"] == 1
+    assert get(client, SCRATCH).json()["revision"] == 1
 
 
-def test_writing_one_document_never_alters_the_other(client):
+def test_writing_one_document_never_alters_the_other(client, second_document):
     put(client, lists_doc(a={"meta": {"name": "Wishlist"}}), 0)
-    put(client, settings_doc(theme="dark"), 0, document="settings")
+    put(client, settings_doc(theme="dark"), 0, document=SCRATCH)
 
     before = get(client, "lists").json()
-    put(client, settings_doc(theme="light"), 1, document="settings")
+    put(client, settings_doc(theme="light"), 1, document=SCRATCH)
 
     assert get(client, "lists").json() == before
 
 
-def test_an_unwritten_document_reports_its_own_empty_state(client):
+def test_an_unwritten_document_reports_its_own_empty_state(client, second_document):
     lists = get(client, "lists").json()
-    settings = get(client, "settings").json()
+    scratch = get(client, SCRATCH).json()
     assert lists["doc"] == {"version": 1, "lists": {}}
-    assert settings["doc"] == {"version": 1, "settings": {}}
-    assert lists["revision"] == settings["revision"] == 0
-    assert lists["updatedAt"] == settings["updatedAt"] == 0
+    assert scratch["doc"] == {"version": 1, "settings": {}}
+    assert lists["revision"] == scratch["revision"] == 0
+    assert lists["updatedAt"] == scratch["updatedAt"] == 0
 
 
-def test_the_empty_document_template_cannot_be_mutated_through_a_response(client):
+def test_the_empty_document_template_cannot_be_mutated_through_a_response(client, second_document):
     """A caller mutating the returned dict must not poison later requests."""
-    first = get(client, "settings").json()
+    first = get(client, SCRATCH).json()
     first["doc"]["settings"]["injected"] = True
-    app_module._empty_doc("settings")["settings"]["also_injected"] = True
+    app_module._empty_doc(SCRATCH)["settings"]["also_injected"] = True
 
-    assert get(client, "settings").json()["doc"] == {"version": 1, "settings": {}}
+    assert get(client, SCRATCH).json()["doc"] == {"version": 1, "settings": {}}
 
 
 # --------------------------------------------------------------------------
 # Per-document revision guard
 # --------------------------------------------------------------------------
 
-def test_a_stale_base_revision_conflicts_per_document(client):
+def test_a_stale_base_revision_conflicts_per_document(client, second_document):
     put(client, lists_doc(a={}), 0)
     put(client, lists_doc(b={}), 1)
-    put(client, settings_doc(theme="dark"), 0, document="settings")
+    put(client, settings_doc(theme="dark"), 0, document=SCRATCH)
 
     stale = put(client, lists_doc(z={}), 0)
     assert stale.status_code == 409
@@ -148,18 +174,18 @@ def test_a_stale_base_revision_conflicts_per_document(client):
     assert body["doc"] == lists_doc(b={})
 
 
-def test_a_revision_valid_for_one_document_is_stale_for_another(client):
+def test_a_revision_valid_for_one_document_is_stale_for_another(client, second_document):
     put(client, lists_doc(a={}), 0)
     put(client, lists_doc(b={}), 1)   # lists is at 2
 
     # settings is at 0, so baseRevision 2 must not be accepted there.
-    res = put(client, settings_doc(theme="dark"), 2, document="settings")
+    res = put(client, settings_doc(theme="dark"), 2, document=SCRATCH)
     assert res.status_code == 409
-    assert res.json()["document"] == "settings"
+    assert res.json()["document"] == SCRATCH
     assert res.json()["revision"] == 0
     assert res.json()["doc"] == {"version": 1, "settings": {}}
 
-    assert get(client, "settings").json()["revision"] == 0
+    assert get(client, SCRATCH).json()["revision"] == 0
 
 
 def test_a_conflicting_put_writes_nothing_including_history(client):
@@ -287,13 +313,13 @@ def test_history_is_newest_first(client):
     assert [e["revision"] for e in history(client).json()["revisions"]] == [5, 4, 3, 2, 1]
 
 
-def test_history_is_per_document(client):
+def test_history_is_per_document(client, second_document):
     put(client, lists_doc(a={}), 0)
     put(client, lists_doc(b={}), 1)
-    put(client, settings_doc(theme="dark"), 0, document="settings")
+    put(client, settings_doc(theme="dark"), 0, document=SCRATCH)
 
     assert [e["revision"] for e in history(client).json()["revisions"]] == [2, 1]
-    assert [e["revision"] for e in history(client, "settings").json()["revisions"]] == [1]
+    assert [e["revision"] for e in history(client, SCRATCH).json()["revisions"]] == [1]
 
 
 def test_history_limit_narrows_the_response(client):
@@ -309,8 +335,8 @@ def test_history_rejects_a_limit_outside_the_retained_window(client, limit):
     assert history(client, limit=limit).status_code == 422
 
 
-def test_history_of_an_unwritten_document_is_empty_not_an_error(client):
-    body = history(client, "settings")
+def test_history_of_an_unwritten_document_is_empty_not_an_error(client, second_document):
+    body = history(client, SCRATCH)
     assert body.status_code == 200
     assert body.json()["revisions"] == []
 
@@ -348,18 +374,18 @@ def test_the_history_table_itself_stays_bounded(client, db_path):
     assert count == app_module.HISTORY_LIMIT
 
 
-def test_pruning_one_document_leaves_the_other_alone(client):
-    put(client, settings_doc(theme="dark"), 0, document="settings")
+def test_pruning_one_document_leaves_the_other_alone(client, second_document):
+    put(client, settings_doc(theme="dark"), 0, document=SCRATCH)
     for rev in range(app_module.HISTORY_LIMIT + 5):
         put(client, lists_doc(**{f"k{rev}": {}}), rev)
 
-    assert [e["revision"] for e in history(client, "settings").json()["revisions"]] == [1]
+    assert [e["revision"] for e in history(client, SCRATCH).json()["revisions"]] == [1]
     assert client.get(
-        f"{BASE}/state/history/1", headers=AUTH, params={"document": "settings"}
+        f"{BASE}/state/history/1", headers=AUTH, params={"document": SCRATCH}
     ).status_code == 200
 
 
-def test_each_document_retains_its_own_full_window(client):
+def test_each_document_retains_its_own_full_window(client, second_document):
     """Both documents deep in history: each keeps its OWN newest 100.
 
     The retention window has to be computed per document, not over the table as
@@ -372,11 +398,11 @@ def test_each_document_retains_its_own_full_window(client):
     """
     over = app_module.HISTORY_LIMIT + 5
     for rev in range(over):
-        put(client, settings_doc(**{f"s{rev}": {}}), rev, document="settings")
+        put(client, settings_doc(**{f"s{rev}": {}}), rev, document=SCRATCH)
     for rev in range(over):
         put(client, lists_doc(**{f"k{rev}": {}}), rev)
 
-    for document in ("lists", "settings"):
+    for document in ("lists", SCRATCH):
         revisions = [e["revision"] for e in history(client, document).json()["revisions"]]
         assert len(revisions) == app_module.HISTORY_LIMIT, (document, len(revisions))
         assert revisions[0] == over
@@ -419,7 +445,7 @@ def test_fetching_an_unretained_revision_is_a_404(client):
 def test_a_revision_of_the_wrong_document_is_a_404(client):
     put(client, lists_doc(a={}), 0)
     assert client.get(
-        f"{BASE}/state/history/1", headers=AUTH, params={"document": "settings"}
+        f"{BASE}/state/history/1", headers=AUTH, params={"document": SCRATCH}
     ).status_code == 404
 
 
@@ -548,15 +574,15 @@ def test_restore_of_a_pruned_revision_is_a_404(client):
     assert restore(client, base_revision=current, revision=1).status_code == 404
 
 
-def test_restore_is_per_document(client):
+def test_restore_is_per_document(client, second_document):
     put(client, lists_doc(a={"meta": {"name": "First"}}), 0)
     put(client, lists_doc(a={"meta": {"name": "Second"}}), 1)
-    put(client, settings_doc(theme="dark"), 0, document="settings")
+    put(client, settings_doc(theme="dark"), 0, document=SCRATCH)
 
-    before_settings = get(client, "settings").json()
+    before_scratch = get(client, SCRATCH).json()
     restore(client, base_revision=2, revision=1)
 
-    assert get(client, "settings").json() == before_settings
+    assert get(client, SCRATCH).json() == before_scratch
 
 
 def test_restoring_the_current_revision_still_advances_the_revision(client):
@@ -646,7 +672,7 @@ def test_an_unset_server_key_rejects_even_a_matching_empty_key(client, monkeypat
     ).status_code == 401
 
 
-def test_an_unset_server_key_locks_every_route(client, monkeypatch):
+def test_an_unset_server_key_locks_every_route(client, monkeypatch, second_document):
     monkeypatch.setenv("PSNP_SYNC_KEY", "")
     assert client.get(f"{BASE}/state", headers=AUTH).status_code == 401
     assert client.get(f"{BASE}/documents", headers=AUTH).status_code == 401
@@ -656,8 +682,8 @@ def test_an_unset_server_key_locks_every_route(client, monkeypatch):
     assert put(client, lists_doc(), 0).status_code == 401
 
 
-@pytest.mark.parametrize("document", ["lists", "settings"])
-def test_put_rejects_an_unknown_doc_version_on_every_document(client, document):
+@pytest.mark.parametrize("document", ["lists", SCRATCH])
+def test_put_rejects_an_unknown_doc_version_on_every_document(client, second_document, document):
     res = put(client, {"version": 99, "settings": {}}, 0, document=document)
     assert res.status_code == 422
 
@@ -756,7 +782,7 @@ def test_concurrent_writers_leave_history_consistent(client, db_path):
     assert get(client).json()["revision"] == accepted[0]
 
 
-def test_concurrent_writers_on_different_documents_both_succeed(client):
+def test_concurrent_writers_on_different_documents_both_succeed(client, second_document):
     outcomes: dict[str, Any] = {}
     start = threading.Event()
     guard = threading.Lock()
@@ -770,7 +796,7 @@ def test_concurrent_writers_on_different_documents_both_succeed(client):
 
     threads = [
         threading.Thread(target=writer, args=("lists", lists_doc(a={}))),
-        threading.Thread(target=writer, args=("settings", settings_doc(theme="dark"))),
+        threading.Thread(target=writer, args=(SCRATCH, settings_doc(theme="dark"))),
     ]
     for thread in threads:
         thread.start()
@@ -779,4 +805,4 @@ def test_concurrent_writers_on_different_documents_both_succeed(client):
         thread.join()
 
     assert outcomes["lists"]["revision"] == 1
-    assert outcomes["settings"]["revision"] == 1
+    assert outcomes[SCRATCH]["revision"] == 1
