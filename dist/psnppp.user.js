@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.31
+// @version      2.3.32
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -334,6 +334,21 @@
   }
   async function listBackups() {
     return pruneTo(await GM.getValue(INDEX_KEY, []));
+  }
+  var EASTERN_DAY = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  function easternDay(at) {
+    return EASTERN_DAY.format(new Date(at));
+  }
+  async function saveDailyBackup(lists, now = Date.now()) {
+    const index = await GM.getValue(INDEX_KEY, []);
+    const newest = index[0];
+    if (newest != null && easternDay(newest.at) === easternDay(now)) return null;
+    return saveBackup(lists, now);
   }
   async function restoreBackup(id) {
     const raw = await GM.getValue(id, null);
@@ -2962,8 +2977,12 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           client,
           loadBase,
           saveBase,
-          saveBackup,
           confirmAdoptions,
+          // Daily, not per-write. The two restore paths above still call
+          // saveBackup directly and unconditionally: those snapshots exist so a
+          // restore can itself be undone, which has nothing to do with how often
+          // a routine backup is taken.
+          saveBackup: saveDailyBackup,
           now: Date.now()
         });
         const { state, detail } = describeSyncResult(result);
