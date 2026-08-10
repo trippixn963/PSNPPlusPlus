@@ -220,7 +220,7 @@ export function createSettingsPanel({
   const backupsPane = tag(make('div', 'psnppp-pane'), 'pane-backups');
   if (backups.length === 0) {
     backupsPane.appendChild(tag(
-      make('div', 'psnppp-empty', 'No backups yet. One is taken before every merge that writes.'),
+      make('div', 'psnppp-empty', 'No backups yet. One is taken each day, and before any merge that would remove something.'),
       'backups-empty'
     ));
   } else {
@@ -234,8 +234,9 @@ export function createSettingsPanel({
   //
   // Two different things share this tab on purpose, and the heading says which
   // is which. The rows above are LOCAL: three snapshots, this browser only,
-  // taken before a merge. These are the SERVER's: ~40 revisions shared by every
-  // device, going back further, and restoring one changes every device.
+  // one a day plus any merge that would remove something. These are the
+  // SERVER's, shared by every device, and restoring one changes every device.
+  // Only the newest few are listed; the server retains far more behind them.
   //
   // That difference is the whole reason to show them together — someone
   // reaching for an undo should see both reaches at once, rather than assume

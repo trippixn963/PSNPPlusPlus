@@ -516,14 +516,22 @@ export async function runSyncCycle({
       // the useful snapshot is what this device last settled on, which the
       // cycle is holding as `workingBase` and would otherwise discard.
       //
-      // What is injected here is saveDailyBackup (see main.mjs), so this is at
-      // most one snapshot per Eastern day rather than one per write. The slot
-      // arithmetic this comment used to do no longer applies: a call on a day
-      // already snapshotted costs nothing, and a retry can no longer spend a
-      // second slot on the same cycle. The per-write safety net is now the
-      // server's revision history, which records every write and sits beside
-      // these in the panel.
-      await saveBackup(deletedLocally ? fromDoc(workingBase) : currentLists);
+      // saveDailyBackup is what main.mjs injects, so a routine merge takes at
+      // most one snapshot per Eastern day and a busy afternoon no longer spends
+      // every slot in an hour.
+      //
+      // `force` covers the case the cap must never ration. The server is NOT a
+      // complete substitute for these: the push above is skipped when the merge
+      // equals what the server already holds, so a receive-only merge creates no
+      // revision, and anything this merge DESTROYS was never pushed in the first
+      // place. A lossy write with today's slot already spent would leave that
+      // content nowhere at all, so removals always snapshot.
+      const removesLocalContent = delta.gamesRemoved > 0 || delta.listsRemoved > 0;
+      await saveBackup(
+        deletedLocally ? fromDoc(workingBase) : currentLists,
+        now,
+        { force: removesLocalContent || deletedLocally }
+      );
       // The backup is an await too, so re-check before the one and only write:
       // the backup has to precede the write, and the write has to be the last
       // thing after the last await.

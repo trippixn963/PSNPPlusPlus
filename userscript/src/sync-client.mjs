@@ -44,9 +44,11 @@ function parseBody(response) {
  * This is a display depth, not a retention change: the deeper history stays on
  * the server and is still reachable by raising this number.
  *
- * Three, matching MAX_BACKUPS. The panel shows both lists stacked in one pane,
- * so the number that matters is the total — five here read as a wall under the
- * three local rows, which is the same complaint that lowered the local cap.
+ * Three. It equals MAX_BACKUPS by coincidence, not derivation — do not couple
+ * them: this is display depth against a server that keeps everything, while
+ * that one is destructive local retention. Both were sized against the same
+ * one-pane budget, because the panel stacks the two lists and the number that
+ * matters is the total.
  * Undo reaches back minutes, not days; anything older is a server-side safety
  * net rather than something anyone scrolls to.
  */
@@ -93,7 +95,7 @@ export function createSyncClient({
     /**
      * The server's own revision history for this document, newest first.
      *
-     * Metadata only — revision, when, and size. Fetching 40 full documents to
+     * Metadata only — revision, when, and size. Fetching the full documents to
      * draw a list would be tens of thousands of bytes to render three columns.
      * The one being restored is fetched separately, and only when asked for.
      *

@@ -297,10 +297,9 @@ export async function openSettings({ chip = null } = {}) {
         onRestore: async id => {
           try {
             // Read the chosen snapshot into memory BEFORE taking the next
-            // backup. backup.mjs caps storage at 5 slots and evicts the oldest
-            // on the 6th save — and the oldest slot is exactly what a "restore"
-            // tends to target once all 5 are full (it's usually the
-            // pre-corruption one the user actually wants). Saving first would
+            // backup. backup.mjs caps storage at MAX_BACKUPS and evicts the
+            // oldest on the save past it — and the oldest slot is exactly what a
+            // "restore" tends to target once they are all full (it's usually the
             // evict the very entry being restored and turn it into a
             // `restoreBackup` failure, on the one slot most worth restoring.
             const restored = await restoreBackup(id);

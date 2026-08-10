@@ -4,15 +4,24 @@ import {
   saveBackup, saveDailyBackup, listBackups, restoreBackup, easternDay, MAX_BACKUPS
 } from '../src/backup.mjs';
 
-/** A fake GM.* backed by a Map, so backup.mjs can be exercised in node. */
+/**
+ * A fake GM.* backed by a Map, so backup.mjs can be exercised in node.
+ *
+ * setValue round-trips through JSON because the real one does. Holding the
+ * caller's object by reference made the fake MORE permissive than production
+ * in two ways that matter here: a key set to `undefined` survived (so the suite
+ * could not tell "flag removed" from "flag set to undefined"), and stored
+ * entries aliased the arrays the code still held, so a mutation-after-store bug
+ * would never show. A fixture must not be kinder than the thing it stands in for.
+ */
 function installFakeGM() {
   const store = new Map();
   globalThis.GM = {
     async getValue(key, fallback) {
-      return store.has(key) ? store.get(key) : fallback;
+      return store.has(key) ? JSON.parse(store.get(key)) : fallback;
     },
     async setValue(key, value) {
-      store.set(key, value);
+      store.set(key, JSON.stringify(value));
     },
     async deleteValue(key) {
       store.delete(key);
@@ -23,6 +32,19 @@ function installFakeGM() {
 
 function uninstallFakeGM() {
   delete globalThis.GM;
+}
+
+/** An index of `count` entries as saveBackup would have left it under an older, larger cap. */
+async function seedLegacyIndex(count) {
+  const legacy = [];
+  for (let i = 0; i < count; i++) {
+    const id = `psnppp.backup.${2000 + i}`;
+    await GM.setValue(id, JSON.stringify([{ id: `l${i}` }]));
+    legacy.push({ id, at: 2000 + i, listCount: 1 });
+  }
+  legacy.reverse();
+  await GM.setValue('psnppp.backups', legacy);
+  return legacy;
 }
 
 test('a saved backup is retrievable by restoreBackup', async () => {
@@ -92,26 +114,39 @@ test('an index written under a larger cap collapses on the next READ', async () 
   // five rows, with no way to ever reach three except by syncing three times.
   const store = installFakeGM();
   try {
-    const legacy = [];
-    for (let i = 0; i < 5; i++) {
-      const id = `psnppp.backup.${2000 + i}`;
-      await GM.setValue(id, JSON.stringify([{ id: `l${i}` }]));
-      legacy.push({ id, at: 2000 + i, listCount: 1 });
-    }
-    // Newest first, exactly as saveBackup would have left it under the old cap.
-    legacy.reverse();
-    await GM.setValue('psnppp.backups', legacy);
+    const legacy = await seedLegacyIndex(5);
 
     const index = await listBackups();
 
     assert.equal(index.length, MAX_BACKUPS, 'the read applies the current cap');
     assert.deepEqual(index.map(e => e.id), legacy.slice(0, MAX_BACKUPS).map(e => e.id),
       'and keeps the newest, not an arbitrary three');
-    for (const entry of legacy.slice(MAX_BACKUPS)) {
-      assert.equal(store.has(entry.id), false, 'the dropped blobs are deleted, not orphaned');
+    // The read does NOT write. It used to, and that raced the sync cycle's own
+    // save and turned a rejected GM write into "no backups yet" over good data.
+    assert.deepEqual(await GM.getValue('psnppp.backups', []), legacy,
+      'storage is untouched by a read');
+    for (const entry of legacy) {
+      assert.equal(store.has(entry.id), true, 'and no blob is deleted by a read');
     }
-    assert.deepEqual(await GM.getValue('psnppp.backups', []), index,
-      'and the trim is persisted, so it does not re-run on every open');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('the next save is what reclaims the over-cap blobs', async () => {
+  const store = installFakeGM();
+  try {
+    const legacy = await seedLegacyIndex(5);
+
+    await saveBackup([{ id: 'new' }], 9000);
+
+    const index = await listBackups();
+    assert.equal(index.length, MAX_BACKUPS);
+    for (const entry of legacy.slice(MAX_BACKUPS - 1)) {
+      assert.equal(store.has(entry.id), false, 'evicted blobs are deleted, not orphaned');
+    }
+    assert.deepEqual((await GM.getValue('psnppp.backups', [])).map(e => e.id), index.map(e => e.id),
+      'and the trim is persisted by the write path');
   } finally {
     uninstallFakeGM();
   }
@@ -222,6 +257,59 @@ test('a backup holds every list in one entry', async () => {
     const id = await saveDailyBackup(lists, AUG10_8PM_ET);
     assert.deepEqual(await restoreBackup(id), lists, 'restoring returns all three together');
     assert.equal((await listBackups())[0].listCount, 3, 'and the row counts all three');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Failing open, and not taking sync down with it
+// ---------------------------------------------------------------------------
+
+test('easternDay returns null for junk instead of throwing', () => {
+  // Thrown from here this would reject out of the sync cycle and every cycle
+  // after it -- a malformed stored timestamp would silently end syncing on the
+  // device forever, showing only an "Offline" chip.
+  for (const junk of [undefined, null, NaN, Infinity, 'yesterday', {}, []]) {
+    assert.equal(easternDay(junk), null, `${String(junk)} is unreadable, not fatal`);
+  }
+});
+
+test('a malformed stored timestamp takes the backup rather than killing the cycle', async () => {
+  installFakeGM();
+  try {
+    await GM.setValue('psnppp.backups', [{ id: 'psnppp.backup.x', at: 'not-a-time', listCount: 1 }]);
+    // Fails OPEN: a duplicate snapshot costs one slot, a throw costs all syncing.
+    const id = await saveDailyBackup([{ id: 'a' }], AUG10_8PM_ET);
+    assert.notEqual(id, null, 'the snapshot is taken');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a corrupt index does not blank the Backups tab', async () => {
+  installFakeGM();
+  try {
+    await GM.setValue('psnppp.backups', 'not an array');
+    assert.deepEqual(await listBackups(), [], 'a garbage index reads as empty, not as a throw');
+    // migrate.mjs deliberately passes null entries through the index.
+    await GM.setValue('psnppp.backups', [null, { id: 'b', at: 1, listCount: 1 }, null, null, null]);
+    assert.equal((await listBackups()).length, MAX_BACKUPS, 'null entries do not throw');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('force bypasses the daily gate, because a lossy write must never be rationed', async () => {
+  installFakeGM();
+  try {
+    await saveDailyBackup([{ id: 'morning' }], AUG10_8PM_ET);
+    assert.equal(await saveDailyBackup([{ id: 'noon' }], AUG10_11PM_ET), null, 'routine is gated');
+
+    const forced = await saveDailyBackup([{ id: 'afternoon' }], AUG10_11PM_ET, { force: true });
+    assert.notEqual(forced, null, 'a write that removes local content always snapshots');
+    assert.deepEqual(await restoreBackup(forced), [{ id: 'afternoon' }],
+      'and it holds the pre-write state, which exists nowhere else');
   } finally {
     uninstallFakeGM();
   }
