@@ -118,12 +118,11 @@
     endpoint,
     key,
     request = gmRequest,
-    timeoutMs = 15e3,
-    documentKey = null
+    timeoutMs = 15e3
   }) {
     const base = String(endpoint).replace(/\/+$/, "");
     const headers = { "X-Sync-Key": key, "Content-Type": "application/json" };
-    const url = documentKey == null ? `${base}/state` : `${base}/state?document=${encodeURIComponent(documentKey)}`;
+    const url = `${base}/state`;
     return {
       async getState() {
         const response = await request({
@@ -149,7 +148,7 @@
       async getHistory() {
         const response = await request({
           method: "GET",
-          url: documentKey == null ? `${base}/state/history` : `${base}/state/history?document=${encodeURIComponent(documentKey)}`,
+          url: `${base}/state/history`,
           headers,
           timeout: timeoutMs
         });
@@ -163,7 +162,7 @@
       async getRevision(revision) {
         const response = await request({
           method: "GET",
-          url: documentKey == null ? `${base}/state/history/${encodeURIComponent(revision)}` : `${base}/state/history/${encodeURIComponent(revision)}?document=${encodeURIComponent(documentKey)}`,
+          url: `${base}/state/history/${encodeURIComponent(revision)}`,
           headers,
           timeout: timeoutMs
         });
@@ -186,7 +185,7 @@
       async restoreRevision(baseRevision, revision) {
         const response = await request({
           method: "POST",
-          url: documentKey == null ? `${base}/state/restore` : `${base}/state/restore?document=${encodeURIComponent(documentKey)}`,
+          url: `${base}/state/restore`,
           headers,
           timeout: timeoutMs,
           data: JSON.stringify({ baseRevision, revision })
@@ -2251,7 +2250,6 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   var NEW_BACKUP_PREFIX = `${NEW_PREFIX}backup.`;
   var OLD_INDEX_KEY = `${OLD_PREFIX}backups`;
   var NEW_INDEX_KEY = `${NEW_PREFIX}backups`;
-  var OLD_ENDPOINT_KEY = `${OLD_PREFIX}endpoint`;
   var NEW_ENDPOINT_KEY = `${NEW_PREFIX}endpoint`;
   var read = async (key) => GM.getValue(key, null);
   async function moveKey(oldKey, newKey) {

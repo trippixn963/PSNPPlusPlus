@@ -62,7 +62,6 @@ const OLD_BACKUP_PREFIX = `${OLD_PREFIX}backup.`;
 const NEW_BACKUP_PREFIX = `${NEW_PREFIX}backup.`;
 const OLD_INDEX_KEY = `${OLD_PREFIX}backups`;
 const NEW_INDEX_KEY = `${NEW_PREFIX}backups`;
-const OLD_ENDPOINT_KEY = `${OLD_PREFIX}endpoint`;
 const NEW_ENDPOINT_KEY = `${NEW_PREFIX}endpoint`;
 
 /**
@@ -164,8 +163,3 @@ export async function migrateGmStorage() {
   const endpointRewritten = await rewriteDefaultEndpoint();
   return { keys, blobs, endpointRewritten };
 }
-
-export const MIGRATION_KEYS = {
-  OLD_ENDPOINT_KEY, NEW_ENDPOINT_KEY, OLD_INDEX_KEY, NEW_INDEX_KEY,
-  OLD_BACKUP_PREFIX, NEW_BACKUP_PREFIX, OLD_PREFIX, NEW_PREFIX
-};

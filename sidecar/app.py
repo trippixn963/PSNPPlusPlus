@@ -5,11 +5,14 @@ PSNP++ - Sync Sidecar
 PSNP++ sync sidecar — a keyed multi-document store with per-document revision
 history.
 
-Stores a small, fixed set of JSON documents (today: `lists`, one user's PSNP+
-game lists, and `settings`, that user's PSNP+ preferences) behind a shared
-secret. Concurrency is handled optimistically per document: a client sends the
-revision its edit was based on, and a mismatch returns 409 with the server's
-current copy of THAT document so the client can re-merge.
+Stores JSON documents from a closed allowlist behind a shared secret.
+**Production serves exactly one: `lists`, one user's PSNP+ game lists.** The
+store is written to hold several and still is — see EMPTY_DOCUMENTS for why the
+other three were dropped rather than left registered — but nothing should read
+this header as saying more than one is served today. Concurrency is handled
+optimistically per document: a client sends the revision its edit was based on,
+and a mismatch returns 409 with the server's current copy of THAT document so
+the client can re-merge.
 
 Every accepted write also appends the new state to a history table, capped at
 HISTORY_LIMIT revisions per document and pruned oldest-first inside the same

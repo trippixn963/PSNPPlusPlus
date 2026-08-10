@@ -45,10 +45,7 @@ const EXPORTS = [
   { name: 'icon-256.png', size: 256, shape: 'squircle' },
   { name: 'icon-128.png', size: 128, shape: 'squircle' },
   { name: 'icon-64.png', size: 64, shape: 'squircle' },
-  { name: 'icon-discord-512.png', size: 512, shape: 'circle' },
-  // Small round exports for the in-page chip, which embeds one as a data URI.
-  { name: 'icon-round-40.png', size: 40, shape: 'circle' },
-  { name: 'icon-round-48.png', size: 48, shape: 'circle' }
+  { name: 'icon-discord-512.png', size: 512, shape: 'circle' }
 ];
 
 const browser = await chromium.launch();

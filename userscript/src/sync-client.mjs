@@ -44,27 +44,23 @@ function assertDocVersion(doc) {
 }
 
 /**
- * A client for one sidecar document.
+ * A client for the sidecar's `lists` document.
  *
- * `documentKey` selects which document this client speaks for. Omitting it
- * builds the URL exactly as this client always has — no query string at all —
- * because the sidecar reads an absent `document` as `lists`, and the lists path
- * must keep sending byte-identical requests. A named key adds
- * `?document=<key>`, which is the only difference between the two clients.
- *
- * The document is fixed per client rather than passed per call on purpose: a
- * caller that could name the document on each request could pull `lists` and
- * push it back over `settings`, which is precisely the mix-up the sidecar's
- * closed allowlist and this project's separate paths exist to make impossible.
+ * Every URL here is built without a `?document=` query string, which the
+ * sidecar reads as `lists`. This client used to take a `documentKey` to name a
+ * second document, but production has served exactly one since `settings`,
+ * `progress` and `compare` went with the features that wrote them, and nothing
+ * ever passed it. The sidecar keeps its multi-document machinery — that side is
+ * still exercised, against a document the tests register for their own
+ * duration — so re-adding a key here is a small change if a second document
+ * ever comes back.
  */
 export function createSyncClient({
-  endpoint, key, request = gmRequest, timeoutMs = 15000, documentKey = null
+  endpoint, key, request = gmRequest, timeoutMs = 15000
 }) {
   const base = String(endpoint).replace(/\/+$/, '');
   const headers = { 'X-Sync-Key': key, 'Content-Type': 'application/json' };
-  const url = documentKey == null
-    ? `${base}/state`
-    : `${base}/state?document=${encodeURIComponent(documentKey)}`;
+  const url = `${base}/state`;
 
   return {
     async getState() {
@@ -89,9 +85,7 @@ export function createSyncClient({
     async getHistory() {
       const response = await request({
         method: 'GET',
-        url: documentKey == null
-          ? `${base}/state/history`
-          : `${base}/state/history?document=${encodeURIComponent(documentKey)}`,
+        url: `${base}/state/history`,
         headers,
         timeout: timeoutMs
       });
@@ -106,9 +100,7 @@ export function createSyncClient({
     async getRevision(revision) {
       const response = await request({
         method: 'GET',
-        url: documentKey == null
-          ? `${base}/state/history/${encodeURIComponent(revision)}`
-          : `${base}/state/history/${encodeURIComponent(revision)}?document=${encodeURIComponent(documentKey)}`,
+        url: `${base}/state/history/${encodeURIComponent(revision)}`,
         headers,
         timeout: timeoutMs
       });
@@ -132,9 +124,7 @@ export function createSyncClient({
     async restoreRevision(baseRevision, revision) {
       const response = await request({
         method: 'POST',
-        url: documentKey == null
-          ? `${base}/state/restore`
-          : `${base}/state/restore?document=${encodeURIComponent(documentKey)}`,
+        url: `${base}/state/restore`,
         headers,
         timeout: timeoutMs,
         data: JSON.stringify({ baseRevision, revision })
