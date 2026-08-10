@@ -515,16 +515,18 @@ export async function runSyncCycle({
       // post-deletion state and restoring it would bring nothing back. There
       // the useful snapshot is what this device last settled on, which the
       // cycle is holding as `workingBase` and would otherwise discard.
+      //
+      // What is injected here is saveDailyBackup (see main.mjs), so this is at
+      // most one snapshot per Eastern day rather than one per write. The slot
+      // arithmetic this comment used to do no longer applies: a call on a day
+      // already snapshotted costs nothing, and a retry can no longer spend a
+      // second slot on the same cycle. The per-write safety net is now the
+      // server's revision history, which records every write and sits beside
+      // these in the panel.
       await saveBackup(deletedLocally ? fromDoc(workingBase) : currentLists);
-      // saveBackup is an await too, so re-check before the one and only write.
-      // A write landing inside that window still costs one of the 5 backup
-      // slots for a write that never happens. That residual cost is
-      // irreducible without breaking something worse: the backup has to
-      // precede the write, and the write has to be the last thing after the
-      // last await. It is also mild — the slot holds a genuine snapshot of
-      // genuine data, so at most it displaces an older snapshot. A retry can
-      // now spend a second slot on the same cycle; still genuine snapshots,
-      // and still bounded by maxAttempts.
+      // The backup is an await too, so re-check before the one and only write:
+      // the backup has to precede the write, and the write has to be the last
+      // thing after the last await.
       if (storage.getItem(LISTS_KEY) !== snapshot.raw) {
         if (pushed && attempt < maxAttempts) continue;
         return { status: 'synced', revision: settledRevision, changed: false, delta: zeroDelta() };

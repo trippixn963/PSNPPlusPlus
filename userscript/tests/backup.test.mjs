@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { saveBackup, listBackups, restoreBackup, MAX_BACKUPS } from '../src/backup.mjs';
+import {
+  saveBackup, saveDailyBackup, listBackups, restoreBackup, easternDay, MAX_BACKUPS
+} from '../src/backup.mjs';
 
 /** A fake GM.* backed by a Map, so backup.mjs can be exercised in node. */
 function installFakeGM() {
@@ -146,6 +148,80 @@ test('without protection the cap is still enforced exactly', async () => {
     const index = await listBackups();
     assert.equal(index.length, MAX_BACKUPS);
     assert.equal(store.has(ids[0]), false, 'evicted values are deleted, not orphaned');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// One snapshot per Eastern day
+// ---------------------------------------------------------------------------
+
+// Deliberately expressed as UTC instants, because the whole point is that the
+// Eastern DAY and the UTC day disagree for five hours out of every twenty-four.
+const AUG10_8PM_ET = Date.parse('2026-08-11T00:00:00Z');  // Aug 10, 20:00 EDT
+const AUG10_11PM_ET = Date.parse('2026-08-11T03:30:00Z'); // Aug 10, 23:30 EDT
+const AUG11_12AM_ET = Date.parse('2026-08-11T04:30:00Z'); // Aug 11, 00:30 EDT
+
+test('the Eastern day is the Eastern day, not the UTC day', () => {
+  // 8pm Eastern is already tomorrow in UTC. Keying off UTC would roll the day
+  // over at 8pm local and take a second "daily" backup the same evening.
+  assert.equal(easternDay(AUG10_8PM_ET), '2026-08-10');
+  assert.equal(new Date(AUG10_8PM_ET).toISOString().slice(0, 10), '2026-08-11',
+    'the fixture really does straddle the UTC boundary');
+});
+
+test('the Eastern day follows DST, not a fixed offset', () => {
+  // 23:30 EST in January is 04:30Z the next day; a hardcoded -4 would call the
+  // January one the 16th and roll the day over half an hour early all winter.
+  assert.equal(easternDay(Date.parse('2026-01-16T04:30:00Z')), '2026-01-15');
+  assert.equal(easternDay(Date.parse('2026-07-16T04:30:00Z')), '2026-07-16');
+});
+
+test('a second sync on the same Eastern day does not take another backup', async () => {
+  installFakeGM();
+  try {
+    assert.notEqual(await saveDailyBackup([{ id: 'a' }], AUG10_8PM_ET), null, 'the first one saves');
+    assert.equal(await saveDailyBackup([{ id: 'b' }], AUG10_11PM_ET), null, 'the second is skipped');
+    assert.equal((await listBackups()).length, 1);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('crossing midnight Eastern takes the new day\'s backup', async () => {
+  installFakeGM();
+  try {
+    await saveDailyBackup([{ id: 'a' }], AUG10_11PM_ET);
+    assert.notEqual(await saveDailyBackup([{ id: 'b' }], AUG11_12AM_ET), null, 'one hour later, new day');
+    assert.equal((await listBackups()).length, 2);
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('daily backups still evict the oldest at the cap', async () => {
+  const store = installFakeGM();
+  try {
+    const day = n => Date.parse(`2026-08-${String(n).padStart(2, '0')}T16:00:00Z`);
+    const ids = [];
+    for (let d = 1; d <= MAX_BACKUPS + 1; d++) ids.push(await saveDailyBackup([{ id: `l${d}` }], day(d)));
+    const index = await listBackups();
+    assert.equal(index.length, MAX_BACKUPS);
+    assert.equal(store.has(ids[0]), false, 'the oldest day is deleted, not orphaned');
+  } finally {
+    uninstallFakeGM();
+  }
+});
+
+test('a backup holds every list in one entry', async () => {
+  installFakeGM();
+  try {
+    const lists = [{ id: 'a', games: [1] }, { id: 'b', games: [2] }, { id: 'c', games: [3] }];
+    const id = await saveDailyBackup(lists, AUG10_8PM_ET);
+    assert.deepEqual(await restoreBackup(id), lists, 'restoring returns all three together');
+    assert.equal((await listBackups())[0].listCount, 3, 'and the row counts all three');
   } finally {
     uninstallFakeGM();
   }

@@ -19,7 +19,7 @@ const STARTUP_LOG_KEY = 'psnppp.lastStartupLog';
 const STARTUP_LOG_INTERVAL_MS = 6 * 60 * 60 * 1000;
 import { createSyncClient, gmRequest } from './sync-client.mjs';
 import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT } from './config.mjs';
-import { saveBackup, listBackups, restoreBackup } from './backup.mjs';
+import { saveBackup, saveDailyBackup, listBackups, restoreBackup } from './backup.mjs';
 import { recordSync, listSyncHistory } from './history.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
@@ -878,7 +878,12 @@ export async function start() {
       const client = createSyncClient({ ...config, request: gmRequest });
       const result = await runSyncCycle({
         storage: window.localStorage,
-        client, loadBase, saveBase, saveBackup, confirmAdoptions,
+        client, loadBase, saveBase, confirmAdoptions,
+        // Daily, not per-write. The two restore paths above still call
+        // saveBackup directly and unconditionally: those snapshots exist so a
+        // restore can itself be undone, which has nothing to do with how often
+        // a routine backup is taken.
+        saveBackup: saveDailyBackup,
         now: Date.now()
       });
       const { state, detail } = describeSyncResult(result);
