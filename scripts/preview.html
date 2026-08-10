@@ -1,6 +1,11 @@
 <!doctype html><meta charset="utf-8">
-<style>html,body{margin:0;background:#0e1012;padding:24px;font-family:system-ui}
- .col{display:flex;gap:28px;align-items:flex-start}
+<style>html,body{margin:0;background:#0e1012;font-family:system-ui}
+ /* The padding and background live on .col, not body: preview.mjs screenshots
+    THIS element so the shot is cropped to the content, and an element shot
+    captures only the element's own box — padding here is what keeps the result
+    from being flush against the chips on every side. inline-flex so it shrinks
+    to fit rather than stretching to the viewport it is measured in. */
+ .col{display:inline-flex;gap:36px;align-items:flex-start;background:#0e1012;padding:40px}
  .stack{display:flex;flex-direction:column;gap:12px;align-items:flex-start}</style>
 <div class="col"><div class="stack" id="chips"></div><div id="panelhost"></div></div>
 <script type="module">
@@ -25,12 +30,17 @@
     chips.appendChild(el);
   }
 
+  // Read the real version rather than restating it. A hardcoded string here goes
+  // stale on the next release and the preview then advertises a version that was
+  // never shipped — which it did, sitting at 2.3.26 well past it.
+  const version = await fetch('/package.json').then(r => r.json()).then(p => p.version);
+
   const panel = createSettingsPanel({
     config: { endpoint: 'https://trippixn.com/api/psnppp', key: 'stored' },
     backups: [{ at: Date.now() - 3600e3 }],
     history: [{ at: Date.now() - 120e3, revision: 93, delta: { gamesRemoved: 1 } }],
     describeDelta: () => '-1 game',
-    version: '2.3.26',
+    version,
     serverHistory: [
       { revision: 99, updatedAt: Date.now() - 3600e3, size: 4339 },
       { revision: 98, updatedAt: Date.now() - 4000e3, size: 3790 },

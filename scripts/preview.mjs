@@ -29,10 +29,25 @@ if (!out) {
 }
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 380, height: 640 }, deviceScaleFactor: 3 });
+// Generous viewport, then shoot the CONTENT and let it decide the bounds. A
+// fixed one was 380 wide and silently cropped the panel off the right edge —
+// every preview taken with it was of a half-panel, which is exactly the kind of
+// thing a preview exists to reveal rather than commit.
+//
+// reducedMotion because the chip's `.psnppp-sheen` is a 0.52s one-shot sweep and
+// a screenshot lands mid-flight. Worse here than in the page: preview.html pins
+// the chip to `position: static` so several can be laid out, which removes the
+// containing block the sheen is absolutely positioned against — it then sizes
+// itself to the whole page and washes a grey diagonal across the panel. Rather
+// than time the shot, this takes the `prefers-reduced-motion` branch the sheet
+// already defines, which sets the sweep to `animation: none`.
+const page = await browser.newPage({
+  viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 3, reducedMotion: 'reduce'
+});
 page.on('pageerror', e => console.log('  pageerror:', e.message));
 await page.goto('http://127.0.0.1:8777/scripts/preview.html');
 await page.waitForFunction(() => window.__ready === true, { timeout: 5000 });
-await page.screenshot({ path: out });
+const content = await page.$('.col');
+await (content ?? page).screenshot({ path: out });
 await browser.close();
 console.log('rendered');
