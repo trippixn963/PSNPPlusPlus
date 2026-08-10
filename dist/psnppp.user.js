@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.29
+// @version      2.3.30
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -109,6 +109,7 @@
       throw new Error(`Malformed response body (HTTP ${response.status}): ${snippet}`);
     }
   }
+  var HISTORY_PAGE = 5;
   function assertDocVersion(doc) {
     if (doc == null || doc.version !== DOC_VERSION) {
       throw new Error(`Unsupported document version: ${doc?.version}`);
@@ -144,11 +145,17 @@
        * Metadata only — revision, when, and size. Fetching 40 full documents to
        * draw a list would be tens of thousands of bytes to render three columns.
        * The one being restored is fetched separately, and only when asked for.
+       *
+       * `limit` is sent rather than left to the server's default, which is its
+       * full retention of 100. The panel renders every row it is handed, so the
+       * default turned the Backups tab into a hundred-row scroll — the server
+       * keeps that depth as the safety net, but nobody scrolls to r7 to undo
+       * something from ten minutes ago.
        */
-      async getHistory() {
+      async getHistory(limit = HISTORY_PAGE) {
         const response = await request({
           method: "GET",
-          url: `${base}/state/history`,
+          url: `${base}/state/history?limit=${encodeURIComponent(limit)}`,
           headers,
           timeout: timeoutMs
         });
@@ -303,23 +310,30 @@
   // userscript/src/backup.mjs
   var INDEX_KEY = "psnppp.backups";
   var MAX_BACKUPS = 3;
+  async function pruneTo(index) {
+    const keep = [];
+    const dropped = [];
+    for (const [position, entry] of index.entries()) {
+      if (position < MAX_BACKUPS || entry.protected) keep.push(entry);
+      else dropped.push(entry);
+    }
+    if (dropped.length > 0) {
+      for (const entry of dropped) await GM.deleteValue(entry.id);
+      await GM.setValue(INDEX_KEY, keep);
+    }
+    return keep;
+  }
   async function saveBackup(lists, now = Date.now(), { protect = null } = {}) {
     const index = await GM.getValue(INDEX_KEY, []);
     const id = `psnppp.backup.${now}`;
     await GM.setValue(id, JSON.stringify(lists));
-    const next = [{ id, at: now, listCount: lists.length }, ...index];
-    const keep = [];
-    const dropped = [];
-    for (const [position, entry] of next.entries()) {
-      if (position < MAX_BACKUPS || entry.id === protect) keep.push(entry);
-      else dropped.push(entry);
-    }
-    for (const entry of dropped) await GM.deleteValue(entry.id);
-    await GM.setValue(INDEX_KEY, keep);
+    const next = [{ id, at: now, listCount: lists.length }, ...index].map((entry) => entry.id === protect ? { ...entry, protected: true } : { ...entry, protected: void 0 });
+    const keep = await pruneTo(next);
+    if (keep.length === next.length) await GM.setValue(INDEX_KEY, keep);
     return id;
   }
   async function listBackups() {
-    return GM.getValue(INDEX_KEY, []);
+    return pruneTo(await GM.getValue(INDEX_KEY, []));
   }
   async function restoreBackup(id) {
     const raw = await GM.getValue(id, null);
