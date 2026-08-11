@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSyncClient, HISTORY_PAGE } from '../src/sync-client.mjs';
+import { createSyncClient } from '../src/sync-client.mjs';
 
 const okDoc = { version: 1, lists: {} };
 
@@ -88,90 +88,11 @@ test('a wrong doc version rejects rather than returning it', async () => {
  * nothing for two weeks. The client half is new; these pin its contract.
  */
 
-test('getHistory returns the revision list, newest first as the server sends it', async () => {
-  const calls = [];
-  const client = createSyncClient({
-    endpoint: 'https://e.test/api/psnppp', key: 'k',
-    request: async opts => {
-      calls.push(opts);
-      return { status: 200, responseText: JSON.stringify({
-        revisions: [{ revision: 9, updatedAt: 200, size: 20 }, { revision: 8, updatedAt: 100, size: 10 }]
-      }) };
-    }
-  });
-  const history = await client.getHistory();
-  // The limit is sent explicitly. Leaving it off gets the server's default,
-  // which is its full retention of 100 -- and the panel renders every row it is
-  // handed, so the omission is what turned the Backups tab into a long scroll.
-  assert.equal(calls[0].url, `https://e.test/api/psnppp/state/history?limit=${HISTORY_PAGE}`);
-  assert.equal(calls[0].method, 'GET');
-  assert.deepEqual(history.map(r => r.revision), [9, 8]);
-});
-
-test('getHistory sends a caller-chosen limit when given one', async () => {
-  const calls = [];
-  const client = createSyncClient({
-    endpoint: 'https://e.test/api/psnppp', key: 'k',
-    request: async opts => {
-      calls.push(opts);
-      return { status: 200, responseText: JSON.stringify({ revisions: [] }) };
-    }
-  });
-  await client.getHistory(2);
-  assert.equal(calls[0].url, 'https://e.test/api/psnppp/state/history?limit=2');
-});
-
-test('a history response without a revisions array reads as empty, not as a crash', async () => {
-  const client = createSyncClient({
-    endpoint: 'https://e.test', key: 'k',
-    request: async () => ({ status: 200, responseText: '{}' })
-  });
-  assert.deepEqual(await client.getHistory(), []);
-});
-
-test('restoreRevision carries the base revision and reports a conflict rather than forcing', async () => {
-  // A restore IS a write. If another device pushed while the panel sat open,
-  // the right answer is to lose the race and re-read — never to overwrite an
-  // edit this device has never seen.
-  const calls = [];
-  const client = createSyncClient({
-    endpoint: 'https://e.test', key: 'k',
-    request: async opts => {
-      calls.push(JSON.parse(opts.data));
-      return { status: 409, responseText: JSON.stringify({ revision: 42 }) };
-    }
-  });
-  const result = await client.restoreRevision(41, 7);
-  assert.deepEqual(calls[0], { baseRevision: 41, revision: 7 });
-  assert.equal(result.conflict, true);
-  assert.equal(result.ok, false);
-  assert.equal(result.revision, 42, 'the caller needs the revision it lost to');
-});
-
-test('a successful restore reports the NEW revision it created', async () => {
-  // History is append-only: restoring r7 over r41 produces r42 holding r7's
-  // content. Reporting 7 back would be a lie about where the document now is.
-  const client = createSyncClient({
-    endpoint: 'https://e.test', key: 'k',
-    request: async () => ({ status: 200, responseText: JSON.stringify({ revision: 42 }) })
-  });
-  assert.deepEqual(await client.restoreRevision(41, 7), { ok: true, revision: 42 });
-});
-
-test('getRevision returns null for a revision that has been pruned', async () => {
-  const client = createSyncClient({
-    endpoint: 'https://e.test', key: 'k',
-    request: async () => ({ status: 404, responseText: '{}' })
-  });
-  assert.equal(await client.getRevision(3), null);
-});
-
-test('a server error on any of them throws rather than reading as empty', async () => {
+test('a server error throws rather than reading as an empty result', async () => {
   const client = createSyncClient({
     endpoint: 'https://e.test', key: 'k',
     request: async () => ({ status: 500, responseText: '{}' })
   });
-  await assert.rejects(() => client.getHistory(), /500/);
-  await assert.rejects(() => client.restoreRevision(1, 1), /500/);
-  await assert.rejects(() => client.getRevision(1), /500/);
+  await assert.rejects(() => client.getState(), /500/);
+  await assert.rejects(() => client.putState(1, { version: 1, lists: {} }), /500/);
 });

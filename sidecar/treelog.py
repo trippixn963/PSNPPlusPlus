@@ -57,11 +57,12 @@ TRUNCATE_SUFFIX = "\n… [truncated]"
 BRANCH = "├─"
 LAST = "└─"
 
-# Same set SyriaBot routes to its error webhook. Only one webhook is configured
-# here, so these do not change the destination — they are still worth naming, so
-# a future split is a config change rather than a rewrite, and so nothing
-# routine is ever logged with an alarm glyph.
-ERROR_EMOJIS = frozenset({"❌", "⚠️", "🚨", "💥"})
+# Note for a future error/routine webhook split: SyriaBot routes ❌ ⚠️ 🚨 💥 to a
+# separate error webhook, and matching that set would keep the two projects
+# consistent. Deliberately NOT a constant — only one webhook is configured here,
+# so nothing read it, and an identifier no code touches is dead weight however
+# good the intention. The convention it encodes still holds: do not log anything
+# routine with an alarm glyph.
 
 # Discord rejects the default urllib agent outright. Identify properly.
 USER_AGENT = "PSNPPP-TreeLog/1.0 (+https://github.com/trippixn963/PSNPPlusPlus)"

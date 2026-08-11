@@ -406,31 +406,6 @@ ${litTiers} {
    carries the branding, where there is room for it. */
 
 
-/* Separates the two kinds of restore that share the Backups tab. Quiet, because
-   it is a label rather than a control — the rows under it are the substance. */
-#${PANEL_ID} .psnppp-subhead {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 12px 0 4px;
-  padding: 6px 10px 0;
-  border-top: 1px solid ${t.hairline};
-  font-family: ${TYPE.display};
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: ${t.engrave};
-}
-
-#${PANEL_ID} .psnppp-subnote {
-  font-size: 9px;
-  font-weight: 400;
-  letter-spacing: .04em;
-  text-transform: none;
-  color: ${t.quiet};
-}
-
 #${PANEL_ID} .psnppp-brand {
   display: flex;
   align-items: center;

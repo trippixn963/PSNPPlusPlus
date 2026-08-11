@@ -109,7 +109,6 @@
       throw new Error(`Malformed response body (HTTP ${response.status}): ${snippet}`);
     }
   }
-  var HISTORY_PAGE = 3;
   function assertDocVersion(doc) {
     if (doc == null || doc.version !== DOC_VERSION) {
       throw new Error(`Unsupported document version: ${doc?.version}`);
@@ -138,82 +137,6 @@
         const body = parseBody(response);
         assertDocVersion(body.doc);
         return { revision: body.revision, updatedAt: body.updatedAt, doc: body.doc };
-      },
-      /**
-       * ⚠️ getHistory, getRevision and restoreRevision have NO production caller.
-       *
-       * That is deliberate, not an oversight for the next dead-code sweep to
-       * delete. The panel used to list the server's revisions beside the local
-       * snapshots and was cut on 2026-08-10 for being twice the rows anyone
-       * wanted — but the server still records every push and still retains
-       * HISTORY_LIMIT of them, so the capability is intact and surfacing it again
-       * is a panel change, not a rebuild. They stay tested for the same reason.
-       *
-       * The server's own revision history for this document, newest first.
-       *
-       * Metadata only — revision, when, and size. Fetching the full documents to
-       * draw a list would be tens of thousands of bytes to render three columns.
-       * The one being restored is fetched separately, and only when asked for.
-       *
-       * `limit` is sent rather than left to the server's default, which is its
-       * full retention of 100. The panel renders every row it is handed, so the
-       * default turned the Backups tab into a hundred-row scroll — the server
-       * keeps that depth as the safety net, but nobody scrolls to r7 to undo
-       * something from ten minutes ago.
-       */
-      async getHistory(limit = HISTORY_PAGE) {
-        const response = await request({
-          method: "GET",
-          url: `${base}/state/history?limit=${encodeURIComponent(limit)}`,
-          headers,
-          timeout: timeoutMs
-        });
-        if (response.status !== 200) {
-          throw new Error(`Sync server returned ${response.status}`);
-        }
-        const body = parseBody(response);
-        return Array.isArray(body.revisions) ? body.revisions : [];
-      },
-      /** One past revision in full, for showing what a restore would change. */
-      async getRevision(revision) {
-        const response = await request({
-          method: "GET",
-          url: `${base}/state/history/${encodeURIComponent(revision)}`,
-          headers,
-          timeout: timeoutMs
-        });
-        if (response.status === 404) return null;
-        if (response.status !== 200) {
-          throw new Error(`Sync server returned ${response.status}`);
-        }
-        const body = parseBody(response);
-        assertDocVersion(body.doc);
-        return { revision: body.revision, updatedAt: body.updatedAt, doc: body.doc };
-      },
-      /**
-       * Make a past revision current again, as a NEW revision.
-       *
-       * Carries `baseRevision` and reports a 409 the same way putState does, and
-       * for the same reason: a restore IS a write. Undoing while another device
-       * is mid-push must lose the race and re-read rather than silently
-       * overwrite an edit this device never saw.
-       */
-      async restoreRevision(baseRevision, revision) {
-        const response = await request({
-          method: "POST",
-          url: `${base}/state/restore`,
-          headers,
-          timeout: timeoutMs,
-          data: JSON.stringify({ baseRevision, revision })
-        });
-        if (response.status === 409) {
-          const body = parseBody(response);
-          return { ok: false, conflict: true, revision: body.revision };
-        }
-        if (response.status !== 200) {
-          throw new Error(`Sync server returned ${response.status}`);
-        }
-        return { ok: true, revision: parseBody(response).revision };
       },
       async putState(baseRevision, doc) {
         const response = await request({
@@ -785,31 +708,6 @@ ${litTiers} {
    identifies it; a logo in there read as clutter at every size tried. The panel
    carries the branding, where there is room for it. */
 
-
-/* Separates the two kinds of restore that share the Backups tab. Quiet, because
-   it is a label rather than a control \u2014 the rows under it are the substance. */
-#${PANEL_ID} .psnppp-subhead {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 12px 0 4px;
-  padding: 6px 10px 0;
-  border-top: 1px solid ${t.hairline};
-  font-family: ${TYPE.display};
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: ${t.engrave};
-}
-
-#${PANEL_ID} .psnppp-subnote {
-  font-size: 9px;
-  font-weight: 400;
-  letter-spacing: .04em;
-  text-transform: none;
-  color: ${t.quiet};
-}
 
 #${PANEL_ID} .psnppp-brand {
   display: flex;

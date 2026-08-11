@@ -27,7 +27,7 @@ import { runSyncCycle } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
 import { checkPsnpPlusCompat, describeIncompatibility, readPsnpPlusVersion } from './compat.mjs';
-import { emptyDoc, fromDoc } from './doc.mjs';
+import { emptyDoc } from './doc.mjs';
 import { installStorageGuard, describeStorageFailure } from './storage-guard.mjs';
 
 const BASE_KEY = 'psnppp.base';
