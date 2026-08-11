@@ -57,12 +57,23 @@ TRUNCATE_SUFFIX = "\n… [truncated]"
 BRANCH = "├─"
 LAST = "└─"
 
-# Note for a future error/routine webhook split: SyriaBot routes ❌ ⚠️ 🚨 💥 to a
-# separate error webhook, and matching that set would keep the two projects
-# consistent. Deliberately NOT a constant — only one webhook is configured here,
-# so nothing read it, and an identifier no code touches is dead weight however
-# good the intention. The convention it encodes still holds: do not log anything
-# routine with an alarm glyph.
+# The glyphs that mark a tree as a fault. Same set SyriaBot routes to its error
+# webhook, so the two projects agree on what counts as one.
+#
+# Only one webhook is configured here, so these do not pick a destination — they
+# decide what SURVIVES an overflowing queue (see trim_queue). Do not log anything
+# routine with one of these: it would win a slot from a real fault.
+ERROR_EMOJIS = frozenset({"❌", "⚠️", "🚨", "💥"})
+
+
+def is_fault(tree: str) -> bool:
+    """Does this rendered tree carry a fault glyph?
+
+    render_tree writes the emoji as the first token of the first line, so the
+    queue can classify an already-rendered tree without keeping a parallel list
+    of metadata that could fall out of step with it.
+    """
+    return any(tree.startswith(emoji) for emoji in ERROR_EMOJIS)
 
 # Discord rejects the default urllib agent outright. Identify properly.
 USER_AGENT = "PSNPPP-TreeLog/1.0 (+https://github.com/trippixn963/PSNPPlusPlus)"
@@ -116,17 +127,48 @@ def pack_batch(pending: list[str], max_chars: int = BATCH_CHARS) -> list[str]:
 
 
 def trim_queue(pending: list[str]) -> int:
-    """Drop the MIDDLE of an overflowing queue, keeping the head and tail.
+    """Drop the MIDDLE of an overflowing queue, keeping faults, head and tail.
 
     Returns how many were dropped. The head says what started it and the tail
-    says where it ended up; the middle is repetition of the same fault.
+    says where it ended up; the middle is usually repetition of the same fault.
+
+    ⚠️ Faults are kept wherever they sit. Dropping a plain middle slice threw
+    away errors while keeping routine trees either side of them — the exact
+    inversion of what a log is for, and invisible when it happened because the
+    dropped count says how many, never which. Anything render_tree stamped with
+    an ERROR_EMOJIS glyph now survives ahead of routine traffic.
+
+    Still bounded. Faults cannot grow the queue past QUEUE_KEEP: a burst that is
+    ALL faults falls back to the same head-and-tail shape, which is the right
+    answer there too, because at that point the middle really is repetition.
     """
     if len(pending) <= QUEUE_MAX:
         return 0
-    dropped = len(pending) - QUEUE_KEEP
+    before = len(pending)
     tail = QUEUE_KEEP - QUEUE_HEAD
-    pending[:] = pending[:QUEUE_HEAD] + pending[len(pending) - tail :]
-    return dropped
+
+    faults = [index for index, tree in enumerate(pending) if is_fault(tree)]
+
+    if len(faults) >= QUEUE_KEEP:
+        # Nothing routine can be kept, so apply the same head-and-tail shape to
+        # the faults themselves. This is the case where the middle genuinely is
+        # repetition of one problem.
+        keep = faults[:QUEUE_HEAD] + faults[-tail:]
+    else:
+        # Faults are not negotiable; the budget left over goes to routine trees,
+        # head first and then tail. Spend it on ROUTINE indices specifically —
+        # taking the head of the whole queue instead double-counts any fault
+        # already sitting there and silently buys fewer routine slots than it
+        # looks like, which is how the first attempt at this dropped the very
+        # fault it was written to keep.
+        routine = [index for index in range(before) if index not in set(faults)]
+        budget = QUEUE_KEEP - len(faults)
+        head = routine[: min(QUEUE_HEAD, budget)]
+        rest = budget - len(head)
+        keep = sorted(set(faults) | set(head) | set(routine[-rest:] if rest else []))
+
+    pending[:] = [pending[index] for index in keep]
+    return before - len(pending)
 
 
 class Circuit:

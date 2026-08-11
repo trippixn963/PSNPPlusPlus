@@ -155,3 +155,52 @@ def test_the_request_identifies_itself() -> None:
         ur.urlopen = real
     agent = seen["req"].get_header("User-agent")
     assert agent and "python-urllib" not in agent.lower()
+
+
+# ---------------------------------------------------------------------------
+# An overflowing queue must not throw away the errors
+# ---------------------------------------------------------------------------
+
+def test_a_fault_in_the_middle_survives_the_trim():
+    """The bug this replaced: the middle was dropped wholesale.
+
+    A burst of routine traffic around one error meant the error sat in the
+    middle and was discarded, while the routine trees either side of it were
+    kept -- the exact inversion of what the log exists for, and invisible when
+    it happened, because the dropped count says how many and never which.
+    """
+    pending = [f"📦 Routine {n}" for n in range(60)]
+    pending[30] = "❌ Sync Failed"
+
+    dropped = treelog.trim_queue(pending)
+
+    assert "❌ Sync Failed" in pending, "the fault survived"
+    assert len(pending) <= treelog.QUEUE_KEEP, "and the queue is still bounded"
+    assert dropped == 60 - len(pending)
+    assert "📦 Routine 30" not in pending, "a routine tree in that slot would not have"
+
+
+def test_every_fault_glyph_counts_and_routine_ones_do_not():
+    for emoji in ("❌", "⚠️", "🚨", "💥"):
+        assert treelog.is_fault(f"{emoji} Something Broke"), emoji
+    for emoji in ("📦", "🔄", "➕", "➖", "📋", "📥", "🆙"):
+        assert not treelog.is_fault(f"{emoji} Routine Event"), emoji
+
+
+def test_faults_cannot_grow_the_queue_past_the_cap():
+    # All faults is the one case where the middle really is repetition, so it
+    # falls back to head-and-tail rather than keeping everything.
+    pending = [f"❌ Failure {n}" for n in range(60)]
+
+    dropped = treelog.trim_queue(pending)
+
+    assert len(pending) == treelog.QUEUE_KEEP
+    assert dropped == 60 - treelog.QUEUE_KEEP
+    assert pending[0] == "❌ Failure 0", "the head still explains what started it"
+    assert pending[-1] == "❌ Failure 59", "and the tail still shows where it got to"
+
+
+def test_a_queue_under_the_cap_is_left_alone_faults_or_not():
+    pending = ["❌ Failure", "📦 Routine"]
+    assert treelog.trim_queue(pending) == 0
+    assert pending == ["❌ Failure", "📦 Routine"]
