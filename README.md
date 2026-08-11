@@ -21,14 +21,19 @@ It is a **companion** to PSNP+, not a replacement. Install both, and PSNP+ keeps
 itself from HusKyCode as normal.
 
 <div align="center">
-<img src="assets/preview.png" alt="The status chip in each of its states, beside the settings panel showing local backups and server history" width="820">
+<img src="assets/preview.png" alt="The status chip in each of its states, beside the settings panel showing three daily backups with restore buttons" width="820">
 <br>
 <sub>The status chip in each of its states, and the panel it opens — rendered from the real modules. <a href="#regenerating-the-icon-and-preview">Regenerate</a>.</sub>
 </div>
 
 Everything lives behind one chip in the corner of any psnprofiles.com page. It tells you the
-sync state at a glance, left-click syncs, right-click opens the panel — local backups, server
-history from every device, and a one-click restore of either.
+sync state at a glance, left-click syncs, and right-click opens the panel: your sync key and
+endpoint, and the last three daily backups with a one-click restore.
+
+A backup is one snapshot of **all** your lists, taken once per day before the first merge that
+writes — and always before any merge that would remove something, because that is the case a
+cap must never ration. Restoring rewrites this browser and reloads the page. The server keeps
+its own revision of every push behind that, which is what makes a second device recoverable.
 
 > [!IMPORTANT]
 > **No support.** This is published because the code may be useful to read, not because it
