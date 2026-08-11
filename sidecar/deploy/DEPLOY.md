@@ -99,9 +99,19 @@ keyed request returned 500.
 
 ## The publish guard
 
-`psnppp-guard.timer` runs `psnppp-guard.sh` every 15 minutes. It compares what
-the URL actually serves against a pristine copy of the last release and restores
-the files if they are missing or wrong.
+`psnppp-guard.timer` runs `psnppp-guard.sh` every 15 minutes. It checks three
+things and asserts response **bodies** for all of them, never status codes:
+
+1. The files on disk match the pristine copy of the last release.
+2. The URLs actually serve them — restoring if they are missing or wrong.
+3. The **sync API answers** `/api/psnppp/health` with `{"status":"ok"}`.
+
+The third is not decoration. The first two pass with the sidecar completely
+dead: the artifacts are static files, and nginx keeps serving them whatever
+happened to uvicorn. Without it, stopping the service left the guard reporting
+success while syncing was down, and the only signal anywhere was a chip going
+Offline in a browser. It never tries to *repair* the API — copying files cannot
+restart a service — it reports, and the alert below carries it.
 
 It exists because the install URL is the project's single point of failure *and*
 it fails invisibly: a broken publish is indistinguishable from a healthy one
@@ -111,6 +121,10 @@ from every client, so nothing would ever tell you.
 |---|---|
 | `psnppp-guard.sh` | `/usr/local/sbin/psnppp-guard` |
 | `psnppp-guard.{service,timer}` | `/etc/systemd/system/` |
+| `psnppp-alert.sh` | `/usr/local/sbin/psnppp-alert` |
+| `psnppp-guard-alert.service` | `/etc/systemd/system/` — `OnFailure=` on the guard |
+| `psnppp-sidecar-alert.service` | `/etc/systemd/system/` — `OnFailure=` on the sidecar |
+| Webhook | `/etc/psnppp/alert.env`, mode 600 — see `alert.env.example` |
 | Pristine copy | `/var/lib/psnppp/published/` — refreshed by every release |
 
 Keep both the script and the pristine copy **outside any path the sync service
@@ -126,7 +140,30 @@ Enable the timer only after a release has populated the pristine directory.
 Until that exists the guard exits non-zero by design: it refuses to verify
 against something it does not have.
 
-Two things it deliberately will not do:
+### Two alerts, because there are two ways to go quiet
+
+`OnFailure=` on **psnppp-guard.service** covers a bad publish, and `OnFailure=`
+on **psnppp.service** covers the sidecar. The second is not redundant: the
+service sets `Restart=always`, which handles a crash, but systemd stops trying
+after `StartLimitBurst` failures and the unit then sits in `failed` saying
+nothing. That is the state nobody notices.
+
+> `OnFailure=` **must be in `[Unit]`.** In `[Service]` systemd parses it, warns
+> to the journal, and ignores it — the alert never fires and nothing running
+> says why. Run `systemd-analyze verify` after editing either unit, and confirm
+> with `systemctl show psnppp.service -p OnFailure`.
+
+If the live unit differs from the template here (a different path or user), add
+the line with a drop-in rather than editing the shipped file:
+
+```bash
+mkdir -p /etc/systemd/system/psnppp.service.d
+printf '[Unit]\nOnFailure=psnppp-sidecar-alert.service\n' \
+  > /etc/systemd/system/psnppp.service.d/alert.conf
+systemctl daemon-reload
+```
+
+Two things the guard deliberately will not do:
 
 - **Restore over a newer live version.** That is a rollback, not a repair, and
   it is reachable whenever someone publishes by hand without refreshing the

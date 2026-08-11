@@ -39,6 +39,11 @@ WEBROOT="/var/www/psnppp"
 BASE_URL="https://trippixn.com"
 FILES=(psnppp.user.js psnppp.meta.js)
 CURL_TIMEOUT=20
+# The sidecar's own liveness probe. Unauthenticated by design, so the guard
+# needs no copy of the sync key to ask.
+HEALTH_PATH="/api/psnppp/health"
+HEALTH_EXPECT='"status":"ok"'
+
 STATE_DIR="/var/lib/psnppp"
 
 # journald reads a leading <N> as a syslog priority, so a healthy run can be
@@ -125,6 +130,11 @@ unreachable=0
 curl_err="$(mktemp)"
 trap 'rm -f "$curl_err"' EXIT
 
+# curl APPENDS a line per attempt, and --retry 2 means three of them, so reading
+# the whole file put "...error: 502error: 502error: 502" in the alert. The last
+# line is the outcome; the earlier ones are the same failure being retried.
+curl_reason() { tail -1 "$curl_err" | tr -d '\n'; }
+
 for f in "${FILES[@]}"; do
   rc=0
   # `|| rc=$?`, not `if ! body=$(...)` — `!` resets $? and the exit code is lost.
@@ -137,10 +147,10 @@ for f in "${FILES[@]}"; do
     # operator opens: 22 is an HTTP error (the publish), anything else is this
     # box's network, DNS, or TLS (not the publish).
     if [ "$rc" -eq 22 ]; then
-      warn "BROKEN: GET $BASE_URL/$f — $(tr -d '\n' < "$curl_err")"
+      warn "BROKEN: GET $BASE_URL/$f — $(curl_reason)"
       serving_ok=0
     else
-      warn "UNREACHABLE: GET $BASE_URL/$f — curl exit $rc: $(tr -d '\n' < "$curl_err"). That is this host's network/DNS/TLS, so nothing is concluded about the publish."
+      warn "UNREACHABLE: GET $BASE_URL/$f — curl exit $rc: $(curl_reason). That is this host's network/DNS/TLS, so nothing is concluded about the publish."
       unreachable=1
     fi
   elif [[ $body != "// ==UserScript=="* ]]; then
@@ -165,7 +175,35 @@ if [ "$unreachable" -eq 1 ]; then
   die "could not reach $BASE_URL from this host — network, DNS or TLS here. The files on disk are $([ "$repaired" -eq 1 ] && echo restored || echo correct); nothing was concluded about nginx."
 fi
 
-# ---- 3. a repair that keeps happening is not a repair ------------------------
+# ---- 3. the API behind those URLs ---------------------------------------------
+# The two checks above pass with the sidecar completely dead: the artifacts are
+# static files served by nginx, and they keep being served whatever happened to
+# uvicorn. That gap was real — stopping psnppp.service and running this script
+# left it reporting success while syncing was down, and the only signal anywhere
+# was the chip going Offline in a browser.
+#
+# Asserts the BODY, like everything else here. The site answers unmatched paths
+# with 200 and an SPA index, so a status code cannot tell "the API is up" from
+# "nginx no longer routes /api/psnppp/ and you are looking at the homepage" —
+# and the second is exactly what a bad nginx edit produces.
+#
+# This never repairs. Copying files cannot restart a service, and pretending
+# otherwise would just add a repair that always fails. It reports, and the
+# OnFailure alert on this unit carries it.
+rc=0
+health="$(curl -fsS --max-time "$CURL_TIMEOUT" --retry 2 --retry-delay 5 "$BASE_URL$HEALTH_PATH" 2>"$curl_err")" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -eq 22 ]; then
+    die "SIDECAR DOWN: GET $BASE_URL$HEALTH_PATH — $(curl_reason). The published files are fine; syncing is not. Check: systemctl status psnppp.service"
+  fi
+  die "could not reach $BASE_URL$HEALTH_PATH from this host — curl exit $rc: $(curl_reason). That is this host's network/DNS/TLS, so nothing is concluded about the sidecar."
+fi
+case "$health" in
+  *"$HEALTH_EXPECT"*) ;;
+  *) die "SIDECAR WRONG: $BASE_URL$HEALTH_PATH answered without $HEALTH_EXPECT — first bytes: $(printf '%.60s' "$health"). Either the app is broken or nginx stopped routing /api/psnppp/ and this is the SPA catch-all." ;;
+esac
+
+# ---- 4. a repair that keeps happening is not a repair ------------------------
 # Restoring the files every 15 minutes forever would keep the URL up while
 # quietly losing the fight, exiting 0 each time. Two in a row means something is
 # actively deleting them and copying files back is hiding it.

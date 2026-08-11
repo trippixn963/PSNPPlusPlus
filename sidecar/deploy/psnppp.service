@@ -4,6 +4,17 @@
 Description=PSNP++ list sync sidecar
 After=network.target
 
+# Restart=always below handles a crash. This handles systemd GIVING UP on it —
+# after StartLimitBurst failures the unit sits in `failed` and stops trying, and
+# nothing says so. psnppp-guard does NOT cover this: it watches the published
+# artifacts and the URL serving them, all of which keep working while the API
+# behind them is dead.
+#
+# MUST live in [Unit]. systemd accepts an OnFailure= in [Service] by parsing it,
+# warning to the journal, and IGNORING it — so the alert never fires and nothing
+# in the running system says so. Run `systemd-analyze verify` after editing.
+OnFailure=psnppp-sidecar-alert.service
+
 [Service]
 Type=simple
 # A dedicated unprivileged user, which needs to own the working directory, the

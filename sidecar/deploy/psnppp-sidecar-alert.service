@@ -1,0 +1,37 @@
+# Pushes a failed sync sidecar to a Discord webhook. Started by systemd via
+# OnFailure= on psnppp.service — never scheduled, never enabled.
+#
+# Why the sidecar needs its own alert, when psnppp-guard already has one: the
+# guard watches the PUBLISH (the two static artifacts and the URL that serves
+# them), and those keep working perfectly while the API behind them is dead.
+# Stopping the sidecar and running the guard left it reporting success. Nothing
+# on the box said sync had stopped; the only signal was the chip going Offline
+# in a browser, on a site nobody is obliged to visit.
+#
+# Restart=always covers a crash. This covers systemd GIVING UP on restarting —
+# five failures inside ten seconds by default, after which the unit sits failed
+# and silent, which is precisely the state no one notices.
+#
+# Deliberately has NO OnFailure of its own: an alerter that alerts on its own
+# failure is a loop. psnppp-alert.sh exits 0 even when it cannot send, for the
+# same reason.
+[Unit]
+Description=PSNP++ sync sidecar — alert on failure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The argument names the unit to read the journal from, so the alert carries the
+# actual failure text rather than "something went wrong".
+ExecStart=/usr/local/sbin/psnppp-alert psnppp.service
+TimeoutStartSec=120
+
+# Reads the webhook, which is a credential: anyone holding it can post to the
+# channel. Its own file, mode 600, outside the repo — which is public.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true
