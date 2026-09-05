@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PSNP++
 // @namespace    psnppp.trippixn
-// @version      2.3.36
+// @version      2.3.37
 // @description  Two-way cross-device sync for your PSNP+ game lists
 // @icon         https://raw.githubusercontent.com/trippixn963/PSNPPlusPlus/main/assets/icon-128.png
 // @author       Trippixn
@@ -161,8 +161,17 @@
 
   // userscript/src/treelog.mjs
   var REQUEST_TIMEOUT_MS = 1e4;
-  async function sendTree({ endpoint, key, title, items = [], emoji = "\u{1F4E6}", request = gmRequest }) {
+  async function sendTree({
+    endpoint,
+    key,
+    title,
+    items = [],
+    emoji = "\u{1F4E6}",
+    device = "",
+    request = gmRequest
+  }) {
     if (!endpoint || !key || !title) return false;
+    const rows = device ? [["Device", device], ...items] : items;
     try {
       const response = await request({
         method: "POST",
@@ -173,7 +182,7 @@
           emoji: String(emoji),
           // Values are stringified HERE rather than server-side so a value that
           // cannot serialise costs one row, not the whole tree.
-          items: items.map(([k, v]) => [String(k), safeValue(v)])
+          items: rows.map(([k, v]) => [String(k), safeValue(v)])
         }),
         timeout: REQUEST_TIMEOUT_MS
       });
@@ -192,10 +201,54 @@
       return "<unrenderable>";
     }
   }
-  function createTreeLog({ endpoint, key, request = gmRequest } = {}) {
+  function sendTreeWithin(args, maxWaitMs) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), maxWaitMs);
+      timer.unref?.();
+      sendTree(args).then((sent) => {
+        clearTimeout(timer);
+        resolve(sent);
+      });
+    });
+  }
+  function createTreeLog({ endpoint, key, device = "", request = gmRequest } = {}) {
     return function log(title, items, emoji = "\u{1F4E6}") {
-      void sendTree({ endpoint, key, title, items, emoji, request });
+      void sendTree({ endpoint, key, title, items, emoji, device, request });
     };
+  }
+
+  // userscript/src/device.mjs
+  var BROWSERS = [
+    ["Edg/", "Edge"],
+    ["OPR/", "Opera"],
+    ["Vivaldi/", "Vivaldi"],
+    ["Firefox/", "Firefox"],
+    ["Chrome/", "Chrome"],
+    ["Safari/", "Safari"]
+  ];
+  var PLATFORMS = [
+    ["Windows", "Windows"],
+    ["Android", "Android"],
+    ["iPhone", "iOS"],
+    ["iPad", "iPadOS"],
+    ["CrOS", "ChromeOS"],
+    ["Mac OS X", "macOS"],
+    ["Macintosh", "macOS"],
+    ["Linux", "Linux"]
+  ];
+  function describeDevice(userAgent) {
+    const agent = String(userAgent ?? "");
+    if (agent === "") return "unknown device";
+    const browser = BROWSERS.find(([token]) => agent.includes(token))?.[1] ?? "a browser";
+    const platform = PLATFORMS.find(([token]) => agent.includes(token))?.[1] ?? "an unknown platform";
+    return `${browser} on ${platform}`;
+  }
+  function currentDevice() {
+    try {
+      return describeDevice(typeof navigator !== "undefined" ? navigator.userAgent : "");
+    } catch {
+      return "unknown device";
+    }
   }
 
   // userscript/src/config.mjs
@@ -2375,6 +2428,7 @@ ${hint[0].toUpperCase()}${hint.slice(1)}` : `PSNP++ \u2014 ${hint}`;
   // userscript/src/main.mjs
   var STARTUP_LOG_KEY = "psnppp.lastStartupLog";
   var STARTUP_LOG_INTERVAL_MS = 6 * 60 * 60 * 1e3;
+  var RESTORE_LOG_WAIT_MS = 1500;
   var BASE_KEY = "psnppp.base";
   var CHANGE_DEBOUNCE_MS = 3e3;
   var PSNP_PLUS_VERSION_KEY = "psnppp.psnpPlusVersion";
@@ -2474,11 +2528,25 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
               const { syncable: currentLists } = readSyncable(window.localStorage);
               await saveBackup(currentLists, Date.now(), { protect: id });
               writeSyncable(window.localStorage, restored);
+              await sendTreeWithin({
+                endpoint: config.endpoint,
+                key: config.key,
+                device: currentDevice(),
+                title: "Backup Restored",
+                items: restoreLogRows(id, restored),
+                emoji: "\u267B\uFE0F"
+              }, RESTORE_LOG_WAIT_MS);
               window.location.reload();
               return { ok: true, message: "Backup restored. Reloading." };
             } catch (error) {
               console.error("[psnppp] could not restore a backup:", error);
-              return { ok: false, message: describeFailure(error, "Could not restore that backup") };
+              const message = describeFailure(error, "Could not restore that backup");
+              createTreeLog({ endpoint: config.endpoint, key: config.key, device: currentDevice() })(
+                "Backup Restore Failed",
+                [["Backup", id], ["Error", message]],
+                "\u274C"
+              );
+              return { ok: false, message };
             }
           },
           onClose: finish
@@ -2633,6 +2701,54 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       ], "\u{1F4E5}");
     }
   }
+  function countGames(lists) {
+    return (lists ?? []).reduce((n, list) => n + (Array.isArray(list?.games) ? list.games.length : 0), 0);
+  }
+  function restoreLogRows(id, restored) {
+    const at = Number(String(id).split(".").pop());
+    const taken = Number.isFinite(at) && at > 0 ? new Date(at).toISOString() : "unknown";
+    return [
+      ["Backup", id],
+      ["Taken", taken],
+      ["Lists", Array.isArray(restored) ? restored.length : 0],
+      ["Games", countGames(restored)]
+    ];
+  }
+  function outcomeFault(result) {
+    if (result?.status === "conflict") return "conflict";
+    if (result?.status === "corrupt") return "corrupt";
+    return null;
+  }
+  function logOutcome(log, result) {
+    if (result?.status === "conflict") {
+      log("Sync Conflicted", [
+        ["Revision", result.revision],
+        ["Attempts", DEFAULT_MAX_ATTEMPTS],
+        ["Reason", "another device kept writing while this one merged"]
+      ], "\u26A0\uFE0F");
+      return;
+    }
+    if (result?.status === "corrupt") {
+      log("Sync Halted (Unreadable Lists)", [
+        ["Revision", result.revision],
+        ["Reason", "the saved lists did not parse, or their key is gone while this device had lists"],
+        ["Next", "right-click the chip and restore a backup"]
+      ], "\u274C");
+    }
+  }
+  function withBackupLog(save, log) {
+    return async (lists, now, options = {}) => {
+      const id = await save(lists, now, options);
+      if (id != null) {
+        log("Backup Taken", [
+          ["Reason", options.force ? "the merge removes something on this device" : "first merge of the day"],
+          ["Lists", Array.isArray(lists) ? lists.length : 0],
+          ["Games", countGames(lists)]
+        ], "\u{1F4BE}");
+      }
+      return id;
+    };
+  }
   async function start() {
     try {
       await migrateGmStorage();
@@ -2668,20 +2784,28 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       console.error("[psnppp] could not restore the chip position:", error);
     });
     const paint = createIndicatorPainter(indicator.setState);
+    let treeLog = () => {
+    };
+    let lastFaultLogged = null;
     installStorageGuard(window.localStorage, {
       onFailure: (failure) => {
         const message = describeStorageFailure(failure);
         console.error(`[psnppp] ${message}`, failure.error);
         try {
           paint("storage", message);
+          if (lastFaultLogged !== `storage:${failure.key}`) {
+            lastFaultLogged = `storage:${failure.key}`;
+            treeLog("Storage Write Failed", [
+              ["Key", failure.key],
+              ["Bytes", failure.bytes],
+              ["Error", message]
+            ], "\u274C");
+          }
         } catch (error) {
           console.error("[psnppp] could not report the storage failure:", error);
         }
       }
     });
-    let treeLog = () => {
-    };
-    let lastFaultLogged = null;
     let running = false;
     let pending = false;
     let timer = null;
@@ -2703,7 +2827,7 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
       running = true;
       try {
         const config = await loadConfig();
-        treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key });
+        treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key, device: currentDevice() });
         if (!config.key) {
           paint("unconfigured", "Click to set up sync (or right-click for settings)");
           return;
@@ -2740,13 +2864,23 @@ Link them so they stay in sync? Choose Cancel to keep them separate.`
           // Daily, not per-write. The two restore paths above still call
           // saveBackup directly and unconditionally: those snapshots exist so a
           // restore can itself be undone, which has nothing to do with how often
-          // a routine backup is taken.
-          saveBackup: saveDailyBackup,
+          // a routine backup is taken. Wrapped so each snapshot taken is logged.
+          saveBackup: withBackupLog(saveDailyBackup, treeLog),
           now: Date.now()
         });
         const { state, detail } = describeSyncResult(result);
         paint(state, decorateDetail(detail, config.endpoint));
-        lastFaultLogged = null;
+        const fault = outcomeFault(result);
+        if (fault == null) {
+          lastFaultLogged = null;
+        } else if (lastFaultLogged !== fault) {
+          lastFaultLogged = fault;
+          try {
+            logOutcome(treeLog, result);
+          } catch (error) {
+            console.error("[psnppp] could not post the outcome log:", error);
+          }
+        }
         if (shouldLogCycle(result)) {
           try {
             logCycle(treeLog, result);
