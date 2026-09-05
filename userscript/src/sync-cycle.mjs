@@ -17,7 +17,8 @@ import { stampChanges, mergeDoc, gcTombstones } from './merger.mjs';
 import { readSyncable, writeSyncable, LISTS_KEY } from './lists-bridge.mjs';
 import { planAdoptions, applyAdoptions, repointActiveList, reconcileActiveList } from './adopt.mjs';
 
-const DEFAULT_MAX_ATTEMPTS = 3;
+/** Exported so the log can say how many merges a conflict outlasted. */
+export const DEFAULT_MAX_ATTEMPTS = 3;
 
 /**
  * List-order-insensitive fingerprint of a set of lists.

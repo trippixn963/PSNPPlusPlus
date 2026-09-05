@@ -41,13 +41,15 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import digest
 import treelog
 
 DOC_VERSION = 1
@@ -98,11 +100,33 @@ EMPTY_DOCUMENTS: dict[str, dict[str, Any]] = {
     "lists": {"version": DOC_VERSION, "lists": {}},
 }
 
-app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup: report the store's state and start the daily digest.
+
+    A lifespan rather than a module-level side effect, so importing the app
+    (the tests do) posts nothing and starts no thread; only serving it does.
+    """
+    _on_startup()
+    yield
+
+
+app = FastAPI(title="PSNP++", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 # Reads PSNPPP_LOG_WEBHOOK from the environment. Unset means logging is simply
 # off — no webhook, no queue, no thread — rather than an error on every event.
 TREE_LOG = treelog.TreeLogger()
+
+# The day's tallies for the digest, and when this process started.
+COUNTERS = digest.Counters()
+STARTED_AT = time.time()
+
+# A rejected key is reported once per client and path per this window. A
+# scanner probing the API would otherwise turn every attempt into a tree, and
+# the log's own bounds would then spend their fault budget on one host.
+REJECTION_REPEAT_S = 600.0
+_rejections_lock = threading.Lock()
+_recent_rejections: dict[tuple[str, str], float] = {}
 
 # Guards one-time cold-start setup per database file (see _ensure_ready).
 # Keyed by path rather than initialized once at import time, so it stays
@@ -321,6 +345,128 @@ def _read_document(document: str) -> tuple[int, int, dict[str, Any]]:
     return row[0], row[1], json.loads(row[2])
 
 
+def _store_snapshot() -> dict[str, Any]:
+    """Where the store stands: the revision, the revisions held, the bytes on disk.
+
+    The WAL is counted with the database file, because that is where recent
+    writes actually are until a checkpoint folds them in.
+    """
+    revision, _, _ = _read_document(DEFAULT_DOCUMENT)
+    conn = _connect()
+    try:
+        held = conn.execute(
+            "SELECT COUNT(*) FROM document_history WHERE doc_key = ?",
+            (DEFAULT_DOCUMENT,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    path = _db_path()
+    size = sum(p.stat().st_size for p in (path, Path(f"{path}-wal")) if p.exists())
+    return {"revision": revision, "history": held, "db_bytes": size}
+
+
+DIGEST = digest.DailyDigest(
+    log=lambda title, items, emoji: TREE_LOG.log(title, items, emoji),
+    snapshot=_store_snapshot,
+    counters=COUNTERS,
+    started_at=STARTED_AT,
+)
+
+
+def _log_safely(title: str, items: list[tuple[str, Any]], emoji: str) -> None:
+    """Log from a request path without ever letting the logger fail it."""
+    try:
+        TREE_LOG.log(title, items, emoji)
+    except Exception:
+        pass
+
+
+def _on_startup() -> None:
+    """The service's own first line, and the digest's clock."""
+    try:
+        snapshot = _store_snapshot()
+        TREE_LOG.log("Service Started", [
+            ("Revision", snapshot["revision"]),
+            ("Revisions Held", snapshot["history"]),
+            ("Database", digest.format_bytes(snapshot["db_bytes"])),
+            ("Logging", "on" if TREE_LOG.enabled else "off"),
+        ], "🚀")
+    except Exception as error:
+        print(f"[app] startup report failed: {error!r}", flush=True)
+    if TREE_LOG.enabled:
+        DIGEST.start()
+
+
+def _client_tag(request: Request) -> str:
+    """A short, stable, non-reversible tag for the caller's address.
+
+    nginx passes the real address as X-Real-IP; direct callers fall back to the
+    socket peer. Keyed on the sync key so the tag cannot be reversed from the
+    channel, while repeated probes from one host still read as one host.
+    """
+    address = request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
+    secret = _sync_key().encode("utf-8") or b"psnppp"
+    return hmac.new(secret, address.encode("utf-8"), "sha256").hexdigest()[:10]
+
+
+def _log_rejection(request: Request) -> None:
+    """One tree per client and path per REJECTION_REPEAT_S; every attempt counted."""
+    COUNTERS.bump("rejected")
+    tag = _client_tag(request)
+    path = request.url.path
+    now = time.monotonic()
+    with _rejections_lock:
+        last = _recent_rejections.get((tag, path))
+        if last is not None and now - last < REJECTION_REPEAT_S:
+            return
+        _recent_rejections[(tag, path)] = now
+        # Bounded: forget windows that have closed, so a long-running process
+        # does not keep every scanner it ever saw.
+        for stale in [key for key, seen in _recent_rejections.items() if now - seen >= REJECTION_REPEAT_S]:
+            del _recent_rejections[stale]
+    if not _sync_key():
+        reason = "the server has no key configured"
+    elif request.headers.get("x-sync-key") is None:
+        reason = "no key sent"
+    else:
+        reason = "wrong key"
+    _log_safely("Auth Rejected", [
+        ("Path", path),
+        ("Method", request.method),
+        ("Client", tag),
+        ("Reason", reason),
+    ], "⚠️")
+
+
+@app.middleware("http")
+async def observe_requests(request: Request, call_next):
+    """Log what the handlers cannot see about themselves.
+
+    A rejected key, a 5xx, or an exception that escaped a handler each get a
+    tree; the response itself is never changed and the exception is re-raised
+    so Starlette still answers 500. Nothing here may fail the request.
+    """
+    try:
+        response = await call_next(request)
+    except Exception as error:
+        _log_safely("Request Crashed", [
+            ("Path", request.url.path),
+            ("Method", request.method),
+            ("Error", type(error).__name__),
+            ("Detail", str(error)[:200]),
+        ], "💥")
+        raise
+    if response.status_code == 401:
+        _log_rejection(request)
+    elif response.status_code >= 500:
+        _log_safely("Request Failed", [
+            ("Path", request.url.path),
+            ("Method", request.method),
+            ("Status", response.status_code),
+        ], "❌")
+    return response
+
+
 def _current_row(conn: sqlite3.Connection, document: str) -> tuple[int, int, str] | None:
     return conn.execute(
         "SELECT revision, updated_at, doc FROM documents WHERE doc_key = ?",
@@ -422,6 +568,7 @@ def post_log(
     second error would bury the first.
     """
     _require_key(x_sync_key)
+    COUNTERS.bump("logs")
     items = [(str(pair[0]), pair[1]) for pair in body.items if len(pair) >= 2]
     TREE_LOG.log(body.title[:200], items, body.emoji[:8] or "📦")
     return {"logged": TREE_LOG.enabled}
@@ -446,6 +593,7 @@ def get_state(
 ) -> dict[str, Any]:
     _require_key(x_sync_key)
     _require_document(document)
+    COUNTERS.bump("pulls")
     revision, updated_at, doc = _read_document(document)
     return {
         "document": document,
@@ -481,6 +629,7 @@ def put_state(
 
         if payload.baseRevision != current_revision:
             conn.rollback()
+            COUNTERS.bump("conflicts")
             return _conflict(document, row)
 
         new_revision = current_revision + 1
@@ -495,6 +644,7 @@ def put_state(
     finally:
         conn.close()
 
+    COUNTERS.bump("pushes")
     return {"document": document, "revision": new_revision, "updatedAt": now}
 
 
@@ -636,6 +786,12 @@ def restore_revision(
     finally:
         conn.close()
 
+    # A server-side restore rewrites what every device pulls next. Said so.
+    _log_safely("Revision Restored", [
+        ("Document", document),
+        ("From Revision", payload.revision),
+        ("New Revision", new_revision),
+    ], "♻️")
     return {
         "document": document,
         "revision": new_revision,

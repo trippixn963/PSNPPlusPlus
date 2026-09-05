@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { sendTree, createTreeLog } from '../src/treelog.mjs';
+import { sendTree, sendTreeWithin, createTreeLog } from '../src/treelog.mjs';
 
 /**
  * The contract these pin is not "logging works" but "logging cannot hurt".
@@ -84,4 +84,45 @@ test('a trailing slash on the endpoint does not silently 404 every log line', as
     request: async o => { calls.push(o.url); return { status: 204 }; }
   });
   assert.equal(calls[0], 'https://e.test/api/psnppp/log');
+});
+
+// --- the device row ----------------------------------------------------------
+
+test('a known device leads every tree, ahead of the rows the caller gave', async () => {
+  const { calls, request } = capture();
+  await sendTree({
+    endpoint: 'https://example.test/api/psnppp', key: 'k', device: 'Chrome on macOS',
+    title: 'Games Added', items: [['Count', 2]], request
+  });
+  assert.deepEqual(JSON.parse(calls[0].data).items, [['Device', 'Chrome on macOS'], ['Count', '2']]);
+});
+
+test('no device means no device row, not an empty one', async () => {
+  const { calls, request } = capture();
+  await sendTree({ endpoint: 'https://example.test/api/psnppp', key: 'k', title: 'X', items: [['A', 1]], request });
+  assert.deepEqual(JSON.parse(calls[0].data).items, [['A', '1']]);
+});
+
+test('the bound logger carries its device onto every line', async () => {
+  const { calls, request } = capture();
+  const log = createTreeLog({ endpoint: 'https://example.test/api/psnppp', key: 'k', device: 'Firefox on Windows', request });
+  log('Sync Completed', [['Revision', 7]]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(calls[0].data).items[0], ['Device', 'Firefox on Windows']);
+});
+
+// --- the bounded send, for the line before a reload --------------------------
+
+test('sendTreeWithin resolves true when the post lands inside the bound', async () => {
+  const { request } = capture();
+  const sent = await sendTreeWithin({ endpoint: 'https://example.test/api/psnppp', key: 'k', title: 'X', request }, 500);
+  assert.equal(sent, true);
+});
+
+test('sendTreeWithin gives up on a hanging request rather than holding the caller', async () => {
+  const hang = () => new Promise(() => {});
+  const started = Date.now();
+  const sent = await sendTreeWithin({ endpoint: 'https://example.test/api/psnppp', key: 'k', title: 'X', request: hang }, 50);
+  assert.equal(sent, false);
+  assert.ok(Date.now() - started < 1000, 'must return at the bound, not at the request timeout');
 });

@@ -44,8 +44,13 @@ const REQUEST_TIMEOUT_MS = 10000;
  * tree's rows carries meaning (what identifies the event comes first), and
  * object key order is not a thing to rely on across engines.
  */
-export async function sendTree({ endpoint, key, title, items = [], emoji = '📦', request = gmRequest }) {
+export async function sendTree({
+  endpoint, key, title, items = [], emoji = '📦', device = '', request = gmRequest
+}) {
   if (!endpoint || !key || !title) return false;
+  // The device leads every tree it is known for: on a two-device sync, which
+  // device did this is the first question a reader asks of any line.
+  const rows = device ? [['Device', device], ...items] : items;
   // Trailing slash stripped the same way sync-client.mjs strips it. Without
   // this, an endpoint stored as ".../api/psnppp/" syncs perfectly and 404s
   // every log line forever — silently, because logging never reports failure.
@@ -59,7 +64,7 @@ export async function sendTree({ endpoint, key, title, items = [], emoji = '📦
         emoji: String(emoji),
         // Values are stringified HERE rather than server-side so a value that
         // cannot serialise costs one row, not the whole tree.
-        items: items.map(([k, v]) => [String(k), safeValue(v)])
+        items: rows.map(([k, v]) => [String(k), safeValue(v)])
       }),
       timeout: REQUEST_TIMEOUT_MS
     });
@@ -81,18 +86,41 @@ function safeValue(value) {
 }
 
 /**
+ * Post one tree, but give up waiting after `maxWaitMs`.
+ *
+ * For the ONE caller that is about to reload the page: a fire-and-forget
+ * request is cancelled by the navigation that follows it, so a restore's own
+ * log line never arrived. This waits for the post, bounded, so a slow server
+ * can delay the reload by at most the bound and never hold it.
+ *
+ * Resolves to whether the line was sent within the bound. Never rejects.
+ */
+export function sendTreeWithin(args, maxWaitMs) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(false), maxWaitMs);
+    // Node keeps a process alive for a pending timer; a browser has no such
+    // notion and no unref, hence the optional call.
+    timer.unref?.();
+    sendTree(args).then(sent => {
+      clearTimeout(timer);
+      resolve(sent);
+    });
+  });
+}
+
+/**
  * Bind a logger to one configuration.
  *
  * Returns a `log` that swallows everything, so call sites read as plain
  * statements — `log('Game Added', [...], '➕')` — with no await, no catch, and
  * no way to change the behaviour of the code around them.
  */
-export function createTreeLog({ endpoint, key, request = gmRequest } = {}) {
+export function createTreeLog({ endpoint, key, device = '', request = gmRequest } = {}) {
   return function log(title, items, emoji = '📦') {
     // `void`, and no .catch: sendTree is specified never to reject, so a catch
     // here would be unreachable code implying a guarantee that lives elsewhere.
     // Returning nothing is the point — a call site must not be able to await a
     // log line and make the sync wait on Discord.
-    void sendTree({ endpoint, key, title, items, emoji, request });
+    void sendTree({ endpoint, key, title, items, emoji, device, request });
   };
 }

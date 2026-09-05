@@ -12,18 +12,25 @@
  * Discord:   discord.gg/syria
  */
 
-import { createTreeLog } from './treelog.mjs';
+import { createTreeLog, sendTreeWithin } from './treelog.mjs';
+import { currentDevice } from './device.mjs';
 
 /** One "Script Started" per this window, not one per page view. */
 const STARTUP_LOG_KEY = 'psnppp.lastStartupLog';
 const STARTUP_LOG_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/**
+ * How long a restore waits for its own log line before reloading the page.
+ * The reload cancels any request still in flight, so the line is awaited —
+ * but bounded, so a slow server can delay the reload by this much and no more.
+ */
+const RESTORE_LOG_WAIT_MS = 1500;
 import { createSyncClient, gmRequest } from './sync-client.mjs';
 import { loadConfig, applyConfig, isAllowedEndpoint, DEFAULT_ENDPOINT } from './config.mjs';
 import { saveBackup, saveDailyBackup, listBackups, restoreBackup } from './backup.mjs';
 import { watchLists, writeSyncable, readSyncable } from './lists-bridge.mjs';
 import { createIndicator } from './indicator.mjs';
 import { createSettingsPanel, describeFailure } from './panel.mjs';
-import { runSyncCycle } from './sync-cycle.mjs';
+import { runSyncCycle, DEFAULT_MAX_ATTEMPTS } from './sync-cycle.mjs';
 import { migrateGmStorage } from './migrate.mjs';
 import { checkForUpdate } from './update-check.mjs';
 import { checkPsnpPlusCompat, describeIncompatibility, readPsnpPlusVersion } from './compat.mjs';
@@ -249,11 +256,23 @@ export async function openSettings({ chip = null } = {}) {
             await saveBackup(currentLists, Date.now(), { protect: id });
 
             writeSyncable(window.localStorage, restored);
+            // A restore rewrites the only copy of the lists on this device, and
+            // it used to do so in silence. Awaited, bounded: the reload below
+            // would cancel a fire-and-forget post before it left the page.
+            await sendTreeWithin({
+              endpoint: config.endpoint, key: config.key, device: currentDevice(),
+              title: 'Backup Restored', items: restoreLogRows(id, restored), emoji: '♻️'
+            }, RESTORE_LOG_WAIT_MS);
             window.location.reload();
             return { ok: true, message: 'Backup restored. Reloading.' };
           } catch (error) {
             console.error('[psnppp] could not restore a backup:', error);
-            return { ok: false, message: describeFailure(error, 'Could not restore that backup') };
+            const message = describeFailure(error, 'Could not restore that backup');
+            // Fire-and-forget is fine here: nothing reloads after a failure.
+            createTreeLog({ endpoint: config.endpoint, key: config.key, device: currentDevice() })(
+              'Backup Restore Failed', [['Backup', id], ['Error', message]], '❌'
+            );
+            return { ok: false, message };
           }
         },
         onClose: finish
@@ -598,6 +617,88 @@ export function logCycle(log, result) {
   }
 }
 
+/** Games across a set of lists, for the backup and restore lines. */
+export function countGames(lists) {
+  return (lists ?? []).reduce((n, list) => n + (Array.isArray(list?.games) ? list.games.length : 0), 0);
+}
+
+/**
+ * The rows a restore reports: which snapshot, when it was taken, what it held.
+ *
+ * The backup id carries its own timestamp (`psnppp.backup.<ms>`, see
+ * backup.mjs), so "when" is read from the id rather than looked up again.
+ */
+export function restoreLogRows(id, restored) {
+  const at = Number(String(id).split('.').pop());
+  const taken = Number.isFinite(at) && at > 0 ? new Date(at).toISOString() : 'unknown';
+  return [
+    ['Backup', id],
+    ['Taken', taken],
+    ['Lists', Array.isArray(restored) ? restored.length : 0],
+    ['Games', countGames(restored)]
+  ];
+}
+
+/**
+ * Which fault, if any, a finished cycle is — the key the dedupe latch uses.
+ *
+ * Null for a cycle that synced, so the latch clears and the NEXT occurrence
+ * of a fault is reported rather than suppressed for the life of the page.
+ */
+export function outcomeFault(result) {
+  if (result?.status === 'conflict') return 'conflict';
+  if (result?.status === 'corrupt') return 'corrupt';
+  return null;
+}
+
+/**
+ * The trees for a cycle that did NOT sync.
+ *
+ * Both were silent before: the chip turned red and nothing said so anywhere
+ * else. A conflict is every attempt rejected by the server — another device
+ * writing faster than this one can re-merge — and unreadable lists are the
+ * one halt that stops the user's own data from being touched.
+ */
+export function logOutcome(log, result) {
+  if (result?.status === 'conflict') {
+    log('Sync Conflicted', [
+      ['Revision', result.revision],
+      ['Attempts', DEFAULT_MAX_ATTEMPTS],
+      ['Reason', 'another device kept writing while this one merged']
+    ], '⚠️');
+    return;
+  }
+  if (result?.status === 'corrupt') {
+    log('Sync Halted (Unreadable Lists)', [
+      ['Revision', result.revision],
+      ['Reason', 'the saved lists did not parse, or their key is gone while this device had lists'],
+      ['Next', 'right-click the chip and restore a backup']
+    ], '❌');
+  }
+}
+
+/**
+ * Wrap the backup writer so every snapshot actually taken is logged.
+ *
+ * `save` is saveDailyBackup, which returns null when today's slot is already
+ * spent and an id when it wrote one; only the write is worth a line. The
+ * reason is the one the cycle gave: `force` is set when the merge would remove
+ * something on this device, which is the case a backup exists for.
+ */
+export function withBackupLog(save, log) {
+  return async (lists, now, options = {}) => {
+    const id = await save(lists, now, options);
+    if (id != null) {
+      log('Backup Taken', [
+        ['Reason', options.force ? 'the merge removes something on this device' : 'first merge of the day'],
+        ['Lists', Array.isArray(lists) ? lists.length : 0],
+        ['Games', countGames(lists)]
+      ], '💾');
+    }
+    return id;
+  };
+}
+
 export async function start() {
   // Before anything reads GM storage. An install that predates the PSNP++
   // rename has its endpoint, key, base and backups under the old psnpsync.*
@@ -652,6 +753,15 @@ export async function start() {
   // cycle our own write provokes.
   const paint = createIndicatorPainter(indicator.setState);
 
+  // A no-op until the first config load. The catch below logs through this, so
+  // a throw BEFORE the first assignment — loadConfig itself failing — would
+  // otherwise ReferenceError inside the handler and replace the real failure
+  // with a logger bug, which is the exact inversion this whole module avoids.
+  // Declared before the storage guard for the same reason: its handler logs
+  // through this too.
+  let treeLog = () => {};
+  let lastFaultLogged = null;
+
   // Watch every localStorage write, PSNP+'s included.
   //
   // Installed here, after `paint` exists and before the first sync, so a failure
@@ -668,22 +778,21 @@ export async function start() {
       // a repaint that failed must not replace their error with ours.
       try {
         paint('storage', message);
+        // ❌: the page is showing a change that is not in storage. Deduped on
+        // the key, because a full quota fails every write that follows.
+        if (lastFaultLogged !== `storage:${failure.key}`) {
+          lastFaultLogged = `storage:${failure.key}`;
+          treeLog('Storage Write Failed', [
+            ['Key', failure.key],
+            ['Bytes', failure.bytes],
+            ['Error', message]
+          ], '❌');
+        }
       } catch (error) {
         console.error('[psnppp] could not report the storage failure:', error);
       }
     }
   });
-
-  // A no-op until the first config load. The catch below logs through this, so
-
-  // a throw BEFORE the first assignment — loadConfig itself failing — would
-
-  // otherwise ReferenceError inside the handler and replace the real failure
-
-  // with a logger bug, which is the exact inversion this whole module avoids.
-
-  let treeLog = () => {};
-  let lastFaultLogged = null;
 
   let running = false;
   let pending = false;
@@ -734,7 +843,7 @@ export async function start() {
       // Rebound each cycle: the endpoint or key can change from the settings
       // panel between one sync and the next, and a logger closed over the old
       // pair would post to the previous server or 401 forever.
-      treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key });
+      treeLog = createTreeLog({ endpoint: config.endpoint, key: config.key, device: currentDevice() });
       if (!config.key) {
         paint('unconfigured', 'Click to set up sync (or right-click for settings)');
         return;
@@ -797,15 +906,27 @@ export async function start() {
         // Daily, not per-write. The two restore paths above still call
         // saveBackup directly and unconditionally: those snapshots exist so a
         // restore can itself be undone, which has nothing to do with how often
-        // a routine backup is taken.
-        saveBackup: saveDailyBackup,
+        // a routine backup is taken. Wrapped so each snapshot taken is logged.
+        saveBackup: withBackupLog(saveDailyBackup, treeLog),
         now: Date.now()
       });
       const { state, detail } = describeSyncResult(result);
       paint(state, decorateDetail(detail, config.endpoint));
       // A clean cycle clears the latch, so the NEXT occurrence of the same
-      // fault is reported rather than suppressed for the life of the page.
-      lastFaultLogged = null;
+      // fault is reported rather than suppressed for the life of the page. A
+      // cycle that did not sync is a fault of its own, deduped the same way as
+      // the halt and the failure below: cycles fire on every load and focus.
+      const fault = outcomeFault(result);
+      if (fault == null) {
+        lastFaultLogged = null;
+      } else if (lastFaultLogged !== fault) {
+        lastFaultLogged = fault;
+        try {
+          logOutcome(treeLog, result);
+        } catch (error) {
+          console.error('[psnppp] could not post the outcome log:', error);
+        }
+      }
 
       if (shouldLogCycle(result)) {
         // Only cycles that WROTE are logged. Syncs fire on every load, focus

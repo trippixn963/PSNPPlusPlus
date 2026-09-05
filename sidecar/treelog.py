@@ -204,14 +204,24 @@ class TreeLogger:
     matter, and losing the write to report them would be the actual damage.
     """
 
-    def __init__(self, webhook_url: str = "", post: Callable[..., int] | None = None) -> None:
+    def __init__(
+        self,
+        webhook_url: str = "",
+        post: Callable[..., int] | None = None,
+        circuit: Circuit | None = None,
+    ) -> None:
         self._webhook = webhook_url or os.getenv("PSNPPP_LOG_WEBHOOK", "")
         self._post = post or _post_webhook
         self._pending: list[str] = []
         self._lock = threading.Lock()
         self._wake = threading.Event()
-        self._circuit = Circuit()
+        # Injectable so a test can use a cooldown of zero instead of waiting
+        # five minutes for the reset line.
+        self._circuit = circuit or Circuit()
         self._dropped = 0
+        # When the circuit last tripped, so the reset can say how long the log
+        # was silent. None while it is closed.
+        self._tripped_at: float | None = None
         self._thread: threading.Thread | None = None
 
     @property
@@ -246,6 +256,23 @@ class TreeLogger:
             while True:
                 if self._circuit.is_open:
                     break
+                if self._tripped_at is not None:
+                    # The circuit has closed: say so, and how long the log was
+                    # silent, ahead of whatever queued up meanwhile. Without
+                    # this a trip was a line on stdout and a gap in the channel
+                    # that nothing explained.
+                    paused = time.monotonic() - self._tripped_at
+                    self._tripped_at = None
+                    with self._lock:
+                        self._pending.insert(0, render_tree(
+                            "Log Circuit Reset",
+                            [
+                                ("Paused", f"{paused:.0f}s"),
+                                ("Cause", "HTTP 429 from the webhook"),
+                                ("Queued", len(self._pending)),
+                            ],
+                            "⚠️",
+                        ))
                 with self._lock:
                     if not self._pending:
                         break
@@ -265,6 +292,14 @@ class TreeLogger:
                 if status == 429:
                     print(f"[treelog] 429 from the webhook; pausing {CIRCUIT_COOLDOWN_S:.0f}s", flush=True)
                     self._circuit.trip()
+                    self._tripped_at = time.monotonic()
+                    # Put the batch back where it was taken from: a rate limit
+                    # is a "not now", not a "never", and the trees in it are
+                    # the ones the burst was about. trim_queue still bounds
+                    # the total, faults first.
+                    with self._lock:
+                        self._pending[:0] = batch
+                        self._dropped += trim_queue(self._pending)
                     break
                 if not (200 <= status < 300):
                     # Loud, because the previous version returned this status to
