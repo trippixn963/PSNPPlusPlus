@@ -179,6 +179,8 @@ PSNP++ only syncs the lists PSNP+ saves.
 
 <div align="center">
 
-**Trippixn** · [trippixn.com](https://trippixn.com) · [discord.gg/syria](https://discord.gg/syria)
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/mark-dark.png"><img alt="Trippixn" src="assets/mark-light.png" width="30"></picture>
+
+Built by **[Trippixn](https://trippixn.com)** · [discord.gg/syria](https://discord.gg/syria)
 
 </div>
