@@ -1,18 +1,24 @@
 <div align="center">
 
-<img src="assets/icon-128.png" alt="" width="96" height="96">
+<img src="assets/icon-128.png" width="100" alt="PSNP++">
 
 # PSNP++
 
 **Two-way sync for your [PSNP+](https://psnp-plus.huskycode.dev) game lists, across every device.**
 
-[![version](https://img.shields.io/github/package-json/v/trippixn963/PSNPPlusPlus?color=1f6feb&label=version)](https://github.com/trippixn963/PSNPPlusPlus/releases)
-[![license](https://img.shields.io/badge/license-MIT-1f6feb)](LICENSE)
-[![userscript](https://img.shields.io/badge/userscript-Tampermonkey-1f6feb)](https://www.tampermonkey.net)
+A userscript plus a small sync service you host yourself — the lists you build
+on one machine, on all of them.
+
+<img src="assets/divider.png" width="440" alt="">
+
+<p>
+<img src="https://img.shields.io/badge/JavaScript-C9A227?style=for-the-badge&logo=javascript&logoColor=C9A227&labelColor=0B0F0C" alt="JavaScript"><img src="https://img.shields.io/badge/Tampermonkey-C9A227?style=for-the-badge&logo=tampermonkey&logoColor=C9A227&labelColor=0B0F0C" alt="Tampermonkey"><img src="https://img.shields.io/badge/FastAPI-C9A227?style=for-the-badge&logo=fastapi&logoColor=C9A227&labelColor=0B0F0C" alt="FastAPI"><img src="https://img.shields.io/badge/SQLite-C9A227?style=for-the-badge&logo=sqlite&logoColor=C9A227&labelColor=0B0F0C" alt="SQLite"><img src="https://img.shields.io/badge/MIT-C9A227?style=for-the-badge&labelColor=0B0F0C" alt="MIT licensed"></p>
+
+**[Project page →](https://trippixn.com/psnppp)**
 
 </div>
 
----
+<img src="assets/divider.png" width="100%" alt="">
 
 PSNP+ keeps its game lists in `localStorage`, so a wishlist you build on the desktop simply
 does not exist on the laptop. PSNP++ syncs them through a small service on your own server.
@@ -20,11 +26,15 @@ does not exist on the laptop. PSNP++ syncs them through a small service on your 
 It is a **companion** to PSNP+, not a replacement. Install both, and PSNP+ keeps updating
 itself from HusKyCode as normal.
 
+<img src="assets/divider.png" width="100%" alt="">
+
 <div align="center">
 <img src="assets/preview.png" alt="The status chip in each of its states, beside the settings panel showing three daily backups with restore buttons" width="820">
 <br>
 <sub>The status chip in each of its states, and the panel it opens — rendered from the real modules. <a href="#regenerating-the-icon-and-preview">Regenerate</a>.</sub>
 </div>
+
+<img src="assets/divider.png" width="100%" alt="">
 
 Everything lives behind one chip in the corner of any psnprofiles.com page. It tells you the
 sync state at a glance, left-click syncs, and right-click opens the panel: your sync key and
@@ -175,12 +185,16 @@ is the only version that works for any other flag.
 of it and modifies none of it; all of that functionality, and the work behind it, is theirs.
 PSNP++ only syncs the lists PSNP+ saves.
 
----
+<img src="assets/divider.png" width="100%" alt="">
 
 <div align="center">
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/mark-dark.png"><img alt="Trippixn" src="assets/mark-light.png" width="30"></picture>
 
-Built by **[Trippixn](https://trippixn.com)** · [discord.gg/syria](https://discord.gg/syria)
+Built by **[Trippixn](https://trippixn.com)** &nbsp;·&nbsp; [discord.gg/syria](https://discord.gg/syria)
+
+<img src="assets/divider.png" width="440" alt="">
+
+<sub>MIT licensed, built for one setup — if it's useful, fork it and run your own. Issues and pull requests are not monitored.</sub>
 
 </div>
